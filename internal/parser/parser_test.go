@@ -50,3 +50,38 @@ package foo;
 	}
 }
 
+func TestParseSingleFnDecl(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatalf("file is nil")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if fn.Name == nil || fn.Name.Name != "main" {
+		t.Fatalf("expected function name %q, got %v", "main", fn.Name)
+	}
+
+	if fn.Body == nil {
+		t.Fatalf("expected function body to be populated")
+	}
+
+	if len(fn.Body.Stmts) != 0 {
+		t.Fatalf("expected empty function body, got %d statements", len(fn.Body.Stmts))
+	}
+}
