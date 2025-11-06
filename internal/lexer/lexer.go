@@ -1,5 +1,7 @@
 package lexer
 
+import "unicode"
+
 // Lexer represents the lexer state
 type Lexer struct {
 	input      []rune
@@ -135,12 +137,6 @@ func (l *Lexer) skipWhitespace() *Token {
 	return nil
 }
 
-// skipLineComment skips a line comment (// ...), optionally returning a trivia token
-func (l *Lexer) skipLineComment() *Token {
-	startLine, startColumn, startPos := l.currentSpanStart()
-	return l.skipLineCommentWithStart(startLine, startColumn, startPos)
-}
-
 // skipLineCommentWithStart skips a line comment with a pre-captured start position
 func (l *Lexer) skipLineCommentWithStart(startLine, startColumn, startPos int) *Token {
 	// Read until newline or EOF
@@ -159,13 +155,6 @@ func (l *Lexer) skipLineCommentWithStart(startLine, startColumn, startPos int) *
 		return &tok
 	}
 	return nil
-}
-
-// skipBlockComment skips a block comment (/* ... */), optionally returning a trivia token
-// Supports nested comments as per spec
-func (l *Lexer) skipBlockComment() *Token {
-	startLine, startColumn, startPos := l.currentSpanStart()
-	return l.skipBlockCommentWithStart(startLine, startColumn, startPos)
 }
 
 // skipBlockCommentWithStart skips a block comment with a pre-captured start position
@@ -306,6 +295,9 @@ func (l *Lexer) NextToken() Token {
 	switch l.ch {
 	case 0:
 		startLine, startColumn, startPos := l.currentSpanStart()
+		if startColumn == 0 {
+			startColumn = 1
+		}
 		return l.makeToken(EOF, startLine, startColumn, startPos, startPos, "", "")
 
 	case '=':
@@ -503,14 +495,12 @@ func (l *Lexer) NextToken() Token {
 	}
 }
 
-// isLetter checks if a rune is a letter
 func isLetter(ch rune) bool {
-	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
+	return unicode.IsLetter(ch) || ch == '_'
 }
 
-// isDigit checks if a rune is a digit
 func isDigit(ch rune) bool {
-	return '0' <= ch && ch <= '9'
+	return unicode.IsDigit(ch)
 }
 
 // isHexDigit checks if a rune is a hexadecimal digit

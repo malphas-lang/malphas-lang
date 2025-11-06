@@ -222,6 +222,55 @@ func TestNextToken_Identifiers(t *testing.T) {
 	}
 }
 
+func TestNextToken_UnicodeIdentifiers(t *testing.T) {
+	input := `π σ 变量`
+
+	tests := []struct {
+		expectedType    TokenType
+		expectedLiteral string
+	}{
+		{IDENT, "π"},
+		{IDENT, "σ"},
+		{IDENT, "变量"},
+		{EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.expectedType {
+			t.Fatalf("tests[%d] - tokentype wrong. expected=%q, got=%q",
+				i, tt.expectedType, tok.Type)
+		}
+
+		if tok.Literal != tt.expectedLiteral {
+			t.Fatalf("tests[%d] - literal wrong. expected=%q, got=%q",
+				i, tt.expectedLiteral, tok.Literal)
+		}
+	}
+}
+
+func TestNextToken_UnicodeDigits(t *testing.T) {
+	input := "٢٣"
+
+	l := New(input)
+
+	tok := l.NextToken()
+	if tok.Type != INT {
+		t.Fatalf("expected INT token, got %q", tok.Type)
+	}
+	if tok.Literal != "٢٣" {
+		t.Fatalf("expected literal '٢٣', got %q", tok.Literal)
+	}
+
+	tok = l.NextToken()
+	if tok.Type != EOF {
+		t.Fatalf("expected EOF token, got %q", tok.Type)
+	}
+}
+
 func TestNextToken_Integers(t *testing.T) {
 	input := `0 42 123 0xFF 0b1010 1_000`
 

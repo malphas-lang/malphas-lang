@@ -57,6 +57,24 @@ func TestTokenSpan_Basic(t *testing.T) {
 	}
 }
 
+func TestEOFTokenColumnIsOneOnEmptyInput(t *testing.T) {
+	l := New("")
+
+	tok := l.NextToken()
+	if tok.Type != EOF {
+		t.Fatalf("expected EOF token, got %q", tok.Type)
+	}
+	if tok.Span.Line != 1 {
+		t.Fatalf("expected line 1, got %d", tok.Span.Line)
+	}
+	if tok.Span.Column != 1 {
+		t.Fatalf("expected column 1, got %d", tok.Span.Column)
+	}
+	if tok.Span.Start != 0 || tok.Span.End != 0 {
+		t.Fatalf("expected start/end 0, got start=%d end=%d", tok.Span.Start, tok.Span.End)
+	}
+}
+
 // TestTokenSpan_MultiLine tests span tracking across multiple lines
 func TestTokenSpan_MultiLine(t *testing.T) {
 	input := `let x = 10;
