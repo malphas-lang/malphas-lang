@@ -301,6 +301,44 @@ func TestTokenTrivia_LineComment(t *testing.T) {
 	}
 }
 
+func TestTokenTrivia_LineComment_CRLF(t *testing.T) {
+	input := "let x = 10; // comment\r\nlet y = 20;"
+
+	l := NewWithTrivia(input)
+
+	expectTokenType(t, nextNonWhitespaceToken(t, l), LET)
+	expectTokenType(t, nextNonWhitespaceToken(t, l), IDENT)
+	expectTokenType(t, nextNonWhitespaceToken(t, l), ASSIGN)
+	expectTokenType(t, nextNonWhitespaceToken(t, l), INT)
+	expectTokenType(t, nextNonWhitespaceToken(t, l), SEMICOLON)
+
+	whitespace := l.NextToken()
+	if whitespace.Type != WHITESPACE {
+		t.Fatalf("expected WHITESPACE before comment, got %q", whitespace.Type)
+	}
+	if whitespace.Raw != " " {
+		t.Fatalf("expected raw ' ', got %q", whitespace.Raw)
+	}
+
+	tok := nextNonWhitespaceToken(t, l)
+	if tok.Type != LINE_COMMENT {
+		t.Fatalf("expected LINE_COMMENT, got %q", tok.Type)
+	}
+	if tok.Raw != "// comment" {
+		t.Fatalf("expected raw '// comment', got %q", tok.Raw)
+	}
+
+	newline := l.NextToken()
+	if newline.Type != NEWLINE {
+		t.Fatalf("expected NEWLINE after comment, got %q", newline.Type)
+	}
+	if newline.Raw != "\r\n" {
+		t.Fatalf("expected raw '\\r\\n', got %q", newline.Raw)
+	}
+
+	expectTokenType(t, nextNonWhitespaceToken(t, l), LET)
+}
+
 // TestTokenTrivia_BlockComment tests that block comments can be emitted as trivia
 func TestTokenTrivia_BlockComment(t *testing.T) {
 	input := `let x = 10; /* block comment */`

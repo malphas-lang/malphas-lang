@@ -212,9 +212,9 @@ func (l *Lexer) skipWhitespace() *Token {
 
 // skipLineCommentWithStart skips a line comment with a pre-captured start position
 func (l *Lexer) skipLineCommentWithStart(startLine, startColumn, startPos int) *Token {
-	// Read until newline or EOF
+	// Read until a line terminator (\n or \r) or EOF
 	// Note: the // has already been consumed by the caller, so we're reading the comment text
-	for l.ch != '\n' && l.ch != 0 {
+	for l.ch != '\n' && l.ch != '\r' && l.ch != 0 {
 		l.read()
 	}
 	// endPos is the position after the last character of the comment
@@ -589,12 +589,15 @@ func isLetter(ch rune) bool {
 }
 
 func isDigit(ch rune) bool {
-	return unicode.IsDigit(ch)
+	// Numeric literals are restricted to ASCII digits.
+	return ch >= '0' && ch <= '9'
 }
 
 // isHexDigit checks if a rune is a hexadecimal digit
 func isHexDigit(ch rune) bool {
-	return isDigit(ch) || ('a' <= ch && ch <= 'f') || ('A' <= ch && ch <= 'F')
+	return (ch >= '0' && ch <= '9') ||
+		(ch >= 'a' && ch <= 'f') ||
+		(ch >= 'A' && ch <= 'F')
 }
 
 // readString reads a string literal, handling escape sequences

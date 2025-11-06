@@ -252,22 +252,23 @@ func TestNextToken_UnicodeIdentifiers(t *testing.T) {
 	}
 }
 
-func TestNextToken_UnicodeDigits(t *testing.T) {
+func TestNextToken_UnicodeDigitsAreIllegal(t *testing.T) {
 	input := "٢٣"
 
 	l := New(input)
 
 	tok := l.NextToken()
-	if tok.Type != INT {
-		t.Fatalf("expected INT token, got %q", tok.Type)
+	if tok.Type != ILLEGAL {
+		t.Fatalf("expected ILLEGAL token for unicode digits, got %q", tok.Type)
 	}
-	if tok.Literal != "٢٣" {
-		t.Fatalf("expected literal '٢٣', got %q", tok.Literal)
+	if tok.Literal != "٢" {
+		t.Fatalf("expected literal '٢', got %q", tok.Literal)
 	}
-
-	tok = l.NextToken()
-	if tok.Type != EOF {
-		t.Fatalf("expected EOF token, got %q", tok.Type)
+	if len(l.Errors) == 0 {
+		t.Fatalf("expected lexer to record an error for unicode digits")
+	}
+	if l.Errors[0].Kind != ErrIllegalRune {
+		t.Fatalf("expected ErrIllegalRune, got %v", l.Errors[0].Kind)
 	}
 }
 
@@ -395,6 +396,33 @@ func TestNextToken_LineCommentAtEOF(t *testing.T) {
 			t.Fatalf("tests[%d] - literal wrong. expected=%q, got=%q",
 				i, tt.expectedLiteral, tok.Literal)
 		}
+	}
+}
+
+func TestTrivia_LineCommentWithCRLF(t *testing.T) {
+	input := "// comment\r\nlet x = 10;"
+
+	l := NewWithTrivia(input)
+
+	tok := l.NextToken()
+	if tok.Type != LINE_COMMENT {
+		t.Fatalf("expected first token to be LINE_COMMENT, got %q", tok.Type)
+	}
+	if tok.Raw != "// comment" {
+		t.Fatalf("expected line comment raw to exclude CR, got %q", tok.Raw)
+	}
+
+	tok = l.NextToken()
+	if tok.Type != NEWLINE {
+		t.Fatalf("expected second token to be NEWLINE, got %q", tok.Type)
+	}
+	if tok.Raw != "\r\n" {
+		t.Fatalf("expected newline raw to be \\r\\n, got %q", tok.Raw)
+	}
+
+	tok = l.NextToken()
+	if tok.Type != LET {
+		t.Fatalf("expected third token to be LET, got %q", tok.Type)
 	}
 }
 
