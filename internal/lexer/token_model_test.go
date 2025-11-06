@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"testing"
+	"unicode/utf8"
 )
 
 func nextNonWhitespaceToken(t *testing.T, l *Lexer) Token {
@@ -20,6 +21,20 @@ func expectTokenType(t *testing.T, tok Token, want TokenType) {
 	if tok.Type != want {
 		t.Fatalf("expected token %q, got %q", want, tok.Type)
 	}
+}
+
+func finalLineAndColumn(input string) (line, column int) {
+	line = 1
+	column = 1
+	for _, r := range input {
+		if r == '\n' {
+			line++
+			column = 1
+			continue
+		}
+		column++
+	}
+	return
 }
 
 // TestTokenSpan_Basic tests that tokens have correct span information
@@ -72,6 +87,85 @@ func TestEOFTokenColumnIsOneOnEmptyInput(t *testing.T) {
 	}
 	if tok.Span.Start != 0 || tok.Span.End != 0 {
 		t.Fatalf("expected start/end 0, got start=%d end=%d", tok.Span.Start, tok.Span.End)
+	}
+}
+
+func TestEOFTokenSpan_Normalized(t *testing.T) {
+	type want struct {
+		line   int
+		column int
+		pos    int
+	}
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "empty",
+			input: "",
+		},
+		{
+			name:  "singleLine",
+			input: "let x = 10;",
+		},
+		{
+			name:  "trailingWhitespace",
+			input: "let x = 10;   ",
+		},
+		{
+			name:  "trailingNewline",
+			input: "let x = 10;\n",
+		},
+		{
+			name:  "multipleNewlines",
+			input: "let x = 10;\n\n",
+		},
+	}
+
+	constructors := []struct {
+		name string
+		new  func(string) *Lexer
+	}{
+		{
+			name: "default",
+			new:  New,
+		},
+		{
+			name: "withTrivia",
+			new:  NewWithTrivia,
+		},
+	}
+
+	for _, constructor := range constructors {
+		for _, tc := range cases {
+			t.Run(constructor.name+"/"+tc.name, func(t *testing.T) {
+				l := constructor.new(tc.input)
+				var tok Token
+				for {
+					tok = l.NextToken()
+					if tok.Type == EOF {
+						break
+					}
+				}
+
+				wantPos := utf8.RuneCountInString(tc.input)
+				if tok.Span.Start != wantPos {
+					t.Fatalf("expected start %d, got %d", wantPos, tok.Span.Start)
+				}
+				if tok.Span.End != wantPos {
+					t.Fatalf("expected end %d, got %d", wantPos, tok.Span.End)
+				}
+
+				wantLine, wantColumn := finalLineAndColumn(tc.input)
+				if tok.Span.Line != wantLine {
+					t.Fatalf("expected line %d, got %d", wantLine, tok.Span.Line)
+				}
+				if tok.Span.Column != wantColumn {
+					t.Fatalf("expected column %d, got %d", wantColumn, tok.Span.Column)
+				}
+			})
+		}
 	}
 }
 
