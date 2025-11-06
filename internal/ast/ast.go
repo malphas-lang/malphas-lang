@@ -164,6 +164,22 @@ type LetStmt struct {
 // Span returns the statement span.
 func (s *LetStmt) Span() lexer.Span { return s.span }
 
+// NewLetStmt constructs a let statement node.
+func NewLetStmt(mutable bool, name *Ident, typ TypeExpr, value Expr, span lexer.Span) *LetStmt {
+	return &LetStmt{
+		Mutable: mutable,
+		Name:    name,
+		Type:    typ,
+		Value:   value,
+		span:    span,
+	}
+}
+
+// SetSpan updates the let statement span.
+func (s *LetStmt) SetSpan(span lexer.Span) {
+	s.span = span
+}
+
 // stmtNode marks LetStmt as a statement.
 func (*LetStmt) stmtNode() {}
 
@@ -224,6 +240,19 @@ type IntegerLit struct {
 
 // Span returns the literal span.
 func (l *IntegerLit) Span() lexer.Span { return l.span }
+
+// NewIntegerLit constructs an integer literal node.
+func NewIntegerLit(text string, span lexer.Span) *IntegerLit {
+	return &IntegerLit{
+		Text: text,
+		span: span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (l *IntegerLit) SetSpan(span lexer.Span) {
+	l.span = span
+}
 
 // exprNode marks IntegerLit as an expression.
 func (*IntegerLit) exprNode() {}
@@ -305,5 +334,3 @@ func (t *NamedType) Span() lexer.Span { return t.span }
 
 // typeNode marks NamedType as a type expression.
 func (*NamedType) typeNode() {}
-
-
