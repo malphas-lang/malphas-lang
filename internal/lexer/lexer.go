@@ -1,6 +1,23 @@
 package lexer
 
-import "unicode"
+import (
+	"strconv"
+	"unicode"
+)
+
+type LexerErrorKind int
+
+const (
+	ErrUnterminatedString LexerErrorKind = iota
+	ErrUnterminatedBlockComment
+	ErrIllegalRune
+)
+
+type LexerError struct {
+	Kind    LexerErrorKind
+	Message string
+	Span    Span
+}
 
 // Lexer represents the lexer state
 type Lexer struct {
@@ -10,6 +27,16 @@ type Lexer struct {
 	line       int  // current line number (1-based)
 	column     int  // current column number (1-based)
 	emitTrivia bool // whether to emit trivia tokens (comments, whitespace)
+
+	Errors []LexerError
+}
+
+func (l *Lexer) addError(kind LexerErrorKind, msg string, span Span) {
+	l.Errors = append(l.Errors, LexerError{
+		Kind:    kind,
+		Message: msg,
+		Span:    span,
+	})
 }
 
 // newLexer is the single internal constructor that sets up all lexer state
@@ -162,7 +189,12 @@ func (l *Lexer) skipBlockCommentWithStart(startLine, startColumn, startPos int) 
 	depth := 1
 	for depth > 0 {
 		if l.ch == 0 {
-			break // unterminated comment
+			l.addError(
+				ErrUnterminatedBlockComment,
+				"unterminated block comment",
+				Span{Line: startLine, Column: startColumn, Start: startPos, End: l.pos},
+			)
+			break
 		}
 		if l.ch == '/' && l.peek() == '*' {
 			l.read() // consume '/'
@@ -287,210 +319,218 @@ func (l *Lexer) readNumber() (string, TokenType) {
 
 // NextToken returns the next token from the input
 func (l *Lexer) NextToken() Token {
-	// Check for trivia tokens first
-	if triviaTok := l.skipWhitespace(); triviaTok != nil {
-		return *triviaTok
-	}
-
-	switch l.ch {
-	case 0:
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if startColumn == 0 {
-			startColumn = 1
-		}
-		return l.makeToken(EOF, startLine, startColumn, startPos, startPos, "", "")
-
-	case '=':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if l.peek() == '=' {
-			ch := l.ch
-			l.read()
-			raw := string(ch) + string(l.ch)
-			l.read()
-			return l.makeToken(EQ, startLine, startColumn, startPos, l.pos, raw, raw)
-		} else {
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(ASSIGN, startLine, startColumn, startPos, l.pos, raw, raw)
+	for {
+		// Check for trivia tokens first
+		if triviaTok := l.skipWhitespace(); triviaTok != nil {
+			return *triviaTok
 		}
 
-	case '+':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(PLUS, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '-':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if l.peek() == '>' {
-			ch := l.ch
-			l.read()
-			raw := string(ch) + string(l.ch)
-			l.read()
-			return l.makeToken(ARROW, startLine, startColumn, startPos, l.pos, raw, raw)
-		} else {
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(MINUS, startLine, startColumn, startPos, l.pos, raw, raw)
-		}
-
-	case '!':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if l.peek() == '=' {
-			ch := l.ch
-			l.read()
-			raw := string(ch) + string(l.ch)
-			l.read()
-			return l.makeToken(NOT_EQ, startLine, startColumn, startPos, l.pos, raw, raw)
-		} else {
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(BANG, startLine, startColumn, startPos, l.pos, raw, raw)
-		}
-
-	case '*':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(ASTERISK, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '/':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		switch l.peek() {
-		case '/':
-			// line comment - startPos already captured before the first '/'
-			l.read() // consume first '/'
-			l.read() // consume second '/'
-			// skipLineCommentWithStart will read the rest and return a token if in trivia mode
-			if triviaTok := l.skipLineCommentWithStart(startLine, startColumn, startPos); triviaTok != nil {
-				return *triviaTok
+		switch l.ch {
+		case 0:
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if startColumn == 0 {
+				startColumn = 1
 			}
-			// In non-trivia mode, comment is skipped, continue to next token
-			return l.NextToken() // restart for next real token
+			return l.makeToken(EOF, startLine, startColumn, startPos, startPos, "", "")
+
+		case '=':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '=' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(EQ, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else {
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(ASSIGN, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+		case '+':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(PLUS, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '-':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '>' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(ARROW, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else {
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(MINUS, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+		case '!':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '=' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(NOT_EQ, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else {
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(BANG, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
 		case '*':
-			// block comment - startPos already captured before the first '/'
-			l.read() // consume '/'
-			l.read() // consume '*'
-			// skipBlockCommentWithStart will read the rest and return a token if in trivia mode
-			if triviaTok := l.skipBlockCommentWithStart(startLine, startColumn, startPos); triviaTok != nil {
-				return *triviaTok
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(ASTERISK, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '/':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			switch l.peek() {
+			case '/':
+				// line comment - startPos already captured before the first '/'
+				l.read() // consume first '/'
+				l.read() // consume second '/'
+				// skipLineCommentWithStart will read the rest and return a token if in trivia mode
+				if triviaTok := l.skipLineCommentWithStart(startLine, startColumn, startPos); triviaTok != nil {
+					return *triviaTok
+				}
+				// In non-trivia mode, comment is skipped, continue to next token
+				continue
+			case '*':
+				// block comment - startPos already captured before the first '/'
+				l.read() // consume '/'
+				l.read() // consume '*'
+				// skipBlockCommentWithStart will read the rest and return a token if in trivia mode
+				if triviaTok := l.skipBlockCommentWithStart(startLine, startColumn, startPos); triviaTok != nil {
+					return *triviaTok
+				}
+				// In non-trivia mode, comment is skipped, continue to next token
+				continue
+			default:
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(SLASH, startLine, startColumn, startPos, l.pos, raw, raw)
 			}
-			// In non-trivia mode, comment is skipped, continue to next token
-			return l.NextToken() // restart
+
+		case '<':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '=' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(LE, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else {
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(LT, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+		case '>':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '=' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(GE, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else {
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(GT, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+		case ';':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(SEMICOLON, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case ',':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(COMMA, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case ':':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(COLON, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '.':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(DOT, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '"':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw, value := l.readString(startLine, startColumn, startPos, '"')
+			return l.makeToken(STRING, startLine, startColumn, startPos, l.pos, raw, value)
+
+		case '(':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(LPAREN, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case ')':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(RPAREN, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '{':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(LBRACE, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '}':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(RBRACE, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '[':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(LBRACKET, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case ']':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(RBRACKET, startLine, startColumn, startPos, l.pos, raw, raw)
+
 		default:
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(SLASH, startLine, startColumn, startPos, l.pos, raw, raw)
-		}
-
-	case '<':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if l.peek() == '=' {
-			ch := l.ch
-			l.read()
-			raw := string(ch) + string(l.ch)
-			l.read()
-			return l.makeToken(LE, startLine, startColumn, startPos, l.pos, raw, raw)
-		} else {
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(LT, startLine, startColumn, startPos, l.pos, raw, raw)
-		}
-
-	case '>':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		if l.peek() == '=' {
-			ch := l.ch
-			l.read()
-			raw := string(ch) + string(l.ch)
-			l.read()
-			return l.makeToken(GE, startLine, startColumn, startPos, l.pos, raw, raw)
-		} else {
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(GT, startLine, startColumn, startPos, l.pos, raw, raw)
-		}
-
-	case ';':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(SEMICOLON, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case ',':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(COMMA, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case ':':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(COLON, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '.':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(DOT, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '"':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw, value := l.readString('"')
-		return l.makeToken(STRING, startLine, startColumn, startPos, l.pos, raw, value)
-
-	case '(':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(LPAREN, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case ')':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(RPAREN, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '{':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(LBRACE, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '}':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(RBRACE, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case '[':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(LBRACKET, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	case ']':
-		startLine, startColumn, startPos := l.currentSpanStart()
-		raw := string(l.ch)
-		l.read()
-		return l.makeToken(RBRACKET, startLine, startColumn, startPos, l.pos, raw, raw)
-
-	default:
-		if isLetter(l.ch) {
-			startLine, startColumn, startPos := l.currentSpanStart()
-			literal := l.readIdentifier()
-			tokType := LookupIdent(literal)
-			return l.makeToken(tokType, startLine, startColumn, startPos, l.pos, literal, literal)
-		} else if isDigit(l.ch) {
-			startLine, startColumn, startPos := l.currentSpanStart()
-			literal, tokType := l.readNumber()
-			return l.makeToken(tokType, startLine, startColumn, startPos, l.pos, literal, literal)
-		} else {
-			startLine, startColumn, startPos := l.currentSpanStart()
-			raw := string(l.ch)
-			l.read()
-			return l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+			if isLetter(l.ch) {
+				startLine, startColumn, startPos := l.currentSpanStart()
+				literal := l.readIdentifier()
+				tokType := LookupIdent(literal)
+				return l.makeToken(tokType, startLine, startColumn, startPos, l.pos, literal, literal)
+			} else if isDigit(l.ch) {
+				startLine, startColumn, startPos := l.currentSpanStart()
+				literal, tokType := l.readNumber()
+				return l.makeToken(tokType, startLine, startColumn, startPos, l.pos, literal, literal)
+			} else {
+				startLine, startColumn, startPos := l.currentSpanStart()
+				raw := string(l.ch)
+				l.read()
+				tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+				l.addError(
+					ErrIllegalRune,
+					"illegal character "+strconv.Quote(raw),
+					tok.Span,
+				)
+				return tok
+			}
 		}
 	}
 }
@@ -516,7 +556,7 @@ type stringResult struct {
 
 // readString reads a string literal, handling escape sequences
 // Returns both raw (with escapes) and decoded (without escapes) values
-func (l *Lexer) readString(quote rune) (raw string, value string) {
+func (l *Lexer) readString(startLine, startColumn, startPos int, quote rune) (raw string, value string) {
 	var rawRunes []rune
 	var decodedRunes []rune
 
@@ -525,7 +565,13 @@ func (l *Lexer) readString(quote rune) (raw string, value string) {
 
 	for {
 		if l.ch == 0 {
-			break // EOF - unterminated string
+			// EOF - unterminated string literal
+			l.addError(
+				ErrUnterminatedString,
+				"unterminated string literal",
+				Span{Line: startLine, Column: startColumn, Start: startPos, End: l.pos},
+			)
+			break
 		}
 		if l.ch == quote {
 			rawRunes = append(rawRunes, quote) // include closing quote
