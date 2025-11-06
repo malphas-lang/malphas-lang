@@ -3,6 +3,8 @@ package lexer
 import (
 	"strconv"
 	"unicode"
+
+	"github.com/malphas-lang/malphas-lang/internal/diag"
 )
 
 type LexerErrorKind int
@@ -17,6 +19,35 @@ type LexerError struct {
 	Kind    LexerErrorKind
 	Message string
 	Span    Span
+}
+
+func (k LexerErrorKind) diagnosticCode() diag.Code {
+	switch k {
+	case ErrUnterminatedString:
+		return diag.CodeLexerUnterminatedString
+	case ErrUnterminatedBlockComment:
+		return diag.CodeLexerUnterminatedBlockComment
+	case ErrIllegalRune:
+		return diag.CodeLexerIllegalRune
+	default:
+		return diag.Code("LEXER_UNKNOWN_ERROR")
+	}
+}
+
+// ToDiagnostic converts a lexer error into a shared diagnostic structure.
+func (e LexerError) ToDiagnostic() diag.Diagnostic {
+	return diag.Diagnostic{
+		Stage:    diag.StageLexer,
+		Severity: diag.SeverityError,
+		Code:     e.Kind.diagnosticCode(),
+		Message:  e.Message,
+		Span: diag.Span{
+			Line:   e.Span.Line,
+			Column: e.Span.Column,
+			Start:  e.Span.Start,
+			End:    e.Span.End,
+		},
+	}
 }
 
 // Lexer represents the lexer state
@@ -70,7 +101,22 @@ func NewWithTrivia(input string) *Lexer {
 func (l *Lexer) read() {
 	// Follow the guide's pattern: increment pos first
 	l.pos++
-	if l.pos >= len(l.input) {
+	prevPos := l.pos - 1
+	inputLen := len(l.input)
+
+	if l.pos >= inputLen {
+		// We've moved past the last rune; normalize position to virtual EOF
+		if prevPos >= 0 && prevPos < inputLen {
+			if l.input[prevPos] == '\n' {
+				l.line++
+				l.column = 1
+			} else {
+				l.column++
+			}
+		} else if prevPos < 0 {
+			// Empty input: column should point to the first position
+			l.column = 1
+		}
 		l.ch = 0 // EOF
 		return
 	}
@@ -81,7 +127,7 @@ func (l *Lexer) read() {
 	// Update line/column to reflect the NEW character's position
 	// If the previous character was a newline, we're now on a new line
 	// We check this by looking at what we just read
-	if l.pos > 0 && l.input[l.pos-1] == '\n' {
+	if prevPos >= 0 && prevPos < inputLen && l.input[prevPos] == '\n' {
 		l.line++
 		l.column = 1
 	} else {
@@ -470,7 +516,10 @@ func (l *Lexer) NextToken() Token {
 
 		case '"':
 			startLine, startColumn, startPos := l.currentSpanStart()
-			raw, value := l.readString(startLine, startColumn, startPos, '"')
+			raw, value, terminated := l.readString(startLine, startColumn, startPos, '"')
+			if !terminated {
+				return l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
 			return l.makeToken(STRING, startLine, startColumn, startPos, l.pos, raw, value)
 
 		case '(':
@@ -548,15 +597,10 @@ func isHexDigit(ch rune) bool {
 	return isDigit(ch) || ('a' <= ch && ch <= 'f') || ('A' <= ch && ch <= 'F')
 }
 
-// stringResult holds both raw and decoded string values
-type stringResult struct {
-	raw   string
-	value string
-}
-
 // readString reads a string literal, handling escape sequences
-// Returns both raw (with escapes) and decoded (without escapes) values
-func (l *Lexer) readString(startLine, startColumn, startPos int, quote rune) (raw string, value string) {
+// Returns both raw (with escapes) and decoded (without escapes) values,
+// along with a flag indicating whether the string was properly terminated.
+func (l *Lexer) readString(startLine, startColumn, startPos int, quote rune) (raw string, value string, terminated bool) {
 	var rawRunes []rune
 	var decodedRunes []rune
 
@@ -576,7 +620,15 @@ func (l *Lexer) readString(startLine, startColumn, startPos int, quote rune) (ra
 		if l.ch == quote {
 			rawRunes = append(rawRunes, quote) // include closing quote
 			l.read()                           // consume closing quote
-			return string(rawRunes), string(decodedRunes)
+			return string(rawRunes), string(decodedRunes), true
+		}
+		if l.ch == '\n' || l.ch == '\r' {
+			l.addError(
+				ErrUnterminatedString,
+				"newline in string literal",
+				Span{Line: startLine, Column: startColumn, Start: startPos, End: l.pos},
+			)
+			break
 		}
 		if l.ch == '\\' {
 			rawRunes = append(rawRunes, '\\')
@@ -609,7 +661,7 @@ func (l *Lexer) readString(startLine, startColumn, startPos int, quote rune) (ra
 		l.read()
 	}
 
-	// If we get here, we hit EOF without closing quote
-	// Return what we have so far
-	return string(rawRunes), string(decodedRunes)
+	// If we get here, the string was not terminated properly (newline or EOF).
+	// Return what we have so far.
+	return string(rawRunes), string(decodedRunes), false
 }
