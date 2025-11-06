@@ -96,6 +96,22 @@ type FnDecl struct {
 // Span returns the declaration span.
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
+// NewFnDecl constructs a function declaration node.
+func NewFnDecl(name *Ident, params []*Param, returnType TypeExpr, body *BlockExpr, span lexer.Span) *FnDecl {
+	return &FnDecl{
+		Name:       name,
+		Params:     params,
+		ReturnType: returnType,
+		Body:       body,
+		span:       span,
+	}
+}
+
+// SetSpan updates the function declaration span.
+func (d *FnDecl) SetSpan(span lexer.Span) {
+	d.span = span
+}
+
 // declNode marks FnDecl as a declaration.
 func (*FnDecl) declNode() {}
 
@@ -118,6 +134,20 @@ type BlockExpr struct {
 
 // Span returns the block span.
 func (b *BlockExpr) Span() lexer.Span { return b.span }
+
+// NewBlockExpr constructs a block expression node.
+func NewBlockExpr(stmts []Stmt, tail Expr, span lexer.Span) *BlockExpr {
+	return &BlockExpr{
+		Stmts: stmts,
+		Tail:  tail,
+		span:  span,
+	}
+}
+
+// SetSpan updates the block span.
+func (b *BlockExpr) SetSpan(span lexer.Span) {
+	b.span = span
+}
 
 // exprNode marks BlockExpr as an expression.
 func (*BlockExpr) exprNode() {}
