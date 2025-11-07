@@ -1,0 +1,8 @@
+package examples;
+
+fn make_handler(value: Result[i32, bool], flag: bool) -> fn(i32, bool) -> Result[i32, bool] {
+	let result: Result[i32, bool] = process(value);
+	let handler: fn(i32, bool) -> Result[i32, bool] = select_handler;
+	return handler;
+}
+

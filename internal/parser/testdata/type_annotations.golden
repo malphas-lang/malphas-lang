@@ -1,0 +1,171 @@
+{
+  "Package": {
+    "Name": {
+      "Name": "examples"
+    }
+  },
+  "Uses": null,
+  "Decls": [
+    {
+      "Name": {
+        "Name": "make_handler"
+      },
+      "Params": [
+        {
+          "Name": {
+            "Name": "value"
+          },
+          "Type": {
+            "Base": {
+              "Name": {
+                "Name": "Result"
+              }
+            },
+            "Args": [
+              {
+                "Name": {
+                  "Name": "i32"
+                }
+              },
+              {
+                "Name": {
+                  "Name": "bool"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "Name": {
+            "Name": "flag"
+          },
+          "Type": {
+            "Name": {
+              "Name": "bool"
+            }
+          }
+        }
+      ],
+      "ReturnType": {
+        "Params": [
+          {
+            "Name": {
+              "Name": "i32"
+            }
+          },
+          {
+            "Name": {
+              "Name": "bool"
+            }
+          }
+        ],
+        "Return": {
+          "Base": {
+            "Name": {
+              "Name": "Result"
+            }
+          },
+          "Args": [
+            {
+              "Name": {
+                "Name": "i32"
+              }
+            },
+            {
+              "Name": {
+                "Name": "bool"
+              }
+            }
+          ]
+        }
+      },
+      "Body": {
+        "Stmts": [
+          {
+            "Mutable": false,
+            "Name": {
+              "Name": "result"
+            },
+            "Type": {
+              "Base": {
+                "Name": {
+                  "Name": "Result"
+                }
+              },
+              "Args": [
+                {
+                  "Name": {
+                    "Name": "i32"
+                  }
+                },
+                {
+                  "Name": {
+                    "Name": "bool"
+                  }
+                }
+              ]
+            },
+            "Value": {
+              "Callee": {
+                "Name": "process"
+              },
+              "Args": [
+                {
+                  "Name": "value"
+                }
+              ]
+            }
+          },
+          {
+            "Mutable": false,
+            "Name": {
+              "Name": "handler"
+            },
+            "Type": {
+              "Params": [
+                {
+                  "Name": {
+                    "Name": "i32"
+                  }
+                },
+                {
+                  "Name": {
+                    "Name": "bool"
+                  }
+                }
+              ],
+              "Return": {
+                "Base": {
+                  "Name": {
+                    "Name": "Result"
+                  }
+                },
+                "Args": [
+                  {
+                    "Name": {
+                      "Name": "i32"
+                    }
+                  },
+                  {
+                    "Name": {
+                      "Name": "bool"
+                    }
+                  }
+                ]
+              }
+            },
+            "Value": {
+              "Name": "select_handler"
+            }
+          },
+          {
+            "Value": {
+              "Name": "handler"
+            }
+          }
+        ],
+        "Tail": null
+      }
+    }
+  ]
+}

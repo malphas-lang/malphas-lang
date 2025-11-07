@@ -125,6 +125,20 @@ type Param struct {
 // Span returns the parameter span.
 func (p *Param) Span() lexer.Span { return p.span }
 
+// NewParam constructs a parameter node.
+func NewParam(name *Ident, typ TypeExpr, span lexer.Span) *Param {
+	return &Param{
+		Name: name,
+		Type: typ,
+		span: span,
+	}
+}
+
+// SetSpan updates the parameter span.
+func (p *Param) SetSpan(span lexer.Span) {
+	p.span = span
+}
+
 // BlockExpr represents a block of statements with an optional tail expression.
 type BlockExpr struct {
 	Stmts []Stmt
@@ -192,6 +206,19 @@ type ReturnStmt struct {
 // Span returns the statement span.
 func (s *ReturnStmt) Span() lexer.Span { return s.span }
 
+// SetSpan updates the return statement span.
+func (s *ReturnStmt) SetSpan(span lexer.Span) {
+	s.span = span
+}
+
+// NewReturnStmt constructs a return statement node.
+func NewReturnStmt(value Expr, span lexer.Span) *ReturnStmt {
+	return &ReturnStmt{
+		Value: value,
+		span:  span,
+	}
+}
+
 // stmtNode marks ReturnStmt as a statement.
 func (*ReturnStmt) stmtNode() {}
 
@@ -204,8 +231,167 @@ type ExprStmt struct {
 // Span returns the statement span.
 func (s *ExprStmt) Span() lexer.Span { return s.span }
 
+// SetSpan updates the expression statement span.
+func (s *ExprStmt) SetSpan(span lexer.Span) {
+	s.span = span
+}
+
+// NewExprStmt constructs an expression statement node.
+func NewExprStmt(expr Expr, span lexer.Span) *ExprStmt {
+	return &ExprStmt{
+		Expr: expr,
+		span: span,
+	}
+}
+
 // stmtNode marks ExprStmt as a statement.
 func (*ExprStmt) stmtNode() {}
+
+// IfClause represents a single conditional branch within an if statement.
+type IfClause struct {
+	Condition Expr
+	Body      *BlockExpr
+	span      lexer.Span
+}
+
+// Span returns the clause span.
+func (c *IfClause) Span() lexer.Span { return c.span }
+
+// SetSpan updates the clause span.
+func (c *IfClause) SetSpan(span lexer.Span) { c.span = span }
+
+// NewIfClause constructs an if clause node.
+func NewIfClause(condition Expr, body *BlockExpr, span lexer.Span) *IfClause {
+	return &IfClause{
+		Condition: condition,
+		Body:      body,
+		span:      span,
+	}
+}
+
+// IfStmt represents an if / else if / else statement chain.
+type IfStmt struct {
+	Clauses []*IfClause
+	Else    *BlockExpr
+	span    lexer.Span
+}
+
+// Span returns the statement span.
+func (s *IfStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *IfStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewIfStmt constructs an if statement node.
+func NewIfStmt(clauses []*IfClause, elseBlock *BlockExpr, span lexer.Span) *IfStmt {
+	return &IfStmt{
+		Clauses: clauses,
+		Else:    elseBlock,
+		span:    span,
+	}
+}
+
+// stmtNode marks IfStmt as a statement.
+func (*IfStmt) stmtNode() {}
+
+// WhileStmt represents a while loop.
+type WhileStmt struct {
+	Condition Expr
+	Body      *BlockExpr
+	span      lexer.Span
+}
+
+// Span returns the statement span.
+func (s *WhileStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *WhileStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewWhileStmt constructs a while loop node.
+func NewWhileStmt(condition Expr, body *BlockExpr, span lexer.Span) *WhileStmt {
+	return &WhileStmt{
+		Condition: condition,
+		Body:      body,
+		span:      span,
+	}
+}
+
+// stmtNode marks WhileStmt as a statement.
+func (*WhileStmt) stmtNode() {}
+
+// ForStmt represents a basic for-in loop.
+type ForStmt struct {
+	Iterator *Ident
+	Iterable Expr
+	Body     *BlockExpr
+	span     lexer.Span
+}
+
+// Span returns the statement span.
+func (s *ForStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *ForStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewForStmt constructs a for loop node.
+func NewForStmt(iterator *Ident, iterable Expr, body *BlockExpr, span lexer.Span) *ForStmt {
+	return &ForStmt{
+		Iterator: iterator,
+		Iterable: iterable,
+		Body:     body,
+		span:     span,
+	}
+}
+
+// stmtNode marks ForStmt as a statement.
+func (*ForStmt) stmtNode() {}
+
+// MatchArm represents a single match arm.
+type MatchArm struct {
+	Pattern Expr
+	Body    *BlockExpr
+	span    lexer.Span
+}
+
+// Span returns the arm span.
+func (a *MatchArm) Span() lexer.Span { return a.span }
+
+// SetSpan updates the arm span.
+func (a *MatchArm) SetSpan(span lexer.Span) { a.span = span }
+
+// NewMatchArm constructs a match arm node.
+func NewMatchArm(pattern Expr, body *BlockExpr, span lexer.Span) *MatchArm {
+	return &MatchArm{
+		Pattern: pattern,
+		Body:    body,
+		span:    span,
+	}
+}
+
+// MatchStmt represents a match statement.
+type MatchStmt struct {
+	Subject Expr
+	Arms    []*MatchArm
+	span    lexer.Span
+}
+
+// Span returns the statement span.
+func (s *MatchStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *MatchStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewMatchStmt constructs a match statement node.
+func NewMatchStmt(subject Expr, arms []*MatchArm, span lexer.Span) *MatchStmt {
+	return &MatchStmt{
+		Subject: subject,
+		Arms:    arms,
+		span:    span,
+	}
+}
+
+// stmtNode marks MatchStmt as a statement.
+func (*MatchStmt) stmtNode() {}
 
 // Ident represents an identifier.
 type Ident struct {
@@ -503,3 +689,70 @@ func (t *NamedType) Span() lexer.Span { return t.span }
 
 // typeNode marks NamedType as a type expression.
 func (*NamedType) typeNode() {}
+
+// NewNamedType constructs a named type node.
+func NewNamedType(name *Ident, span lexer.Span) *NamedType {
+	return &NamedType{
+		Name: name,
+		span: span,
+	}
+}
+
+// SetSpan updates the named type span.
+func (t *NamedType) SetSpan(span lexer.Span) {
+	t.span = span
+}
+
+// GenericType represents a generic type application (Foo[Bar, Baz]).
+type GenericType struct {
+	Base TypeExpr
+	Args []TypeExpr
+	span lexer.Span
+}
+
+// Span returns the generic type span.
+func (t *GenericType) Span() lexer.Span { return t.span }
+
+// SetSpan updates the generic type span.
+func (t *GenericType) SetSpan(span lexer.Span) {
+	t.span = span
+}
+
+// typeNode marks GenericType as a type expression.
+func (*GenericType) typeNode() {}
+
+// NewGenericType constructs a generic type node.
+func NewGenericType(base TypeExpr, args []TypeExpr, span lexer.Span) *GenericType {
+	return &GenericType{
+		Base: base,
+		Args: args,
+		span: span,
+	}
+}
+
+// FunctionType represents a function type annotation (fn(A, B) -> C).
+type FunctionType struct {
+	Params []TypeExpr
+	Return TypeExpr
+	span   lexer.Span
+}
+
+// Span returns the function type span.
+func (t *FunctionType) Span() lexer.Span { return t.span }
+
+// SetSpan updates the function type span.
+func (t *FunctionType) SetSpan(span lexer.Span) {
+	t.span = span
+}
+
+// typeNode marks FunctionType as a type expression.
+func (*FunctionType) typeNode() {}
+
+// NewFunctionType constructs a function type node.
+func NewFunctionType(params []TypeExpr, ret TypeExpr, span lexer.Span) *FunctionType {
+	return &FunctionType{
+		Params: params,
+		Return: ret,
+		span:   span,
+	}
+}
