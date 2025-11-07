@@ -1,0 +1,17 @@
+package traits;
+
+trait Foo {
+	fn required(x: i32) -> i32;
+	fn defaulted(x: i32) -> i32 {
+		x + 1
+	}
+}
+
+trait Bar[T] {
+	fn compute(value: T) -> T;
+	fn fallback(value: T) -> T {
+		value
+	}
+}
+
+
