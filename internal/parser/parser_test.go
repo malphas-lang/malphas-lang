@@ -513,6 +513,357 @@ func TestParseTypeAnnotationsGolden(t *testing.T) {
 	}
 }
 
+func TestParseFnDeclWithGenericParams(t *testing.T) {
+	const src = `
+package foo;
+
+fn map[T, U](value: T) -> U {
+	return value;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if len(fn.TypeParams) != 2 {
+		t.Fatalf("expected 2 type params, got %d", len(fn.TypeParams))
+	}
+
+	if fn.TypeParams[0].Name == nil || fn.TypeParams[0].Name.Name != "T" {
+		t.Fatalf("expected first type param 'T', got %#v", fn.TypeParams[0])
+	}
+
+	if fn.TypeParams[1].Name == nil || fn.TypeParams[1].Name.Name != "U" {
+		t.Fatalf("expected second type param 'U', got %#v", fn.TypeParams[1])
+	}
+
+	if fn.ReturnType == nil {
+		t.Fatalf("expected return type")
+	}
+}
+
+func TestParseStructDecl(t *testing.T) {
+	const src = `
+package foo;
+
+struct Point[T] {
+	x: T,
+	y: T,
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	decl, ok := file.Decls[0].(*ast.StructDecl)
+	if !ok {
+		t.Fatalf("expected *ast.StructDecl, got %T", file.Decls[0])
+	}
+
+	if decl.Name == nil || decl.Name.Name != "Point" {
+		t.Fatalf("expected struct name 'Point', got %#v", decl.Name)
+	}
+
+	if len(decl.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(decl.TypeParams))
+	}
+
+	if decl.TypeParams[0].Name == nil || decl.TypeParams[0].Name.Name != "T" {
+		t.Fatalf("expected type param 'T', got %#v", decl.TypeParams[0])
+	}
+
+	if len(decl.Fields) != 2 {
+		t.Fatalf("expected 2 fields, got %d", len(decl.Fields))
+	}
+
+	if decl.Fields[0].Name == nil || decl.Fields[0].Name.Name != "x" {
+		t.Fatalf("expected first field name 'x', got %#v", decl.Fields[0].Name)
+	}
+
+	type0, ok := decl.Fields[0].Type.(*ast.NamedType)
+	if !ok || type0.Name == nil || type0.Name.Name != "T" {
+		t.Fatalf("expected first field type 'T', got %#v (type %T)", decl.Fields[0].Type, decl.Fields[0].Type)
+	}
+}
+
+func TestParseEnumDecl(t *testing.T) {
+	const src = `
+package foo;
+
+enum Result[T, E] {
+	Ok(T),
+	Err(E),
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	enumDecl, ok := file.Decls[0].(*ast.EnumDecl)
+	if !ok {
+		t.Fatalf("expected *ast.EnumDecl, got %T", file.Decls[0])
+	}
+
+	if len(enumDecl.TypeParams) != 2 {
+		t.Fatalf("expected 2 type params, got %d", len(enumDecl.TypeParams))
+	}
+
+	if len(enumDecl.Variants) != 2 {
+		t.Fatalf("expected 2 variants, got %d", len(enumDecl.Variants))
+	}
+
+	if enumDecl.Variants[0].Name == nil || enumDecl.Variants[0].Name.Name != "Ok" {
+		t.Fatalf("expected first variant 'Ok', got %#v", enumDecl.Variants[0].Name)
+	}
+
+	if len(enumDecl.Variants[0].Payloads) != 1 {
+		t.Fatalf("expected variant payload, got %d", len(enumDecl.Variants[0].Payloads))
+	}
+
+	payload, ok := enumDecl.Variants[0].Payloads[0].(*ast.NamedType)
+	if !ok || payload.Name == nil || payload.Name.Name != "T" {
+		t.Fatalf("expected payload type 'T', got %#v (type %T)", enumDecl.Variants[0].Payloads[0], enumDecl.Variants[0].Payloads[0])
+	}
+}
+
+func TestParseTypeAliasDecl(t *testing.T) {
+	const src = `
+package foo;
+
+type MyResult[T] = Result[T, string];
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	alias, ok := file.Decls[0].(*ast.TypeAliasDecl)
+	if !ok {
+		t.Fatalf("expected *ast.TypeAliasDecl, got %T", file.Decls[0])
+	}
+
+	if alias.Name == nil || alias.Name.Name != "MyResult" {
+		t.Fatalf("expected alias name 'MyResult', got %#v", alias.Name)
+	}
+
+	if len(alias.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(alias.TypeParams))
+	}
+
+	if alias.Target == nil {
+		t.Fatalf("expected alias target")
+	}
+}
+
+func TestParseConstDecl(t *testing.T) {
+	const src = `
+package foo;
+
+const MAX: i32 = 10;
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	constDecl, ok := file.Decls[0].(*ast.ConstDecl)
+	if !ok {
+		t.Fatalf("expected *ast.ConstDecl, got %T", file.Decls[0])
+	}
+
+	if constDecl.Name == nil || constDecl.Name.Name != "MAX" {
+		t.Fatalf("expected const name 'MAX', got %#v", constDecl.Name)
+	}
+
+	if constDecl.Type == nil {
+		t.Fatalf("expected const type")
+	}
+}
+
+func TestParseTraitDecl(t *testing.T) {
+	const src = `
+package foo;
+
+trait Printable[T] {
+	fn print(value: T) {
+		return;
+	}
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
+	if !ok {
+		t.Fatalf("expected *ast.TraitDecl, got %T", file.Decls[0])
+	}
+
+	if traitDecl.Name == nil || traitDecl.Name.Name != "Printable" {
+		t.Fatalf("expected trait name 'Printable', got %#v", traitDecl.Name)
+	}
+
+	if len(traitDecl.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(traitDecl.TypeParams))
+	}
+
+	if len(traitDecl.Methods) != 1 {
+		t.Fatalf("expected 1 method, got %d", len(traitDecl.Methods))
+	}
+
+	if traitDecl.Methods[0].Name == nil || traitDecl.Methods[0].Name.Name != "print" {
+		t.Fatalf("expected method name 'print', got %#v", traitDecl.Methods[0].Name)
+	}
+}
+
+func TestParseImplDecl(t *testing.T) {
+	const src = `
+package foo;
+
+impl Printable for Point {
+	fn print() {
+		return;
+	}
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	implDecl, ok := file.Decls[0].(*ast.ImplDecl)
+	if !ok {
+		t.Fatalf("expected *ast.ImplDecl, got %T", file.Decls[0])
+	}
+
+	if implDecl.Target == nil {
+		t.Fatalf("expected impl target type")
+	}
+
+	if len(implDecl.Methods) != 1 {
+		t.Fatalf("expected 1 method in impl, got %d", len(implDecl.Methods))
+	}
+}
+
+func TestParseStructDeclErrors(t *testing.T) {
+	const src = `
+package foo;
+
+struct Bad {
+	field: ;
+}
+`
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+
+	if errs[0].Message != "expected type expression after ':' in struct field 'field'" {
+		t.Fatalf("unexpected error message: %q", errs[0].Message)
+	}
+}
+
+func TestParseTypeParamErrors(t *testing.T) {
+	testCases := []struct {
+		name   string
+		src    string
+		errMsg string
+	}{
+		{
+			name: "missing type parameter name",
+			src: `
+package foo;
+
+fn bad[]() {}
+`,
+			errMsg: "expected type parameter name",
+		},
+		{
+			name: "missing closing bracket",
+			src: `
+package foo;
+
+fn bad[T() {}
+`,
+			errMsg: "expected ]",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, errs := parseFile(t, tc.src)
+
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors")
+			}
+
+			if errs[0].Message != tc.errMsg {
+				t.Fatalf("expected first error %q, got %q", tc.errMsg, errs[0].Message)
+			}
+		})
+	}
+}
+
+func TestParseTypeAliasDeclErrors(t *testing.T) {
+	const src = `
+package foo;
+
+type Alias = ;
+`
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+
+	if errs[0].Message != "expected type expression after '=' in type alias" {
+		t.Fatalf("unexpected error message: %q", errs[0].Message)
+	}
+}
+
+func TestParseDeclarationsGolden(t *testing.T) {
+	src := readTestdataFile(t, "decls_suite.mlp")
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	got, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal AST: %v", err)
+	}
+	got = append(got, '\n')
+
+	goldenPath := filepath.Join("testdata", "decls_suite.golden")
+
+	if *update {
+		if err := os.WriteFile(goldenPath, got, 0o600); err != nil {
+			t.Fatalf("write golden %s: %v", goldenPath, err)
+		}
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("golden mismatch\nwant:\n%s\n\ngot:\n%s", want, got)
+	}
+}
+
 func TestParseLetStmtWithParenthesizedExpr(t *testing.T) {
 	const src = `
 package foo;
