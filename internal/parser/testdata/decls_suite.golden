@@ -14,12 +14,14 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         },
         {
           "Name": {
             "Name": "U"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Params": [
@@ -58,7 +60,8 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Fields": [
@@ -92,7 +95,8 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Variants": [
@@ -124,7 +128,8 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Target": {
@@ -163,7 +168,8 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Methods": [

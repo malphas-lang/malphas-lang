@@ -301,7 +301,7 @@ func (p *Parser) parsePackageDecl() *ast.PackageDecl {
 	return decl
 }
 
-func (p *Parser) parseFnHeader() (*ast.Ident, []*ast.TypeParam, []*ast.Param, ast.TypeExpr, lexer.Span) {
+func (p *Parser) parseFnHeader() (*ast.Ident, []ast.GenericParam, []*ast.Param, ast.TypeExpr, lexer.Span) {
 	start := p.curTok.Span
 
 	if p.curTok.Type != lexer.FN {
@@ -400,7 +400,7 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 	}
 }
 
-func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
+func (p *Parser) parseOptionalTypeParams() ([]ast.GenericParam, bool) {
 	if p.peekTok.Type != lexer.LBRACKET {
 		return nil, true
 	}
@@ -412,19 +412,26 @@ func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
 		return nil, false
 	}
 
-	params := make([]*ast.TypeParam, 0)
+	params := make([]ast.GenericParam, 0)
 
 	p.nextToken() // move to first potential parameter token
 
 	for {
-		if p.curTok.Type != lexer.IDENT {
-			p.reportError("expected type parameter name", p.curTok.Span)
+		var param ast.GenericParam
+		switch p.curTok.Type {
+		case lexer.CONST:
+			param = p.parseConstParam()
+		case lexer.IDENT:
+			param = p.parseTypeParam()
+		default:
+			p.reportError("expected type parameter or 'const'", p.curTok.Span)
 			return nil, false
 		}
 
-		nameTok := p.curTok
-		name := ast.NewIdent(nameTok.Literal, nameTok.Span)
-		params = append(params, ast.NewTypeParam(name, nameTok.Span))
+		if param == nil {
+			return nil, false
+		}
+		params = append(params, param)
 
 		if p.peekTok.Type == lexer.COMMA {
 			p.nextToken() // move to ','
@@ -436,6 +443,11 @@ func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
 			continue
 		}
 
+		if p.peekTok.Type == lexer.CONST {
+			p.reportError("missing comma before const", p.peekTok.Span)
+			return nil, false
+		}
+
 		break
 	}
 
@@ -444,6 +456,86 @@ func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
 	}
 
 	return params, true
+}
+
+func (p *Parser) parseTypeParam() *ast.TypeParam {
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	var bounds []ast.TypeExpr
+
+	if p.peekTok.Type == lexer.COLON {
+		p.nextToken() // move to ':'
+		p.nextToken() // move to first potential trait token
+
+		if !isTypeStart(p.curTok.Type) {
+			p.reportError("expected trait name after ':'", p.curTok.Span)
+			return ast.NewTypeParam(name, nil, nameTok.Span)
+		}
+
+		bound := p.parseType()
+		if bound != nil {
+			bounds = append(bounds, bound)
+		}
+
+		for p.peekTok.Type == lexer.PLUS {
+			p.nextToken() // move to '+'
+			p.nextToken() // move to next trait token
+
+			if !isTypeStart(p.curTok.Type) {
+				p.reportError("expected trait name after '+'", p.curTok.Span)
+				continue
+			}
+
+			nextBound := p.parseType()
+			if nextBound != nil {
+				bounds = append(bounds, nextBound)
+			}
+		}
+	}
+
+	span := nameTok.Span
+	if len(bounds) > 0 {
+		span = mergeSpan(nameTok.Span, bounds[len(bounds)-1].Span())
+	}
+
+	return ast.NewTypeParam(name, bounds, span)
+}
+
+func (p *Parser) parseConstParam() *ast.ConstParam {
+	constTok := p.curTok
+
+	if p.peekTok.Type != lexer.IDENT {
+		p.reportError("expected const generic name after 'const'", p.peekTok.Span)
+		return nil
+	}
+
+	p.nextToken() // move to const name
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	if p.peekTok.Type != lexer.COLON {
+		p.reportError("expected ':' and type after const generic name", p.peekTok.Span)
+		return nil
+	}
+
+	p.nextToken() // move to ':'
+	p.nextToken() // move to potential type start
+
+	if !isTypeStart(p.curTok.Type) {
+		p.reportError("expected ':' and type after const generic name", p.curTok.Span)
+		return nil
+	}
+
+	typ := p.parseType()
+	if typ == nil {
+		p.reportError("expected ':' and type after const generic name", nameTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(constTok.Span, typ.Span())
+
+	return ast.NewConstParam(name, typ, span)
 }
 
 func (p *Parser) parseParamList() ([]*ast.Param, bool) {
