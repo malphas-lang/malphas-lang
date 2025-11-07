@@ -90,6 +90,9 @@ type Parser struct {
 
 	prefixFns map[lexer.TokenType]prefixParseFn
 	infixFns  map[lexer.TokenType]infixParseFn
+
+	pendingTail    ast.Expr
+	allowBlockTail bool
 }
 
 // New returns a parser initialised with the provided source input.
@@ -298,16 +301,16 @@ func (p *Parser) parsePackageDecl() *ast.PackageDecl {
 	return decl
 }
 
-func (p *Parser) parseFnDecl() ast.Decl {
+func (p *Parser) parseFnHeader() (*ast.Ident, []*ast.TypeParam, []*ast.Param, ast.TypeExpr, lexer.Span) {
 	start := p.curTok.Span
 
 	if p.curTok.Type != lexer.FN {
 		p.reportError("expected 'fn' keyword", p.curTok.Span)
-		return nil
+		return nil, nil, nil, nil, start
 	}
 
 	if !p.expect(lexer.IDENT) {
-		return nil
+		return nil, nil, nil, nil, start
 	}
 
 	nameTok := p.curTok
@@ -315,16 +318,16 @@ func (p *Parser) parseFnDecl() ast.Decl {
 
 	typeParams, ok := p.parseOptionalTypeParams()
 	if !ok {
-		return nil
+		return nil, nil, nil, nil, start
 	}
 
 	if !p.expect(lexer.LPAREN) {
-		return nil
+		return nil, nil, nil, nil, start
 	}
 
 	params, ok := p.parseParamList()
 	if !ok {
-		return nil
+		return nil, nil, nil, nil, start
 	}
 
 	var returnType ast.TypeExpr
@@ -333,8 +336,19 @@ func (p *Parser) parseFnDecl() ast.Decl {
 		p.nextToken() // move to first return type token
 		returnType = p.parseType()
 		if returnType == nil {
-			return nil
+			return nil, nil, nil, nil, start
 		}
+	}
+
+	headerSpan := mergeSpan(start, p.curTok.Span)
+
+	return name, typeParams, params, returnType, headerSpan
+}
+
+func (p *Parser) parseFnDecl() ast.Decl {
+	name, typeParams, params, returnType, headerSpan := p.parseFnHeader()
+	if name == nil {
+		return nil
 	}
 
 	if !p.expect(lexer.LBRACE) {
@@ -346,9 +360,44 @@ func (p *Parser) parseFnDecl() ast.Decl {
 		return nil
 	}
 
-	span := mergeSpan(start, body.Span())
+	span := mergeSpan(headerSpan, body.Span())
 
 	return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
+}
+
+func (p *Parser) parseTraitMethod() *ast.FnDecl {
+	name, typeParams, params, returnType, headerSpan := p.parseFnHeader()
+	if name == nil {
+		return nil
+	}
+
+	switch p.peekTok.Type {
+	case lexer.SEMICOLON:
+		if !p.expect(lexer.SEMICOLON) {
+			return nil
+		}
+		p.nextToken()
+		return ast.NewFnDecl(name, typeParams, params, returnType, nil, headerSpan)
+	case lexer.LBRACE:
+		if !p.expect(lexer.LBRACE) {
+			return nil
+		}
+		prevAllow := p.allowBlockTail
+		prevTail := p.pendingTail
+		p.allowBlockTail = true
+		p.pendingTail = nil
+		body := p.parseBlockExpr()
+		p.pendingTail = prevTail
+		p.allowBlockTail = prevAllow
+		if body == nil {
+			return nil
+		}
+		span := mergeSpan(headerSpan, body.Span())
+		return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
+	default:
+		p.reportError("expected ';' or '{' after trait method signature", p.peekTok.Span)
+		return nil
+	}
 }
 
 func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
@@ -800,15 +849,12 @@ func (p *Parser) parseTraitDecl() ast.Decl {
 			continue
 		}
 
-		decl := p.parseFnDecl()
-		if decl == nil {
+		method := p.parseTraitMethod()
+		if method == nil {
 			return nil
 		}
 
-		fn, ok := decl.(*ast.FnDecl)
-		if ok {
-			methods = append(methods, fn)
-		}
+		methods = append(methods, method)
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
@@ -1042,6 +1088,24 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 			continue
 		}
 
+		if p.allowBlockTail && p.pendingTail != nil {
+			if block.Tail != nil {
+				p.reportError("unexpected expression after block tail", p.curTok.Span)
+			} else {
+				block.Tail = p.pendingTail
+			}
+			p.pendingTail = nil
+
+			if p.peekTok.Type != lexer.RBRACE {
+				p.reportError("expected '}' after block tail expression", p.peekTok.Span)
+				p.recoverStatement(prevTok)
+				continue
+			}
+
+			p.nextToken()
+			break
+		}
+
 		if p.curTok.Type == lexer.RBRACE || p.curTok.Type == lexer.EOF {
 			break
 		}
@@ -1183,16 +1247,28 @@ func (p *Parser) parseExprStmt() ast.Stmt {
 		return nil
 	}
 
-	if !p.expect(lexer.SEMICOLON) {
+	switch p.peekTok.Type {
+	case lexer.SEMICOLON:
+		if !p.expect(lexer.SEMICOLON) {
+			return nil
+		}
+
+		span := mergeSpan(expr.Span(), p.curTok.Span)
+		stmt := ast.NewExprStmt(expr, span)
+
+		p.nextToken()
+
+		return stmt
+	case lexer.RBRACE:
+		if p.allowBlockTail {
+			p.pendingTail = expr
+			return nil
+		}
+		fallthrough
+	default:
+		p.reportError("expected ;", p.peekTok.Span)
 		return nil
 	}
-
-	span := mergeSpan(expr.Span(), p.curTok.Span)
-	stmt := ast.NewExprStmt(expr, span)
-
-	p.nextToken()
-
-	return stmt
 }
 
 func (p *Parser) parseIfStmt() ast.Stmt {

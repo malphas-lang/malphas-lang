@@ -1,0 +1,144 @@
+{
+  "Package": {
+    "Name": {
+      "Name": "traits"
+    }
+  },
+  "Uses": null,
+  "Decls": [
+    {
+      "Name": {
+        "Name": "Foo"
+      },
+      "TypeParams": null,
+      "Methods": [
+        {
+          "Name": {
+            "Name": "required"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "x"
+              },
+              "Type": {
+                "Name": {
+                  "Name": "i32"
+                }
+              }
+            }
+          ],
+          "ReturnType": {
+            "Name": {
+              "Name": "i32"
+            }
+          },
+          "Body": null
+        },
+        {
+          "Name": {
+            "Name": "defaulted"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "x"
+              },
+              "Type": {
+                "Name": {
+                  "Name": "i32"
+                }
+              }
+            }
+          ],
+          "ReturnType": {
+            "Name": {
+              "Name": "i32"
+            }
+          },
+          "Body": {
+            "Stmts": null,
+            "Tail": {
+              "Op": "+",
+              "Left": {
+                "Name": "x"
+              },
+              "Right": {
+                "Text": "1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "Name": {
+        "Name": "Bar"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Methods": [
+        {
+          "Name": {
+            "Name": "compute"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "value"
+              },
+              "Type": {
+                "Name": {
+                  "Name": "T"
+                }
+              }
+            }
+          ],
+          "ReturnType": {
+            "Name": {
+              "Name": "T"
+            }
+          },
+          "Body": null
+        },
+        {
+          "Name": {
+            "Name": "fallback"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "value"
+              },
+              "Type": {
+                "Name": {
+                  "Name": "T"
+                }
+              }
+            }
+          ],
+          "ReturnType": {
+            "Name": {
+              "Name": "T"
+            }
+          },
+          "Body": {
+            "Stmts": null,
+            "Tail": {
+              "Name": "value"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

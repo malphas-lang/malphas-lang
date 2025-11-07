@@ -713,6 +713,9 @@ trait Printable[T] {
 `
 
 	file, errs := parseFile(t, src)
+	if len(errs) > 0 {
+		t.Logf("errs: %#v", errs)
+	}
 	assertNoErrors(t, errs)
 
 	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
@@ -734,6 +737,119 @@ trait Printable[T] {
 
 	if traitDecl.Methods[0].Name == nil || traitDecl.Methods[0].Name.Name != "print" {
 		t.Fatalf("expected method name 'print', got %#v", traitDecl.Methods[0].Name)
+	}
+}
+
+func TestParseTraitMethodRequired(t *testing.T) {
+	const src = `
+package foo;
+
+trait Foo {
+	fn required(x: i32) -> i32;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatalf("expected file to be returned")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
+	if !ok {
+		t.Fatalf("expected *ast.TraitDecl, got %T", file.Decls[0])
+	}
+
+	if len(traitDecl.Methods) != 1 {
+		t.Fatalf("expected 1 method, got %d", len(traitDecl.Methods))
+	}
+
+	method := traitDecl.Methods[0]
+	if method.Name == nil || method.Name.Name != "required" {
+		t.Fatalf("expected method name 'required', got %#v", method.Name)
+	}
+
+	if len(method.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(method.Params))
+	}
+
+	param := method.Params[0]
+	if param.Name == nil || param.Name.Name != "x" {
+		t.Fatalf("expected param name 'x', got %#v", param.Name)
+	}
+
+	if _, ok := param.Type.(*ast.NamedType); !ok {
+		t.Fatalf("expected param type *ast.NamedType, got %T", param.Type)
+	}
+
+	if method.ReturnType == nil {
+		t.Fatalf("expected return type")
+	}
+
+	if named, ok := method.ReturnType.(*ast.NamedType); !ok || named.Name == nil || named.Name.Name != "i32" {
+		t.Fatalf("expected return type named 'i32', got %#v (type %T)", method.ReturnType, method.ReturnType)
+	}
+
+	if method.Body != nil {
+		t.Fatalf("expected no body for required trait method")
+	}
+}
+
+func TestParseTraitMethodRequiredAndDefaulted(t *testing.T) {
+	const src = `
+package foo;
+
+trait Foo {
+	fn required(x: i32) -> i32;
+	fn defaulted(x: i32) -> i32 {
+		x + 1
+	}
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
+	if !ok {
+		t.Fatalf("expected *ast.TraitDecl, got %T", file.Decls[0])
+	}
+
+	if len(traitDecl.Methods) != 2 {
+		t.Fatalf("expected 2 methods, got %d", len(traitDecl.Methods))
+	}
+
+	required := traitDecl.Methods[0]
+	if required.Body != nil {
+		t.Fatalf("expected required method to have no body")
+	}
+
+	defaulted := traitDecl.Methods[1]
+	if defaulted.Body == nil {
+		t.Fatalf("expected defaulted method to have a body")
+	}
+
+	if len(defaulted.Body.Stmts) == 0 && defaulted.Body.Tail == nil {
+		t.Fatalf("expected defaulted method body to contain statements or tail expression")
+	}
+}
+
+func TestParseTopLevelFnWithoutBodyReportsError(t *testing.T) {
+	const src = `
+package foo;
+
+fn main();
+`
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors for function without body")
 	}
 }
 
@@ -887,6 +1003,36 @@ func TestParseControlFlowGolden(t *testing.T) {
 	got = append(got, '\n')
 
 	goldenPath := filepath.Join("testdata", "control_flow_suite.golden")
+
+	if *update {
+		if err := os.WriteFile(goldenPath, got, 0o600); err != nil {
+			t.Fatalf("write golden %s: %v", goldenPath, err)
+		}
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("golden mismatch\nwant:\n%s\n\ngot:\n%s", want, got)
+	}
+}
+
+func TestParseTraitMethodsGolden(t *testing.T) {
+	src := readTestdataFile(t, "trait_methods_suite.mlp")
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	got, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal AST: %v", err)
+	}
+	got = append(got, '\n')
+
+	goldenPath := filepath.Join("testdata", "trait_methods_suite.golden")
 
 	if *update {
 		if err := os.WriteFile(goldenPath, got, 0o600); err != nil {
