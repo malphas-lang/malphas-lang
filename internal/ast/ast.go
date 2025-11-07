@@ -281,6 +281,21 @@ type InfixExpr struct {
 // Span returns the expression span.
 func (e *InfixExpr) Span() lexer.Span { return e.span }
 
+// NewInfixExpr constructs a binary expression node.
+func NewInfixExpr(op lexer.TokenType, left, right Expr, span lexer.Span) *InfixExpr {
+	return &InfixExpr{
+		Op:    op,
+		Left:  left,
+		Right: right,
+		span:  span,
+	}
+}
+
+// SetSpan updates the infix expression span.
+func (e *InfixExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
 // exprNode marks InfixExpr as an expression.
 func (*InfixExpr) exprNode() {}
 
