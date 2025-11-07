@@ -1,0 +1,247 @@
+{
+  "Package": {
+    "Name": {
+      "Name": "suite"
+    }
+  },
+  "Uses": null,
+  "Decls": [
+    {
+      "Name": {
+        "Name": "compute"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Params": [
+        {
+          "Name": {
+            "Name": "x"
+          },
+          "Type": {
+            "Name": {
+              "Name": "i32"
+            }
+          }
+        },
+        {
+          "Name": {
+            "Name": "y"
+          },
+          "Type": {
+            "Name": {
+              "Name": "i32"
+            }
+          }
+        },
+        {
+          "Name": {
+            "Name": "items"
+          },
+          "Type": {
+            "Base": {
+              "Name": {
+                "Name": "List"
+              }
+            },
+            "Args": [
+              {
+                "Name": {
+                  "Name": "i32"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "ReturnType": {
+        "Name": {
+          "Name": "i32"
+        }
+      },
+      "Body": {
+        "Stmts": [
+          {
+            "Mutable": false,
+            "Name": {
+              "Name": "base"
+            },
+            "Type": null,
+            "Value": {
+              "Op": "-",
+              "Left": {
+                "Op": "+",
+                "Left": {
+                  "Name": "x"
+                },
+                "Right": {
+                  "Op": "*",
+                  "Left": {
+                    "Name": "y"
+                  },
+                  "Right": {
+                    "Text": "2"
+                  }
+                }
+              },
+              "Right": {
+                "Op": "/",
+                "Left": {
+                  "Name": "y"
+                },
+                "Right": {
+                  "Text": "3"
+                }
+              }
+            }
+          },
+          {
+            "Mutable": false,
+            "Name": {
+              "Name": "ready"
+            },
+            "Type": null,
+            "Value": {
+              "Op": "||",
+              "Left": {
+                "Op": "\u0026\u0026",
+                "Left": {
+                  "Op": "\u003e",
+                  "Left": {
+                    "Name": "x"
+                  },
+                  "Right": {
+                    "Text": "0"
+                  }
+                },
+                "Right": {
+                  "Op": "\u003e",
+                  "Left": {
+                    "Name": "y"
+                  },
+                  "Right": {
+                    "Text": "0"
+                  }
+                }
+              },
+              "Right": {
+                "Op": "\u003e",
+                "Left": {
+                  "Name": "base"
+                },
+                "Right": {
+                  "Text": "10"
+                }
+              }
+            }
+          },
+          {
+            "Clauses": [
+              {
+                "Condition": {
+                  "Name": "ready"
+                },
+                "Body": {
+                  "Stmts": [
+                    {
+                      "Iterator": {
+                        "Name": "item"
+                      },
+                      "Iterable": {
+                        "Name": "items"
+                      },
+                      "Body": {
+                        "Stmts": [
+                          {
+                            "Clauses": [
+                              {
+                                "Condition": {
+                                  "Op": "\u003e",
+                                  "Left": {
+                                    "Name": "item"
+                                  },
+                                  "Right": {
+                                    "Name": "base"
+                                  }
+                                },
+                                "Body": {
+                                  "Stmts": [
+                                    {
+                                      "Value": {
+                                        "Name": "item"
+                                      }
+                                    }
+                                  ],
+                                  "Tail": null
+                                }
+                              }
+                            ],
+                            "Else": null
+                          }
+                        ],
+                        "Tail": null
+                      }
+                    }
+                  ],
+                  "Tail": null
+                }
+              }
+            ],
+            "Else": {
+              "Stmts": [
+                {
+                  "Subject": {
+                    "Name": "base"
+                  },
+                  "Arms": [
+                    {
+                      "Pattern": {
+                        "Text": "0"
+                      },
+                      "Body": {
+                        "Stmts": [
+                          {
+                            "Value": {
+                              "Name": "y"
+                            }
+                          }
+                        ],
+                        "Tail": null
+                      }
+                    },
+                    {
+                      "Pattern": {
+                        "Name": "other"
+                      },
+                      "Body": {
+                        "Stmts": [
+                          {
+                            "Value": {
+                              "Name": "other"
+                            }
+                          }
+                        ],
+                        "Tail": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "Tail": null
+            }
+          },
+          {
+            "Value": {
+              "Name": "base"
+            }
+          }
+        ],
+        "Tail": null
+      }
+    }
+  ]
+}

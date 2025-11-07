@@ -874,6 +874,36 @@ func TestParseDeclarationsGolden(t *testing.T) {
 	}
 }
 
+func TestParseControlFlowGolden(t *testing.T) {
+	src := readTestdataFile(t, "control_flow_suite.mlp")
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	got, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal AST: %v", err)
+	}
+	got = append(got, '\n')
+
+	goldenPath := filepath.Join("testdata", "control_flow_suite.golden")
+
+	if *update {
+		if err := os.WriteFile(goldenPath, got, 0o600); err != nil {
+			t.Fatalf("write golden %s: %v", goldenPath, err)
+		}
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("golden mismatch\nwant:\n%s\n\ngot:\n%s", want, got)
+	}
+}
+
 func TestParseLetStmtWithParenthesizedExpr(t *testing.T) {
 	const src = `
 package foo;

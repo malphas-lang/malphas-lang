@@ -1,0 +1,26 @@
+package suite;
+
+fn compute[T](x: i32, y: i32, items: List[i32]) -> i32 {
+    let base = x + y * 2 - (y / 3);
+    let ready = x > 0 && y > 0 || base > 10;
+
+    if ready {
+        for item in items {
+            if item > base {
+                return item;
+            }
+        }
+    } else {
+        match base {
+            0 -> {
+                return y;
+            }
+            other -> {
+                return other;
+            }
+        }
+    }
+
+    return base;
+}
+
