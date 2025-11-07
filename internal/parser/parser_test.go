@@ -303,6 +303,51 @@ fn main() {
 	}
 }
 
+func TestParseLetStmtWithIdentifierExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = 1;
+	let y = x;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatalf("file is nil")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if len(fn.Body.Stmts) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(fn.Body.Stmts))
+	}
+
+	secondLet, ok := fn.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected second statement type *ast.LetStmt, got %T", fn.Body.Stmts[1])
+	}
+
+	ident, ok := secondLet.Value.(*ast.Ident)
+	if !ok {
+		t.Fatalf("expected identifier expression, got %T", secondLet.Value)
+	}
+
+	if ident.Name != "x" {
+		t.Fatalf("expected identifier name %q, got %q", "x", ident.Name)
+	}
+}
+
 func TestParseLetStmtWithPrefixExprErrors(t *testing.T) {
 	testCases := []struct {
 		name   string

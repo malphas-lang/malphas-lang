@@ -65,6 +65,7 @@ func New(input string) *Parser {
 		infixFns:  make(map[lexer.TokenType]infixParseFn),
 	}
 
+	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.INT, p.parseIntegerLiteral)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
@@ -376,6 +377,10 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	lit := ast.NewIntegerLit(p.curTok.Literal, p.curTok.Span)
 
 	return lit
+}
+
+func (p *Parser) parseIdentifier() ast.Expr {
+	return ast.NewIdent(p.curTok.Literal, p.curTok.Span)
 }
 
 // parsePrefixExpr handles prefix operators registered via registerPrefix. It
