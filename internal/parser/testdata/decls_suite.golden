@@ -1,0 +1,259 @@
+{
+  "Package": {
+    "Name": {
+      "Name": "toolbox"
+    }
+  },
+  "Uses": null,
+  "Decls": [
+    {
+      "Name": {
+        "Name": "map"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        },
+        {
+          "Name": {
+            "Name": "U"
+          }
+        }
+      ],
+      "Params": [
+        {
+          "Name": {
+            "Name": "value"
+          },
+          "Type": {
+            "Name": {
+              "Name": "T"
+            }
+          }
+        }
+      ],
+      "ReturnType": {
+        "Name": {
+          "Name": "U"
+        }
+      },
+      "Body": {
+        "Stmts": [
+          {
+            "Value": {
+              "Name": "value"
+            }
+          }
+        ],
+        "Tail": null
+      }
+    },
+    {
+      "Name": {
+        "Name": "Point"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Fields": [
+        {
+          "Name": {
+            "Name": "x"
+          },
+          "Type": {
+            "Name": {
+              "Name": "T"
+            }
+          }
+        },
+        {
+          "Name": {
+            "Name": "y"
+          },
+          "Type": {
+            "Name": {
+              "Name": "T"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "Name": {
+        "Name": "Maybe"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Variants": [
+        {
+          "Name": {
+            "Name": "Some"
+          },
+          "Payloads": [
+            {
+              "Name": {
+                "Name": "T"
+              }
+            }
+          ]
+        },
+        {
+          "Name": {
+            "Name": "None"
+          },
+          "Payloads": []
+        }
+      ]
+    },
+    {
+      "Name": {
+        "Name": "Alias"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Target": {
+        "Base": {
+          "Name": {
+            "Name": "Maybe"
+          }
+        },
+        "Args": [
+          {
+            "Name": {
+              "Name": "T"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "Name": {
+        "Name": "MAX"
+      },
+      "Type": {
+        "Name": {
+          "Name": "i32"
+        }
+      },
+      "Value": {
+        "Text": "10"
+      }
+    },
+    {
+      "Name": {
+        "Name": "Printer"
+      },
+      "TypeParams": [
+        {
+          "Name": {
+            "Name": "T"
+          }
+        }
+      ],
+      "Methods": [
+        {
+          "Name": {
+            "Name": "print"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "value"
+              },
+              "Type": {
+                "Name": {
+                  "Name": "T"
+                }
+              }
+            }
+          ],
+          "ReturnType": null,
+          "Body": {
+            "Stmts": [
+              {
+                "Value": null
+              }
+            ],
+            "Tail": null
+          }
+        }
+      ]
+    },
+    {
+      "Trait": {
+        "Name": {
+          "Name": "Printer"
+        }
+      },
+      "Target": {
+        "Base": {
+          "Name": {
+            "Name": "Point"
+          }
+        },
+        "Args": [
+          {
+            "Name": {
+              "Name": "i32"
+            }
+          }
+        ]
+      },
+      "Methods": [
+        {
+          "Name": {
+            "Name": "print"
+          },
+          "TypeParams": null,
+          "Params": [
+            {
+              "Name": {
+                "Name": "value"
+              },
+              "Type": {
+                "Base": {
+                  "Name": {
+                    "Name": "Point"
+                  }
+                },
+                "Args": [
+                  {
+                    "Name": {
+                      "Name": "i32"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "ReturnType": null,
+          "Body": {
+            "Stmts": [
+              {
+                "Value": null
+              }
+            ],
+            "Tail": null
+          }
+        }
+      ]
+    }
+  ]
+}

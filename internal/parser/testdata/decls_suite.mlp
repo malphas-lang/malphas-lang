@@ -1,0 +1,32 @@
+package toolbox;
+
+fn map[T, U](value: T) -> U {
+	return value;
+}
+
+struct Point[T] {
+	x: T,
+	y: T,
+}
+
+enum Maybe[T] {
+	Some(T),
+	None,
+}
+
+type Alias[T] = Maybe[T];
+
+const MAX: i32 = 10;
+
+trait Printer[T] {
+	fn print(value: T) {
+		return;
+	}
+}
+
+impl Printer for Point[i32] {
+	fn print(value: Point[i32]) {
+		return;
+	}
+}
+

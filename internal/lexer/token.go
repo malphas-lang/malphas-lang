@@ -5,10 +5,11 @@ type TokenType string
 
 // Span represents the source location of a token
 type Span struct {
-	Line   int // 1-based line number
-	Column int // 1-based column number
-	Start  int // index in []rune or original string
-	End    int // exclusive end index
+	Filename string // optional source filename for diagnostics
+	Line     int    // 1-based line number
+	Column   int    // 1-based column number
+	Start    int    // index in []rune or original string
+	End      int    // exclusive end index
 }
 
 // Token represents a lexical token
@@ -27,9 +28,9 @@ const (
 	EOF     TokenType = "EOF"
 
 	// Identifiers and literals
-	IDENT TokenType = "IDENT" // add, foobar, x, y, ...
-	INT   TokenType = "INT"   // 1343456
-	FLOAT TokenType = "FLOAT" // 3.14, 1e9
+	IDENT  TokenType = "IDENT"  // add, foobar, x, y, ...
+	INT    TokenType = "INT"    // 1343456
+	FLOAT  TokenType = "FLOAT"  // 3.14, 1e9
 	STRING TokenType = "STRING" // "hello"
 
 	// Operators
@@ -39,13 +40,15 @@ const (
 	BANG     TokenType = "!"
 	ASTERISK TokenType = "*"
 	SLASH    TokenType = "/"
+	AND      TokenType = "&&"
+	OR       TokenType = "||"
 
-	LT  TokenType = "<"
-	GT  TokenType = ">"
-	EQ  TokenType = "=="
+	LT     TokenType = "<"
+	GT     TokenType = ">"
+	EQ     TokenType = "=="
 	NOT_EQ TokenType = "!="
-	LE  TokenType = "<="
-	GE  TokenType = ">="
+	LE     TokenType = "<="
+	GE     TokenType = ">="
 
 	// Delimiters
 	COMMA     TokenType = ","
@@ -135,4 +138,3 @@ func LookupIdent(ident string) TokenType {
 	}
 	return IDENT
 }
-

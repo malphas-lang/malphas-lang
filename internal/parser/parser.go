@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/diag"
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
 )
 
@@ -10,24 +11,56 @@ type (
 	infixParseFn  func(ast.Expr) ast.Expr
 )
 
+type Option func(*options)
+
+type options struct {
+	filename string
+}
+
+// WithFilename configures the parser to attribute all emitted spans to the provided filename.
+func WithFilename(name string) Option {
+	return func(o *options) {
+		o.filename = name
+	}
+}
+
 const (
 	precedenceLowest = iota
+	precedenceAssign
+	precedenceOr
+	precedenceAnd
+	precedenceEquality
+	precedenceComparison
 	precedenceSum
 	precedenceProduct
 	precedencePrefix
+	precedencePostfix
 )
 
 var precedences = map[lexer.TokenType]int{
+	lexer.ASSIGN:   precedenceAssign,
+	lexer.OR:       precedenceOr,
+	lexer.AND:      precedenceAnd,
+	lexer.EQ:       precedenceEquality,
+	lexer.NOT_EQ:   precedenceEquality,
+	lexer.LT:       precedenceComparison,
+	lexer.LE:       precedenceComparison,
+	lexer.GT:       precedenceComparison,
+	lexer.GE:       precedenceComparison,
 	lexer.PLUS:     precedenceSum,
 	lexer.MINUS:    precedenceSum,
 	lexer.ASTERISK: precedenceProduct,
 	lexer.SLASH:    precedenceProduct,
+	lexer.LPAREN:   precedencePostfix,
+	lexer.LBRACKET: precedencePostfix,
+	lexer.DOT:      precedencePostfix,
 }
 
 // ParseError captures a recoverable parsing error with location context.
 type ParseError struct {
-	Message string
-	Span    lexer.Span
+	Message  string
+	Span     lexer.Span
+	Severity diag.Severity
 }
 
 // Parser implements a Pratt-style recursive descent parser for Malphas.
@@ -53,27 +86,56 @@ type Parser struct {
 
 	errors []ParseError
 
+	filename string
+
 	prefixFns map[lexer.TokenType]prefixParseFn
 	infixFns  map[lexer.TokenType]infixParseFn
 }
 
 // New returns a parser initialised with the provided source input.
-func New(input string) *Parser {
+func New(input string, opts ...Option) *Parser {
+	cfg := options{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	p := &Parser{
 		lx:        lexer.New(input),
 		prefixFns: make(map[lexer.TokenType]prefixParseFn),
 		infixFns:  make(map[lexer.TokenType]infixParseFn),
+		filename:  cfg.filename,
 	}
 
+	if cfg.filename != "" {
+		p.lx.SetFilename(cfg.filename)
+	}
+
+	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.INT, p.parseIntegerLiteral)
+	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
+	p.registerPrefix(lexer.TRUE, p.parseBoolLiteral)
+	p.registerPrefix(lexer.FALSE, p.parseBoolLiteral)
+	p.registerPrefix(lexer.NIL, p.parseNilLiteral)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
 
+	p.registerInfix(lexer.ASSIGN, p.parseAssignExpr)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
 	p.registerInfix(lexer.MINUS, p.parseInfixExpr)
 	p.registerInfix(lexer.ASTERISK, p.parseInfixExpr)
 	p.registerInfix(lexer.SLASH, p.parseInfixExpr)
+	p.registerInfix(lexer.AND, p.parseInfixExpr)
+	p.registerInfix(lexer.OR, p.parseInfixExpr)
+	p.registerInfix(lexer.EQ, p.parseInfixExpr)
+	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpr)
+	p.registerInfix(lexer.LT, p.parseInfixExpr)
+	p.registerInfix(lexer.LE, p.parseInfixExpr)
+	p.registerInfix(lexer.GT, p.parseInfixExpr)
+	p.registerInfix(lexer.GE, p.parseInfixExpr)
+	p.registerInfix(lexer.LPAREN, p.parseCallExpr)
+	p.registerInfix(lexer.LBRACKET, p.parseIndexExpr)
+	p.registerInfix(lexer.DOT, p.parseFieldExpr)
 
 	// Seed curTok/peekTok.
 	p.nextToken()
@@ -106,6 +168,7 @@ func (p *Parser) ParseFile() *ast.File {
 	}
 
 	for p.curTok.Type != lexer.EOF {
+		prevTok := p.curTok
 		decl := p.parseDecl()
 		if decl != nil {
 			file.Decls = append(file.Decls, decl)
@@ -116,7 +179,8 @@ func (p *Parser) ParseFile() *ast.File {
 		if p.curTok.Type == lexer.EOF {
 			break
 		}
-		p.nextToken()
+
+		p.recoverDecl(prevTok)
 	}
 
 	file.SetSpan(mergeSpan(file.Span(), p.curTok.Span))
@@ -157,19 +221,52 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 // call sites must supply the best-effort span available at the failure site so
 // assertions like TestParseLetStmtWithPrefixExprErrors can validate message and
 // span fidelity.
-func (p *Parser) reportError(msg string, span lexer.Span) {
+func (p *Parser) emitParseDiagnostic(msg string, span lexer.Span, severity diag.Severity) {
+	if span.Filename == "" && p.filename != "" {
+		span.Filename = p.filename
+	}
+
 	p.errors = append(p.errors, ParseError{
-		Message: msg,
-		Span:    span,
+		Message:  msg,
+		Span:     span,
+		Severity: severity,
 	})
+}
+
+func (p *Parser) reportError(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityError)
+}
+
+func (p *Parser) reportWarning(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityWarning)
+}
+
+func (p *Parser) reportNote(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityNote)
 }
 
 func (p *Parser) parseDecl() ast.Decl {
 	switch p.curTok.Type {
 	case lexer.FN:
 		return p.parseFnDecl()
+	case lexer.STRUCT:
+		return p.parseStructDecl()
+	case lexer.ENUM:
+		return p.parseEnumDecl()
+	case lexer.TYPE:
+		return p.parseTypeAliasDecl()
+	case lexer.CONST:
+		return p.parseConstDecl()
+	case lexer.TRAIT:
+		return p.parseTraitDecl()
+	case lexer.IMPL:
+		return p.parseImplDecl()
 	default:
-		p.reportError("unexpected top-level token "+string(p.curTok.Type), p.curTok.Span)
+		lexeme := p.curTok.Literal
+		if lexeme == "" {
+			lexeme = string(p.curTok.Type)
+		}
+		p.reportError("unexpected top-level token "+lexeme, p.curTok.Span)
 	}
 
 	return nil
@@ -216,12 +313,28 @@ func (p *Parser) parseFnDecl() ast.Decl {
 	nameTok := p.curTok
 	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
 
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
+
 	if !p.expect(lexer.LPAREN) {
 		return nil
 	}
 
-	if !p.expect(lexer.RPAREN) {
+	params, ok := p.parseParamList()
+	if !ok {
 		return nil
+	}
+
+	var returnType ast.TypeExpr
+	if p.peekTok.Type == lexer.ARROW {
+		p.nextToken() // move to '->'
+		p.nextToken() // move to first return type token
+		returnType = p.parseType()
+		if returnType == nil {
+			return nil
+		}
 	}
 
 	if !p.expect(lexer.LBRACE) {
@@ -235,7 +348,678 @@ func (p *Parser) parseFnDecl() ast.Decl {
 
 	span := mergeSpan(start, body.Span())
 
-	return ast.NewFnDecl(name, nil, nil, body, span)
+	return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
+}
+
+func (p *Parser) parseOptionalTypeParams() ([]*ast.TypeParam, bool) {
+	if p.peekTok.Type != lexer.LBRACKET {
+		return nil, true
+	}
+
+	p.nextToken() // move to '['
+
+	if p.peekTok.Type == lexer.RBRACKET {
+		p.reportError("expected type parameter name", p.peekTok.Span)
+		return nil, false
+	}
+
+	params := make([]*ast.TypeParam, 0)
+
+	p.nextToken() // move to first potential parameter token
+
+	for {
+		if p.curTok.Type != lexer.IDENT {
+			p.reportError("expected type parameter name", p.curTok.Span)
+			return nil, false
+		}
+
+		nameTok := p.curTok
+		name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+		params = append(params, ast.NewTypeParam(name, nameTok.Span))
+
+		if p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to ','
+			p.nextToken() // move to next parameter token
+			if p.curTok.Type == lexer.RBRACKET {
+				p.reportError("expected type parameter name", p.curTok.Span)
+				return nil, false
+			}
+			continue
+		}
+
+		break
+	}
+
+	if !p.expect(lexer.RBRACKET) {
+		return nil, false
+	}
+
+	return params, true
+}
+
+func (p *Parser) parseParamList() ([]*ast.Param, bool) {
+	params := make([]*ast.Param, 0)
+
+	if p.peekTok.Type == lexer.RPAREN {
+		if !p.expect(lexer.RPAREN) {
+			return nil, false
+		}
+		return params, true
+	}
+
+	p.nextToken()
+	param := p.parseParam()
+	if param == nil {
+		return nil, false
+	}
+	params = append(params, param)
+
+	for p.peekTok.Type == lexer.COMMA {
+		p.nextToken() // move to comma
+		p.nextToken() // move to next parameter start
+
+		param = p.parseParam()
+		if param == nil {
+			return nil, false
+		}
+		params = append(params, param)
+	}
+
+	if !p.expect(lexer.RPAREN) {
+		return nil, false
+	}
+
+	return params, true
+}
+
+func (p *Parser) parseParam() *ast.Param {
+	if p.curTok.Type != lexer.IDENT {
+		p.reportError("expected parameter name", p.curTok.Span)
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	if p.peekTok.Type != lexer.COLON {
+		p.reportError("expected ':' after parameter name '"+nameTok.Literal+"'", p.peekTok.Span)
+		return nil
+	}
+
+	p.nextToken() // move to ':'
+	p.nextToken() // move to first type token
+
+	if !isTypeStart(p.curTok.Type) {
+		p.reportError("expected type expression after ':' in parameter '"+nameTok.Literal+"'", p.curTok.Span)
+		return nil
+	}
+
+	typ := p.parseType()
+	if typ == nil {
+		return nil
+	}
+
+	span := mergeSpan(nameTok.Span, typ.Span())
+
+	return ast.NewParam(name, typ, span)
+}
+
+func (p *Parser) parseStructDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.STRUCT {
+		p.reportError("expected 'struct' keyword", p.curTok.Span)
+		return nil
+	}
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	fields := make([]*ast.StructField, 0)
+
+	p.nextToken()
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		if p.curTok.Type != lexer.IDENT {
+			p.reportError("expected struct field name", p.curTok.Span)
+			return nil
+		}
+
+		fieldTok := p.curTok
+		fieldName := ast.NewIdent(fieldTok.Literal, fieldTok.Span)
+
+		if p.peekTok.Type != lexer.COLON {
+			p.reportError("expected ':' after struct field '"+fieldTok.Literal+"'", p.peekTok.Span)
+			return nil
+		}
+
+		p.nextToken() // move to ':'
+		p.nextToken() // move to type start
+
+		if !isTypeStart(p.curTok.Type) {
+			p.reportError("expected type expression after ':' in struct field '"+fieldTok.Literal+"'", p.curTok.Span)
+			return nil
+		}
+
+		fieldType := p.parseType()
+		if fieldType == nil {
+			return nil
+		}
+
+		fieldSpan := mergeSpan(fieldTok.Span, fieldType.Span())
+		fields = append(fields, ast.NewStructField(fieldName, fieldType, fieldSpan))
+
+		switch p.peekTok.Type {
+		case lexer.COMMA:
+			p.nextToken() // move to ','
+			p.nextToken() // move to next token (field name or '}')
+			if p.curTok.Type == lexer.RBRACE {
+				continue
+			}
+		case lexer.RBRACE:
+			p.nextToken() // consume '}'
+			goto doneStruct
+		default:
+			p.reportError("expected ',' or '}' after struct field", p.peekTok.Span)
+			return nil
+		}
+	}
+
+doneStruct:
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close struct declaration", p.curTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewStructDecl(name, typeParams, fields, span)
+}
+
+func (p *Parser) parseEnumDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.ENUM {
+		p.reportError("expected 'enum' keyword", p.curTok.Span)
+		return nil
+	}
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	variants := make([]*ast.EnumVariant, 0)
+
+	p.nextToken()
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		if p.curTok.Type != lexer.IDENT {
+			p.reportError("expected enum variant name", p.curTok.Span)
+			return nil
+		}
+
+		variantTok := p.curTok
+		variantName := ast.NewIdent(variantTok.Literal, variantTok.Span)
+		payloads := make([]ast.TypeExpr, 0)
+		variantSpan := variantTok.Span
+
+		if p.peekTok.Type == lexer.LPAREN {
+			p.nextToken() // move to '('
+
+			if p.peekTok.Type == lexer.RPAREN {
+				p.reportError("expected type expression in enum variant payload", p.peekTok.Span)
+				return nil
+			}
+
+			p.nextToken() // move to first payload type token
+
+			for {
+				if !isTypeStart(p.curTok.Type) {
+					p.reportError("expected type expression in enum variant payload", p.curTok.Span)
+					return nil
+				}
+
+				payload := p.parseType()
+				if payload == nil {
+					return nil
+				}
+				payloads = append(payloads, payload)
+
+				if p.peekTok.Type == lexer.COMMA {
+					p.nextToken()
+					p.nextToken()
+					if p.curTok.Type == lexer.RPAREN {
+						p.reportError("expected type expression in enum variant payload", p.curTok.Span)
+						return nil
+					}
+					continue
+				}
+
+				break
+			}
+
+			if !p.expect(lexer.RPAREN) {
+				return nil
+			}
+
+			variantSpan = mergeSpan(variantSpan, p.curTok.Span)
+		}
+
+		variants = append(variants, ast.NewEnumVariant(variantName, payloads, variantSpan))
+
+		switch p.peekTok.Type {
+		case lexer.COMMA:
+			p.nextToken()
+			p.nextToken()
+			if p.curTok.Type == lexer.RBRACE {
+				continue
+			}
+		case lexer.RBRACE:
+			p.nextToken()
+			goto doneEnum
+		default:
+			p.reportError("expected ',' or '}' after enum variant", p.peekTok.Span)
+			return nil
+		}
+	}
+
+doneEnum:
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close enum declaration", p.curTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewEnumDecl(name, typeParams, variants, span)
+}
+
+func (p *Parser) parseTypeAliasDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.TYPE {
+		p.reportError("expected 'type' keyword", p.curTok.Span)
+		return nil
+	}
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
+
+	if !p.expect(lexer.ASSIGN) {
+		return nil
+	}
+
+	p.nextToken()
+
+	if !isTypeStart(p.curTok.Type) {
+		p.reportError("expected type expression after '=' in type alias", p.curTok.Span)
+		return nil
+	}
+
+	target := p.parseType()
+	if target == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewTypeAliasDecl(name, typeParams, target, span)
+}
+
+func (p *Parser) parseConstDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.CONST {
+		p.reportError("expected 'const' keyword", p.curTok.Span)
+		return nil
+	}
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	if p.peekTok.Type != lexer.COLON {
+		p.reportError("expected ':' after const name '"+nameTok.Literal+"'", p.peekTok.Span)
+		return nil
+	}
+
+	p.nextToken() // move to ':'
+	p.nextToken() // move to type start
+
+	if !isTypeStart(p.curTok.Type) {
+		p.reportError("expected type expression after ':' in const '"+nameTok.Literal+"'", p.curTok.Span)
+		return nil
+	}
+
+	typ := p.parseType()
+	if typ == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.ASSIGN) {
+		return nil
+	}
+
+	p.nextToken()
+
+	value := p.parseExpr()
+	if value == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewConstDecl(name, typ, value, span)
+}
+
+func (p *Parser) parseTraitDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.TRAIT {
+		p.reportError("expected 'trait' keyword", p.curTok.Span)
+		return nil
+	}
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	methods := make([]*ast.FnDecl, 0)
+
+	p.nextToken()
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		if p.curTok.Type != lexer.FN {
+			p.reportError("expected 'fn' in trait body", p.curTok.Span)
+			p.nextToken()
+			continue
+		}
+
+		decl := p.parseFnDecl()
+		if decl == nil {
+			return nil
+		}
+
+		fn, ok := decl.(*ast.FnDecl)
+		if ok {
+			methods = append(methods, fn)
+		}
+	}
+
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close trait declaration", p.curTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewTraitDecl(name, typeParams, methods, span)
+}
+
+func (p *Parser) parseImplDecl() ast.Decl {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.IMPL {
+		p.reportError("expected 'impl' keyword", p.curTok.Span)
+		return nil
+	}
+
+	p.nextToken()
+
+	if !isTypeStart(p.curTok.Type) {
+		p.reportError("expected type expression after 'impl'", p.curTok.Span)
+		return nil
+	}
+
+	firstType := p.parseType()
+	if firstType == nil {
+		return nil
+	}
+
+	var trait ast.TypeExpr
+	var target ast.TypeExpr
+
+	if p.peekTok.Type == lexer.FOR {
+		trait = firstType
+		p.nextToken() // move to 'for'
+		p.nextToken() // move to target type start
+
+		if !isTypeStart(p.curTok.Type) {
+			p.reportError("expected type expression after 'for' in impl", p.curTok.Span)
+			return nil
+		}
+
+		target = p.parseType()
+		if target == nil {
+			return nil
+		}
+	} else {
+		target = firstType
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	methods := make([]*ast.FnDecl, 0)
+
+	p.nextToken()
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		if p.curTok.Type != lexer.FN {
+			p.reportError("expected 'fn' in impl body", p.curTok.Span)
+			p.nextToken()
+			continue
+		}
+
+		decl := p.parseFnDecl()
+		if decl == nil {
+			return nil
+		}
+
+		fn, ok := decl.(*ast.FnDecl)
+		if ok {
+			methods = append(methods, fn)
+		}
+	}
+
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close impl declaration", p.curTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	p.nextToken()
+
+	return ast.NewImplDecl(trait, target, methods, span)
+}
+
+func (p *Parser) parseType() ast.TypeExpr {
+	switch p.curTok.Type {
+	case lexer.IDENT:
+		return p.parseNamedOrGenericType()
+	case lexer.FN:
+		return p.parseFunctionType()
+	default:
+		p.reportError("expected type expression", p.curTok.Span)
+		return nil
+	}
+}
+
+func isTypeStart(tt lexer.TokenType) bool {
+	switch tt {
+	case lexer.IDENT, lexer.FN:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Parser) parseNamedOrGenericType() ast.TypeExpr {
+	nameTok := p.curTok
+	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+	named := ast.NewNamedType(name, nameTok.Span)
+
+	if p.peekTok.Type != lexer.LBRACKET {
+		return named
+	}
+
+	p.nextToken() // move to '['
+
+	if p.peekTok.Type == lexer.RBRACKET {
+		p.reportError("expected type expression in generic argument list", p.peekTok.Span)
+		return nil
+	}
+
+	args := make([]ast.TypeExpr, 0)
+
+	p.nextToken()
+	arg := p.parseType()
+	if arg == nil {
+		return nil
+	}
+	args = append(args, arg)
+
+	for p.peekTok.Type == lexer.COMMA {
+		p.nextToken() // move to ','
+		p.nextToken() // move to next argument start
+
+		arg = p.parseType()
+		if arg == nil {
+			return nil
+		}
+		args = append(args, arg)
+	}
+
+	if !p.expect(lexer.RBRACKET) {
+		return nil
+	}
+
+	span := mergeSpan(named.Span(), p.curTok.Span)
+
+	return ast.NewGenericType(named, args, span)
+}
+
+func (p *Parser) parseFunctionType() ast.TypeExpr {
+	start := p.curTok.Span
+
+	if !p.expect(lexer.LPAREN) {
+		return nil
+	}
+
+	params := make([]ast.TypeExpr, 0)
+
+	if p.peekTok.Type != lexer.RPAREN {
+		p.nextToken()
+
+		param := p.parseType()
+		if param == nil {
+			return nil
+		}
+		params = append(params, param)
+
+		for p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to ','
+			p.nextToken() // move to next parameter start
+
+			param = p.parseType()
+			if param == nil {
+				return nil
+			}
+			params = append(params, param)
+		}
+
+		if !p.expect(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		if !p.expect(lexer.RPAREN) {
+			return nil
+		}
+	}
+
+	var ret ast.TypeExpr
+	if p.peekTok.Type == lexer.ARROW {
+		p.nextToken() // move to '->'
+		p.nextToken() // move to return type start
+
+		ret = p.parseType()
+		if ret == nil {
+			return nil
+		}
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+
+	return ast.NewFunctionType(params, ret, span)
 }
 
 func (p *Parser) parseBlockExpr() *ast.BlockExpr {
@@ -251,17 +1035,18 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 	p.nextToken()
 
 	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		prevTok := p.curTok
 		stmt := p.parseStmt()
 		if stmt != nil {
 			block.Stmts = append(block.Stmts, stmt)
 			continue
 		}
 
-		if p.curTok.Type == lexer.RBRACE {
+		if p.curTok.Type == lexer.RBRACE || p.curTok.Type == lexer.EOF {
 			break
 		}
 
-		p.nextToken()
+		p.recoverStatement(prevTok)
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
@@ -278,11 +1063,19 @@ func (p *Parser) parseStmt() ast.Stmt {
 	switch p.curTok.Type {
 	case lexer.LET:
 		return p.parseLetStmt()
+	case lexer.RETURN:
+		return p.parseReturnStmt()
+	case lexer.IF:
+		return p.parseIfStmt()
+	case lexer.WHILE:
+		return p.parseWhileStmt()
+	case lexer.FOR:
+		return p.parseForStmt()
+	case lexer.MATCH:
+		return p.parseMatchStmt()
 	default:
-		p.reportError("unexpected token in block", p.curTok.Span)
+		return p.parseExprStmt()
 	}
-
-	return nil
 }
 
 func (p *Parser) parseLetStmt() ast.Stmt {
@@ -307,6 +1100,23 @@ func (p *Parser) parseLetStmt() ast.Stmt {
 	nameTok := p.curTok
 	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
 
+	var typ ast.TypeExpr
+
+	if p.peekTok.Type == lexer.COLON {
+		p.nextToken() // move to ':'
+		p.nextToken() // move to first type token
+
+		if !isTypeStart(p.curTok.Type) {
+			p.reportError("expected type expression after ':' in let binding '"+nameTok.Literal+"'", p.curTok.Span)
+			return nil
+		}
+
+		typ = p.parseType()
+		if typ == nil {
+			return nil
+		}
+	}
+
 	if !p.expect(lexer.ASSIGN) {
 		return nil
 	}
@@ -324,7 +1134,255 @@ func (p *Parser) parseLetStmt() ast.Stmt {
 
 	stmtSpan := mergeSpan(start, value.Span())
 	stmtSpan = mergeSpan(stmtSpan, p.curTok.Span)
-	stmt := ast.NewLetStmt(mutable, name, nil, value, stmtSpan)
+	stmt := ast.NewLetStmt(mutable, name, typ, value, stmtSpan)
+
+	p.nextToken()
+
+	return stmt
+}
+
+func (p *Parser) parseReturnStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	if p.peekTok.Type == lexer.SEMICOLON {
+		if !p.expect(lexer.SEMICOLON) {
+			return nil
+		}
+
+		span := mergeSpan(start, p.curTok.Span)
+		stmt := ast.NewReturnStmt(nil, span)
+
+		p.nextToken()
+
+		return stmt
+	}
+
+	p.nextToken()
+
+	value := p.parseExpr()
+	if value == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, value.Span())
+	span = mergeSpan(span, p.curTok.Span)
+	stmt := ast.NewReturnStmt(value, span)
+
+	p.nextToken()
+
+	return stmt
+}
+
+func (p *Parser) parseExprStmt() ast.Stmt {
+	expr := p.parseExpr()
+	if expr == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(expr.Span(), p.curTok.Span)
+	stmt := ast.NewExprStmt(expr, span)
+
+	p.nextToken()
+
+	return stmt
+}
+
+func (p *Parser) parseIfStmt() ast.Stmt {
+	start := p.curTok.Span
+	stmtSpan := start
+	var clauses []*ast.IfClause
+
+	for {
+		if p.curTok.Type != lexer.IF {
+			p.reportError("expected 'if' keyword", p.curTok.Span)
+			return nil
+		}
+
+		clauseStart := p.curTok.Span
+
+		p.nextToken()
+
+		condition := p.parseExpr()
+		if condition == nil {
+			return nil
+		}
+
+		if !p.expect(lexer.LBRACE) {
+			return nil
+		}
+
+		body := p.parseBlockExpr()
+		if body == nil {
+			return nil
+		}
+
+		clauseSpan := mergeSpan(clauseStart, condition.Span())
+		clauseSpan = mergeSpan(clauseSpan, body.Span())
+		clause := ast.NewIfClause(condition, body, clauseSpan)
+		clauses = append(clauses, clause)
+
+		stmtSpan = mergeSpan(stmtSpan, clauseSpan)
+
+		if p.curTok.Type == lexer.ELSE {
+			stmtSpan = mergeSpan(stmtSpan, p.curTok.Span)
+
+			if p.peekTok.Type == lexer.IF {
+				p.nextToken()
+				continue
+			}
+
+			if !p.expect(lexer.LBRACE) {
+				return nil
+			}
+
+			elseBlock := p.parseBlockExpr()
+			if elseBlock == nil {
+				return nil
+			}
+
+			stmtSpan = mergeSpan(stmtSpan, elseBlock.Span())
+
+			return ast.NewIfStmt(clauses, elseBlock, stmtSpan)
+		}
+
+		break
+	}
+
+	return ast.NewIfStmt(clauses, nil, stmtSpan)
+}
+
+func (p *Parser) parseWhileStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	p.nextToken()
+
+	condition := p.parseExpr()
+	if condition == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	body := p.parseBlockExpr()
+	if body == nil {
+		return nil
+	}
+
+	span := mergeSpan(start, condition.Span())
+	span = mergeSpan(span, body.Span())
+
+	return ast.NewWhileStmt(condition, body, span)
+}
+
+func (p *Parser) parseForStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	p.nextToken()
+
+	if p.curTok.Type != lexer.IDENT {
+		p.reportError("expected loop iterator identifier", p.curTok.Span)
+		return nil
+	}
+
+	iterTok := p.curTok
+	iterator := ast.NewIdent(iterTok.Literal, iterTok.Span)
+
+	if !p.expect(lexer.IN) {
+		return nil
+	}
+
+	p.nextToken()
+
+	iterable := p.parseExpr()
+	if iterable == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	body := p.parseBlockExpr()
+	if body == nil {
+		return nil
+	}
+
+	span := mergeSpan(start, iterator.Span())
+	span = mergeSpan(span, iterable.Span())
+	span = mergeSpan(span, body.Span())
+
+	return ast.NewForStmt(iterator, iterable, body, span)
+}
+
+func (p *Parser) parseMatchStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	p.nextToken()
+
+	subject := p.parseExpr()
+	if subject == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	openSpan := p.curTok.Span
+	p.nextToken()
+
+	stmtSpan := mergeSpan(start, subject.Span())
+	stmtSpan = mergeSpan(stmtSpan, openSpan)
+
+	var arms []*ast.MatchArm
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		armStart := p.curTok.Span
+
+		pattern := p.parseExpr()
+		if pattern == nil {
+			return nil
+		}
+
+		if !p.expect(lexer.ARROW) {
+			return nil
+		}
+
+		arrowTok := p.curTok
+
+		if !p.expect(lexer.LBRACE) {
+			return nil
+		}
+
+		body := p.parseBlockExpr()
+		if body == nil {
+			return nil
+		}
+
+		armSpan := mergeSpan(armStart, pattern.Span())
+		armSpan = mergeSpan(armSpan, arrowTok.Span)
+		armSpan = mergeSpan(armSpan, body.Span())
+		arms = append(arms, ast.NewMatchArm(pattern, body, armSpan))
+		stmtSpan = mergeSpan(stmtSpan, armSpan)
+	}
+
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected }", p.curTok.Span)
+		return nil
+	}
+
+	stmtSpan = mergeSpan(stmtSpan, p.curTok.Span)
+	stmt := ast.NewMatchStmt(subject, arms, stmtSpan)
 
 	p.nextToken()
 
@@ -376,6 +1434,22 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	lit := ast.NewIntegerLit(p.curTok.Literal, p.curTok.Span)
 
 	return lit
+}
+
+func (p *Parser) parseStringLiteral() ast.Expr {
+	return ast.NewStringLit(p.curTok.Value, p.curTok.Span)
+}
+
+func (p *Parser) parseBoolLiteral() ast.Expr {
+	return ast.NewBoolLit(p.curTok.Type == lexer.TRUE, p.curTok.Span)
+}
+
+func (p *Parser) parseNilLiteral() ast.Expr {
+	return ast.NewNilLit(p.curTok.Span)
+}
+
+func (p *Parser) parseIdentifier() ast.Expr {
+	return ast.NewIdent(p.curTok.Literal, p.curTok.Span)
 }
 
 // parsePrefixExpr handles prefix operators registered via registerPrefix. It
@@ -448,6 +1522,102 @@ func (p *Parser) parseInfixExpr(left ast.Expr) ast.Expr {
 	return ast.NewInfixExpr(operatorTok.Type, left, right, span)
 }
 
+func (p *Parser) parseAssignExpr(target ast.Expr) ast.Expr {
+	assignTok := p.curTok
+
+	p.nextToken()
+
+	nextPrec := precedenceAssign - 1
+	if nextPrec < precedenceLowest {
+		nextPrec = precedenceLowest
+	}
+
+	right := p.parseExprPrecedence(nextPrec)
+	if right == nil {
+		return nil
+	}
+
+	span := mergeSpan(target.Span(), assignTok.Span)
+	span = mergeSpan(span, right.Span())
+
+	return ast.NewAssignExpr(target, right, span)
+}
+
+func (p *Parser) parseCallExpr(callee ast.Expr) ast.Expr {
+	openTok := p.curTok
+
+	p.nextToken()
+
+	var args []ast.Expr
+
+	if p.curTok.Type != lexer.RPAREN {
+		arg := p.parseExpr()
+		if arg == nil {
+			return nil
+		}
+		args = append(args, arg)
+
+		for p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to comma
+			p.nextToken() // move to next argument start
+
+			arg = p.parseExpr()
+			if arg == nil {
+				return nil
+			}
+			args = append(args, arg)
+		}
+
+		if !p.expect(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		// Empty argument list: curTok already points at ')'
+	}
+
+	span := mergeSpan(callee.Span(), openTok.Span)
+	span = mergeSpan(span, p.curTok.Span)
+
+	return ast.NewCallExpr(callee, args, span)
+}
+
+func (p *Parser) parseFieldExpr(target ast.Expr) ast.Expr {
+	dotTok := p.curTok
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	fieldTok := p.curTok
+	field := ast.NewIdent(fieldTok.Literal, fieldTok.Span)
+
+	span := mergeSpan(target.Span(), dotTok.Span)
+	span = mergeSpan(span, fieldTok.Span)
+
+	return ast.NewFieldExpr(target, field, span)
+}
+
+func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
+	openTok := p.curTok
+
+	p.nextToken()
+
+	index := p.parseExpr()
+	if index == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.RBRACKET) {
+		return nil
+	}
+
+	span := mergeSpan(target.Span(), openTok.Span)
+	span = mergeSpan(span, index.Span())
+	span = mergeSpan(span, p.curTok.Span)
+
+	return ast.NewIndexExpr(target, index, span)
+}
+
 func (p *Parser) peekPrecedence() int {
 	if prec, ok := precedences[p.peekTok.Type]; ok {
 		return prec
@@ -462,6 +1632,80 @@ func (p *Parser) curPrecedence() int {
 	}
 
 	return precedenceLowest
+}
+
+func sameTokenPosition(a, b lexer.Token) bool {
+	return a.Type == b.Type && a.Span.Start == b.Span.Start && a.Span.End == b.Span.End
+}
+
+func isTopLevelDeclStart(tt lexer.TokenType) bool {
+	switch tt {
+	case lexer.FN, lexer.STRUCT, lexer.ENUM, lexer.TYPE, lexer.CONST, lexer.TRAIT, lexer.IMPL:
+		return true
+	default:
+		return false
+	}
+}
+
+func isStatementStart(tt lexer.TokenType) bool {
+	switch tt {
+	case lexer.LET, lexer.RETURN, lexer.IF, lexer.WHILE, lexer.FOR, lexer.MATCH:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Parser) recoverDecl(prev lexer.Token) {
+	if p.curTok.Type == lexer.EOF {
+		return
+	}
+
+	if sameTokenPosition(p.curTok, prev) {
+		p.nextToken()
+	}
+
+	for p.curTok.Type != lexer.EOF {
+		switch p.curTok.Type {
+		case lexer.SEMICOLON:
+			p.nextToken()
+			return
+		case lexer.RBRACE:
+			return
+		default:
+			if isTopLevelDeclStart(p.curTok.Type) {
+				return
+			}
+		}
+
+		p.nextToken()
+	}
+}
+
+func (p *Parser) recoverStatement(prev lexer.Token) {
+	if p.curTok.Type == lexer.EOF {
+		return
+	}
+
+	if sameTokenPosition(p.curTok, prev) {
+		p.nextToken()
+	}
+
+	for p.curTok.Type != lexer.EOF {
+		switch p.curTok.Type {
+		case lexer.SEMICOLON:
+			p.nextToken()
+			return
+		case lexer.RBRACE:
+			return
+		default:
+			if isTopLevelDeclStart(p.curTok.Type) || isStatementStart(p.curTok.Type) {
+				return
+			}
+		}
+
+		p.nextToken()
+	}
 }
 
 // mergeSpan assumes start.End <= end.End and returns a span covering both.
