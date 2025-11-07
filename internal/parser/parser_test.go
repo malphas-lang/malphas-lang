@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/lexer"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 )
 
@@ -167,5 +168,54 @@ fn main() {
 
 	if intLit.Text != "1" {
 		t.Fatalf("expected integer literal %q, got %q", "1", intLit.Text)
+	}
+}
+
+func TestParseLetStmtWithPrecedence(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = 1 + 2 * 3;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	sumExpr, ok := letStmt.Value.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected infix expression, got %T", letStmt.Value)
+	}
+
+	if sumExpr.Op != lexer.PLUS {
+		t.Fatalf("expected '+' operator, got %q", sumExpr.Op)
+	}
+
+	leftLit, ok := sumExpr.Left.(*ast.IntegerLit)
+	if !ok || leftLit.Text != "1" {
+		t.Fatalf("expected left operand literal '1', got %#v", sumExpr.Left)
+	}
+
+	productExpr, ok := sumExpr.Right.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected right operand to be infix expression, got %T", sumExpr.Right)
+	}
+
+	if productExpr.Op != lexer.ASTERISK {
+		t.Fatalf("expected '*' operator, got %q", productExpr.Op)
+	}
+
+	rightLeftLit, ok := productExpr.Left.(*ast.IntegerLit)
+	if !ok || rightLeftLit.Text != "2" {
+		t.Fatalf("expected product left operand literal '2', got %#v", productExpr.Left)
+	}
+
+	rightRightLit, ok := productExpr.Right.(*ast.IntegerLit)
+	if !ok || rightRightLit.Text != "3" {
+		t.Fatalf("expected product right operand literal '3', got %#v", productExpr.Right)
 	}
 }

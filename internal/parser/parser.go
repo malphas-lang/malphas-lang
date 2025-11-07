@@ -10,6 +10,19 @@ type (
 	infixParseFn  func(ast.Expr) ast.Expr
 )
 
+const (
+	precedenceLowest = iota
+	precedenceSum
+	precedenceProduct
+)
+
+var precedences = map[lexer.TokenType]int{
+	lexer.PLUS:     precedenceSum,
+	lexer.MINUS:    precedenceSum,
+	lexer.ASTERISK: precedenceProduct,
+	lexer.SLASH:    precedenceProduct,
+}
+
 // ParseError captures a recoverable parsing error with location context.
 type ParseError struct {
 	Message string
@@ -35,6 +48,13 @@ func New(input string) *Parser {
 		prefixFns: make(map[lexer.TokenType]prefixParseFn),
 		infixFns:  make(map[lexer.TokenType]infixParseFn),
 	}
+
+	p.registerPrefix(lexer.INT, p.parseIntegerLiteral)
+
+	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
+	p.registerInfix(lexer.MINUS, p.parseInfixExpr)
+	p.registerInfix(lexer.ASTERISK, p.parseInfixExpr)
+	p.registerInfix(lexer.SLASH, p.parseInfixExpr)
 
 	// Seed curTok/peekTok.
 	p.nextToken()
@@ -283,20 +303,83 @@ func (p *Parser) parseLetStmt() ast.Stmt {
 }
 
 func (p *Parser) parseExpr() ast.Expr {
-	switch p.curTok.Type {
-	case lexer.INT:
-		return p.parseIntegerLiteral()
-	default:
+	return p.parseExprPrecedence(precedenceLowest)
+}
+
+func (p *Parser) parseExprPrecedence(precedence int) ast.Expr {
+	prefix := p.prefixFns[p.curTok.Type]
+	if prefix == nil {
 		p.reportError("unexpected token in expression "+string(p.curTok.Type), p.curTok.Span)
+		return nil
 	}
 
-	return nil
+	left := prefix()
+	if left == nil {
+		return nil
+	}
+
+	for p.peekTok.Type != lexer.SEMICOLON && precedence < p.peekPrecedence() {
+		infix := p.infixFns[p.peekTok.Type]
+		if infix == nil {
+			break
+		}
+
+		p.nextToken()
+
+		left = infix(left)
+		if left == nil {
+			return nil
+		}
+	}
+
+	return left
+}
+
+func (p *Parser) registerPrefix(tokenType lexer.TokenType, fn prefixParseFn) {
+	p.prefixFns[tokenType] = fn
+}
+
+func (p *Parser) registerInfix(tokenType lexer.TokenType, fn infixParseFn) {
+	p.infixFns[tokenType] = fn
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expr {
 	lit := ast.NewIntegerLit(p.curTok.Literal, p.curTok.Span)
 
 	return lit
+}
+
+func (p *Parser) parseInfixExpr(left ast.Expr) ast.Expr {
+	operatorTok := p.curTok
+	precedence := p.curPrecedence()
+
+	p.nextToken()
+
+	right := p.parseExprPrecedence(precedence)
+	if right == nil {
+		return nil
+	}
+
+	span := mergeSpan(left.Span(), operatorTok.Span)
+	span = mergeSpan(span, right.Span())
+
+	return ast.NewInfixExpr(operatorTok.Type, left, right, span)
+}
+
+func (p *Parser) peekPrecedence() int {
+	if prec, ok := precedences[p.peekTok.Type]; ok {
+		return prec
+	}
+
+	return precedenceLowest
+}
+
+func (p *Parser) curPrecedence() int {
+	if prec, ok := precedences[p.curTok.Type]; ok {
+		return prec
+	}
+
+	return precedenceLowest
 }
 
 func mergeSpan(start, end lexer.Span) lexer.Span {
