@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/diag"
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
 )
 
@@ -9,6 +10,19 @@ type (
 	prefixParseFn func() ast.Expr
 	infixParseFn  func(ast.Expr) ast.Expr
 )
+
+type Option func(*options)
+
+type options struct {
+	filename string
+}
+
+// WithFilename configures the parser to attribute all emitted spans to the provided filename.
+func WithFilename(name string) Option {
+	return func(o *options) {
+		o.filename = name
+	}
+}
 
 const (
 	precedenceLowest = iota
@@ -44,8 +58,9 @@ var precedences = map[lexer.TokenType]int{
 
 // ParseError captures a recoverable parsing error with location context.
 type ParseError struct {
-	Message string
-	Span    lexer.Span
+	Message  string
+	Span     lexer.Span
+	Severity diag.Severity
 }
 
 // Parser implements a Pratt-style recursive descent parser for Malphas.
@@ -71,16 +86,28 @@ type Parser struct {
 
 	errors []ParseError
 
+	filename string
+
 	prefixFns map[lexer.TokenType]prefixParseFn
 	infixFns  map[lexer.TokenType]infixParseFn
 }
 
 // New returns a parser initialised with the provided source input.
-func New(input string) *Parser {
+func New(input string, opts ...Option) *Parser {
+	cfg := options{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	p := &Parser{
 		lx:        lexer.New(input),
 		prefixFns: make(map[lexer.TokenType]prefixParseFn),
 		infixFns:  make(map[lexer.TokenType]infixParseFn),
+		filename:  cfg.filename,
+	}
+
+	if cfg.filename != "" {
+		p.lx.SetFilename(cfg.filename)
 	}
 
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
@@ -141,6 +168,7 @@ func (p *Parser) ParseFile() *ast.File {
 	}
 
 	for p.curTok.Type != lexer.EOF {
+		prevTok := p.curTok
 		decl := p.parseDecl()
 		if decl != nil {
 			file.Decls = append(file.Decls, decl)
@@ -151,7 +179,8 @@ func (p *Parser) ParseFile() *ast.File {
 		if p.curTok.Type == lexer.EOF {
 			break
 		}
-		p.nextToken()
+
+		p.recoverDecl(prevTok)
 	}
 
 	file.SetSpan(mergeSpan(file.Span(), p.curTok.Span))
@@ -192,11 +221,28 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 // call sites must supply the best-effort span available at the failure site so
 // assertions like TestParseLetStmtWithPrefixExprErrors can validate message and
 // span fidelity.
-func (p *Parser) reportError(msg string, span lexer.Span) {
+func (p *Parser) emitParseDiagnostic(msg string, span lexer.Span, severity diag.Severity) {
+	if span.Filename == "" && p.filename != "" {
+		span.Filename = p.filename
+	}
+
 	p.errors = append(p.errors, ParseError{
-		Message: msg,
-		Span:    span,
+		Message:  msg,
+		Span:     span,
+		Severity: severity,
 	})
+}
+
+func (p *Parser) reportError(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityError)
+}
+
+func (p *Parser) reportWarning(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityWarning)
+}
+
+func (p *Parser) reportNote(msg string, span lexer.Span) {
+	p.emitParseDiagnostic(msg, span, diag.SeverityNote)
 }
 
 func (p *Parser) parseDecl() ast.Decl {
@@ -216,7 +262,11 @@ func (p *Parser) parseDecl() ast.Decl {
 	case lexer.IMPL:
 		return p.parseImplDecl()
 	default:
-		p.reportError("unexpected top-level token "+string(p.curTok.Type), p.curTok.Span)
+		lexeme := p.curTok.Literal
+		if lexeme == "" {
+			lexeme = string(p.curTok.Type)
+		}
+		p.reportError("unexpected top-level token "+lexeme, p.curTok.Span)
 	}
 
 	return nil
@@ -985,17 +1035,18 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 	p.nextToken()
 
 	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		prevTok := p.curTok
 		stmt := p.parseStmt()
 		if stmt != nil {
 			block.Stmts = append(block.Stmts, stmt)
 			continue
 		}
 
-		if p.curTok.Type == lexer.RBRACE {
+		if p.curTok.Type == lexer.RBRACE || p.curTok.Type == lexer.EOF {
 			break
 		}
 
-		p.nextToken()
+		p.recoverStatement(prevTok)
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
@@ -1581,6 +1632,80 @@ func (p *Parser) curPrecedence() int {
 	}
 
 	return precedenceLowest
+}
+
+func sameTokenPosition(a, b lexer.Token) bool {
+	return a.Type == b.Type && a.Span.Start == b.Span.Start && a.Span.End == b.Span.End
+}
+
+func isTopLevelDeclStart(tt lexer.TokenType) bool {
+	switch tt {
+	case lexer.FN, lexer.STRUCT, lexer.ENUM, lexer.TYPE, lexer.CONST, lexer.TRAIT, lexer.IMPL:
+		return true
+	default:
+		return false
+	}
+}
+
+func isStatementStart(tt lexer.TokenType) bool {
+	switch tt {
+	case lexer.LET, lexer.RETURN, lexer.IF, lexer.WHILE, lexer.FOR, lexer.MATCH:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Parser) recoverDecl(prev lexer.Token) {
+	if p.curTok.Type == lexer.EOF {
+		return
+	}
+
+	if sameTokenPosition(p.curTok, prev) {
+		p.nextToken()
+	}
+
+	for p.curTok.Type != lexer.EOF {
+		switch p.curTok.Type {
+		case lexer.SEMICOLON:
+			p.nextToken()
+			return
+		case lexer.RBRACE:
+			return
+		default:
+			if isTopLevelDeclStart(p.curTok.Type) {
+				return
+			}
+		}
+
+		p.nextToken()
+	}
+}
+
+func (p *Parser) recoverStatement(prev lexer.Token) {
+	if p.curTok.Type == lexer.EOF {
+		return
+	}
+
+	if sameTokenPosition(p.curTok, prev) {
+		p.nextToken()
+	}
+
+	for p.curTok.Type != lexer.EOF {
+		switch p.curTok.Type {
+		case lexer.SEMICOLON:
+			p.nextToken()
+			return
+		case lexer.RBRACE:
+			return
+		default:
+			if isTopLevelDeclStart(p.curTok.Type) || isStatementStart(p.curTok.Type) {
+				return
+			}
+		}
+
+		p.nextToken()
+	}
 }
 
 // mergeSpan assumes start.End <= end.End and returns a span covering both.

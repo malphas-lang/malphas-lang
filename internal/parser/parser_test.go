@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/diag"
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 )
@@ -31,6 +32,15 @@ func parseFile(t *testing.T, src string) (*ast.File, []parser.ParseError) {
 	t.Helper()
 
 	p := parser.New(src)
+	file := p.ParseFile()
+
+	return file, p.Errors()
+}
+
+func parseFileWithFilename(t *testing.T, src, filename string) (*ast.File, []parser.ParseError) {
+	t.Helper()
+
+	p := parser.New(src, parser.WithFilename(filename))
 	file := p.ParseFile()
 
 	return file, p.Errors()
@@ -1037,6 +1047,133 @@ fn main() {
 	}
 }
 
+func TestParseLetStmtRecoveryAroundCall(t *testing.T) {
+	tests := []struct {
+		name         string
+		src          string
+		wantLetNames []string
+		wantErr      bool
+	}{
+		{
+			name: "success",
+			src: `
+package foo;
+
+fn main() {
+	let x = foo();
+	let y = 42;
+}
+`,
+			wantLetNames: []string{"x", "y"},
+			wantErr:      false,
+		},
+		{
+			name: "recover missing rparen",
+			src: `
+package foo;
+
+fn main() {
+	let x = foo(
+	let y = 42;
+}
+`,
+			wantLetNames: []string{"y"},
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			file, errs := parseFile(t, tc.src)
+
+			if (len(errs) > 0) != tc.wantErr {
+				t.Fatalf("unexpected parse error presence: got %d errors, wantErr=%v", len(errs), tc.wantErr)
+			}
+
+			if file == nil {
+				t.Fatalf("file is nil")
+			}
+
+			if len(file.Decls) != 1 {
+				t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+			}
+
+			fn, ok := file.Decls[0].(*ast.FnDecl)
+			if !ok {
+				t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+			}
+
+			if len(fn.Body.Stmts) != len(tc.wantLetNames) {
+				t.Fatalf("unexpected statement count: got %d, want %d", len(fn.Body.Stmts), len(tc.wantLetNames))
+			}
+
+			for i, wantName := range tc.wantLetNames {
+				letStmt, ok := fn.Body.Stmts[i].(*ast.LetStmt)
+				if !ok {
+					t.Fatalf("expected stmt %d to be *ast.LetStmt, got %T", i, fn.Body.Stmts[i])
+				}
+
+				if letStmt.Name == nil || letStmt.Name.Name != wantName {
+					t.Fatalf("expected let stmt %d name %q, got %#v", i, wantName, letStmt.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFileRecoversAfterInvalidFnSignature(t *testing.T) {
+	const src = `
+package foo;
+
+fn broken(
+
+fn ok() {}
+`
+
+	file, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors for malformed function signature")
+	}
+
+	if file == nil {
+		t.Fatalf("file is nil")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl after recovery, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if fn.Name == nil || fn.Name.Name != "ok" {
+		t.Fatalf("expected recovered function name 'ok', got %#v", fn.Name)
+	}
+}
+
+func TestParseErrorIncludesFilenameAndSeverity(t *testing.T) {
+	const src = `
+package;
+`
+
+	_, errs := parseFileWithFilename(t, src, "example.mlp")
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+
+	if errs[0].Span.Filename != "example.mlp" {
+		t.Fatalf("expected span filename %q, got %q", "example.mlp", errs[0].Span.Filename)
+	}
+
+	if errs[0].Severity != diag.SeverityError {
+		t.Fatalf("expected severity %q, got %q", diag.SeverityError, errs[0].Severity)
+	}
+}
+
 func TestParseLetStmtWithCallExpr(t *testing.T) {
 	const src = `
 package foo;
@@ -1389,6 +1526,91 @@ fn main() {
 
 	if errs[0].Message != "expected ;" {
 		t.Fatalf("expected first error %q, got %q", "expected ;", errs[0].Message)
+	}
+}
+
+func TestParserRecoveryWithinBlock(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let broken = 1 + ;
+	let ok = 2;
+}
+`
+
+	file, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors for malformed let statement")
+	}
+
+	if len(errs) != 1 {
+		t.Fatalf("expected exactly 1 parse error after recovery, got %d", len(errs))
+	}
+
+	if file == nil || len(file.Decls) != 1 {
+		t.Fatalf("expected single function declaration despite error")
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if len(fn.Body.Stmts) != 1 {
+		t.Fatalf("expected only the valid statement to survive recovery, got %d", len(fn.Body.Stmts))
+	}
+
+	letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected remaining statement to be *ast.LetStmt, got %T", fn.Body.Stmts[0])
+	}
+
+	if letStmt.Name == nil || letStmt.Name.Name != "ok" {
+		t.Fatalf("expected recovered let binding named 'ok', got %#v", letStmt.Name)
+	}
+}
+
+func TestParserRecoverySkipsInvalidTopLevelStatement(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {}
+
+let rogue = 1;
+
+fn still_ok() {}
+`
+
+	file, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors for rogue top-level statement")
+	}
+
+	if len(errs) != 1 {
+		t.Fatalf("expected a single diagnostic for rogue top-level statement, got %d", len(errs))
+	}
+
+	if errs[0].Message != "unexpected top-level token let" {
+		t.Fatalf("expected diagnostic to reference 'let', got %q", errs[0].Message)
+	}
+
+	if file == nil {
+		t.Fatalf("expected file AST to be returned")
+	}
+
+	if len(file.Decls) != 2 {
+		t.Fatalf("expected two functions to be parsed, got %d", len(file.Decls))
+	}
+
+	if _, ok := file.Decls[0].(*ast.FnDecl); !ok {
+		t.Fatalf("expected first decl to be *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if fn, ok := file.Decls[1].(*ast.FnDecl); !ok || fn.Name == nil || fn.Name.Name != "still_ok" {
+		t.Fatalf("expected second function to be parsed with name 'still_ok', got %#v (type %T)", file.Decls[1], file.Decls[1])
 	}
 }
 

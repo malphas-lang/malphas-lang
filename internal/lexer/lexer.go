@@ -42,10 +42,11 @@ func (e LexerError) ToDiagnostic() diag.Diagnostic {
 		Code:     e.Kind.diagnosticCode(),
 		Message:  e.Message,
 		Span: diag.Span{
-			Line:   e.Span.Line,
-			Column: e.Span.Column,
-			Start:  e.Span.Start,
-			End:    e.Span.End,
+			Filename: e.Span.Filename,
+			Line:     e.Span.Line,
+			Column:   e.Span.Column,
+			Start:    e.Span.Start,
+			End:      e.Span.End,
 		},
 	}
 }
@@ -59,10 +60,16 @@ type Lexer struct {
 	column     int  // current column number (1-based)
 	emitTrivia bool // whether to emit trivia tokens (comments, whitespace)
 
+	filename string
+
 	Errors []LexerError
 }
 
 func (l *Lexer) addError(kind LexerErrorKind, msg string, span Span) {
+	if span.Filename == "" {
+		span.Filename = l.filename
+	}
+
 	l.Errors = append(l.Errors, LexerError{
 		Kind:    kind,
 		Message: msg,
@@ -80,9 +87,15 @@ func newLexer(input string, emitTrivia bool) *Lexer {
 		line:       1,
 		column:     0, // will be 1 after first read()
 		emitTrivia: emitTrivia,
+		filename:   "",
 	}
 	l.read() // move to first character
 	return l
+}
+
+// SetFilename records the logical filename for all subsequent spans emitted by the lexer.
+func (l *Lexer) SetFilename(name string) {
+	l.filename = name
 }
 
 // New creates a new lexer for the given input (trivia mode disabled)
@@ -160,10 +173,11 @@ func (l *Lexer) makeToken(tokType TokenType, startLine, startColumn, startPos, e
 		Raw:     raw,
 		Value:   value,
 		Span: Span{
-			Line:   startLine,
-			Column: startColumn,
-			Start:  startPos,
-			End:    endPos,
+			Filename: l.filename,
+			Line:     startLine,
+			Column:   startColumn,
+			Start:    startPos,
+			End:      endPos,
 		},
 	}
 }

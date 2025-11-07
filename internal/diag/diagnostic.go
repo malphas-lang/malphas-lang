@@ -27,10 +27,11 @@ const (
 
 // Span represents a location in source code.
 type Span struct {
-	Line   int
-	Column int
-	Start  int
-	End    int
+	Filename string
+	Line     int
+	Column   int
+	Start    int
+	End      int
 }
 
 // Diagnostic is a compiler diagnostic surfaced to end-users.
