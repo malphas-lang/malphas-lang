@@ -1,8 +1,0 @@
-./lexer.go
-./token.go
-./dead_helpers_test.go
-./lexer_comment_recursion_test.go
-./lexer_diagnostics_test.go
-./lexer_errors_test.go
-./lexer_test.go
-./token_model_test.go
