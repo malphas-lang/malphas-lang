@@ -548,16 +548,223 @@ fn map[T, U](value: T) -> U {
 		t.Fatalf("expected 2 type params, got %d", len(fn.TypeParams))
 	}
 
-	if fn.TypeParams[0].Name == nil || fn.TypeParams[0].Name.Name != "T" {
-		t.Fatalf("expected first type param 'T', got %#v", fn.TypeParams[0])
+	firstAny := any(fn.TypeParams[0])
+	first, ok := firstAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected first generic param to be type param, got %T", fn.TypeParams[0])
 	}
 
-	if fn.TypeParams[1].Name == nil || fn.TypeParams[1].Name.Name != "U" {
-		t.Fatalf("expected second type param 'U', got %#v", fn.TypeParams[1])
+	if first.Name == nil || first.Name.Name != "T" {
+		t.Fatalf("expected first type param 'T', got %#v", first.Name)
+	}
+
+	if len(first.Bounds) != 0 {
+		t.Fatalf("expected first type param to have no bounds, got %d", len(first.Bounds))
+	}
+
+	secondAny := any(fn.TypeParams[1])
+	second, ok := secondAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected second generic param to be type param, got %T", fn.TypeParams[1])
+	}
+
+	if second.Name == nil || second.Name.Name != "U" {
+		t.Fatalf("expected second type param 'U', got %#v", second.Name)
+	}
+
+	if len(second.Bounds) != 0 {
+		t.Fatalf("expected second type param to have no bounds, got %d", len(second.Bounds))
 	}
 
 	if fn.ReturnType == nil {
 		t.Fatalf("expected return type")
+	}
+}
+
+func TestParseFnDeclWithTraitBound(t *testing.T) {
+	const src = `
+package foo;
+
+fn max[T: Comparable](a: T, b: T) -> T {}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if len(fn.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(fn.TypeParams))
+	}
+
+	paramAny := any(fn.TypeParams[0])
+	tp, ok := paramAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected type parameter, got %T", fn.TypeParams[0])
+	}
+
+	if tp.Name == nil || tp.Name.Name != "T" {
+		t.Fatalf("expected type parameter name 'T', got %#v", tp.Name)
+	}
+
+	if tp.Bounds == nil {
+		t.Fatalf("expected bounds slice to be populated, got nil")
+	}
+
+	if len(tp.Bounds) != 1 {
+		t.Fatalf("expected 1 trait bound, got %d", len(tp.Bounds))
+	}
+
+	bound, ok := tp.Bounds[0].(*ast.NamedType)
+	if !ok {
+		t.Fatalf("expected bound type *ast.NamedType, got %T", tp.Bounds[0])
+	}
+
+	if bound.Name == nil || bound.Name.Name != "Comparable" {
+		t.Fatalf("expected bound name 'Comparable', got %#v", bound.Name)
+	}
+}
+
+func TestParseFnDeclWithMultipleTraitBounds(t *testing.T) {
+	const src = `
+package foo;
+
+fn print[T: Display + Debug](value: T) {}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if len(fn.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(fn.TypeParams))
+	}
+
+	paramAny := any(fn.TypeParams[0])
+	tp, ok := paramAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected type parameter, got %T", fn.TypeParams[0])
+	}
+
+	if tp.Bounds == nil {
+		t.Fatalf("expected bounds slice to be populated, got nil")
+	}
+
+	if len(tp.Bounds) != 2 {
+		t.Fatalf("expected 2 trait bounds, got %d", len(tp.Bounds))
+	}
+
+	first, ok := tp.Bounds[0].(*ast.NamedType)
+	if !ok {
+		t.Fatalf("expected first bound type *ast.NamedType, got %T", tp.Bounds[0])
+	}
+
+	if first.Name == nil || first.Name.Name != "Display" {
+		t.Fatalf("expected first bound name 'Display', got %#v", first.Name)
+	}
+
+	second, ok := tp.Bounds[1].(*ast.NamedType)
+	if !ok {
+		t.Fatalf("expected second bound type *ast.NamedType, got %T", tp.Bounds[1])
+	}
+
+	if second.Name == nil || second.Name.Name != "Debug" {
+		t.Fatalf("expected second bound name 'Debug', got %#v", second.Name)
+	}
+}
+
+func TestParseStructDeclWithConstGenerics(t *testing.T) {
+	const src = `
+package foo;
+
+struct Matrix[T, const ROWS: usize, const COLS: usize] {}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	decl, ok := file.Decls[0].(*ast.StructDecl)
+	if !ok {
+		t.Fatalf("expected *ast.StructDecl, got %T", file.Decls[0])
+	}
+
+	if len(decl.TypeParams) != 3 {
+		t.Fatalf("expected 3 generic params, got %d", len(decl.TypeParams))
+	}
+
+	firstAny := any(decl.TypeParams[0])
+	first, ok := firstAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected first generic param to be type param, got %T", decl.TypeParams[0])
+	}
+
+	if first.Name == nil || first.Name.Name != "T" {
+		t.Fatalf("expected first type param name 'T', got %#v", first.Name)
+	}
+
+	if len(first.Bounds) != 0 {
+		t.Fatalf("expected first type param to have no bounds, got %d", len(first.Bounds))
+	}
+
+	secondAny := any(decl.TypeParams[1])
+	second, ok := secondAny.(*ast.ConstParam)
+	if !ok {
+		t.Fatalf("expected second generic param to be const param, got %T", decl.TypeParams[1])
+	}
+
+	if second.Name == nil || second.Name.Name != "ROWS" {
+		t.Fatalf("expected const param name 'ROWS', got %#v", second.Name)
+	}
+
+	if second.Type == nil {
+		t.Fatalf("expected const param type, got nil")
+	}
+
+	secondType, ok := second.Type.(*ast.NamedType)
+	if !ok {
+		t.Fatalf("expected const param type *ast.NamedType, got %T", second.Type)
+	}
+
+	if secondType.Name == nil || secondType.Name.Name != "usize" {
+		t.Fatalf("expected const param type 'usize', got %#v", secondType.Name)
+	}
+
+	thirdAny := any(decl.TypeParams[2])
+	third, ok := thirdAny.(*ast.ConstParam)
+	if !ok {
+		t.Fatalf("expected third generic param to be const param, got %T", decl.TypeParams[2])
+	}
+
+	if third.Name == nil || third.Name.Name != "COLS" {
+		t.Fatalf("expected const param name 'COLS', got %#v", third.Name)
+	}
+
+	thirdType, ok := third.Type.(*ast.NamedType)
+	if !ok {
+		t.Fatalf("expected third const param type *ast.NamedType, got %T", third.Type)
+	}
+
+	if thirdType.Name == nil || thirdType.Name.Name != "usize" {
+		t.Fatalf("expected third const param type 'usize', got %#v", thirdType.Name)
 	}
 }
 
@@ -591,8 +798,18 @@ struct Point[T] {
 		t.Fatalf("expected 1 type param, got %d", len(decl.TypeParams))
 	}
 
-	if decl.TypeParams[0].Name == nil || decl.TypeParams[0].Name.Name != "T" {
-		t.Fatalf("expected type param 'T', got %#v", decl.TypeParams[0])
+	paramAny := any(decl.TypeParams[0])
+	param, ok := paramAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected type parameter, got %T", decl.TypeParams[0])
+	}
+
+	if param.Name == nil || param.Name.Name != "T" {
+		t.Fatalf("expected type param 'T', got %#v", param.Name)
+	}
+
+	if len(param.Bounds) != 0 {
+		t.Fatalf("expected type param to have no bounds, got %d", len(param.Bounds))
 	}
 
 	if len(decl.Fields) != 2 {
@@ -629,6 +846,34 @@ enum Result[T, E] {
 
 	if len(enumDecl.TypeParams) != 2 {
 		t.Fatalf("expected 2 type params, got %d", len(enumDecl.TypeParams))
+	}
+
+	firstAny := any(enumDecl.TypeParams[0])
+	first, ok := firstAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected first generic param to be type param, got %T", enumDecl.TypeParams[0])
+	}
+
+	if first.Name == nil || first.Name.Name != "T" {
+		t.Fatalf("expected first type param 'T', got %#v", first.Name)
+	}
+
+	if len(first.Bounds) != 0 {
+		t.Fatalf("expected first type param to have no bounds, got %d", len(first.Bounds))
+	}
+
+	secondAny := any(enumDecl.TypeParams[1])
+	second, ok := secondAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected second generic param to be type param, got %T", enumDecl.TypeParams[1])
+	}
+
+	if second.Name == nil || second.Name.Name != "E" {
+		t.Fatalf("expected second type param 'E', got %#v", second.Name)
+	}
+
+	if len(second.Bounds) != 0 {
+		t.Fatalf("expected second type param to have no bounds, got %d", len(second.Bounds))
 	}
 
 	if len(enumDecl.Variants) != 2 {
@@ -670,6 +915,20 @@ type MyResult[T] = Result[T, string];
 
 	if len(alias.TypeParams) != 1 {
 		t.Fatalf("expected 1 type param, got %d", len(alias.TypeParams))
+	}
+
+	paramAny := any(alias.TypeParams[0])
+	param, ok := paramAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected generic param to be type param, got %T", alias.TypeParams[0])
+	}
+
+	if param.Name == nil || param.Name.Name != "T" {
+		t.Fatalf("expected type param 'T', got %#v", param.Name)
+	}
+
+	if len(param.Bounds) != 0 {
+		t.Fatalf("expected type param to have no bounds, got %d", len(param.Bounds))
 	}
 
 	if alias.Target == nil {
@@ -729,6 +988,20 @@ trait Printable[T] {
 
 	if len(traitDecl.TypeParams) != 1 {
 		t.Fatalf("expected 1 type param, got %d", len(traitDecl.TypeParams))
+	}
+
+	paramAny := any(traitDecl.TypeParams[0])
+	param, ok := paramAny.(*ast.TypeParam)
+	if !ok {
+		t.Fatalf("expected trait generic param to be type param, got %T", traitDecl.TypeParams[0])
+	}
+
+	if param.Name == nil || param.Name.Name != "T" {
+		t.Fatalf("expected trait type param 'T', got %#v", param.Name)
+	}
+
+	if len(param.Bounds) != 0 {
+		t.Fatalf("expected trait type param to have no bounds, got %d", len(param.Bounds))
 	}
 
 	if len(traitDecl.Methods) != 1 {
@@ -924,6 +1197,56 @@ package foo;
 fn bad[T() {}
 `,
 			errMsg: "expected ]",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, errs := parseFile(t, tc.src)
+
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors")
+			}
+
+			if errs[0].Message != tc.errMsg {
+				t.Fatalf("expected first error %q, got %q", tc.errMsg, errs[0].Message)
+			}
+		})
+	}
+}
+
+func TestParseTypeParamBoundsAndConstErrors(t *testing.T) {
+	testCases := []struct {
+		name   string
+		src    string
+		errMsg string
+	}{
+		{
+			name: "missing comma before const",
+			src: `
+package foo;
+
+fn bad[T const N: usize]() {}
+`,
+			errMsg: "missing comma before const",
+		},
+		{
+			name: "missing trait after colon",
+			src: `
+package foo;
+
+fn invalid[T: ]() {}
+`,
+			errMsg: "expected trait name after ':'",
+		},
+		{
+			name: "missing type in const generic",
+			src: `
+package foo;
+
+fn weird[const N]() {}
+`,
+			errMsg: "expected ':' and type after const generic name",
 		},
 	}
 

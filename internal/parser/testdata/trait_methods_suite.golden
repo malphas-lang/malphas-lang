@@ -81,7 +81,8 @@
         {
           "Name": {
             "Name": "T"
-          }
+          },
+          "Bounds": null
         }
       ],
       "Methods": [

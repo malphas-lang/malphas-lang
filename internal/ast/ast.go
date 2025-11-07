@@ -87,7 +87,7 @@ func (d *UseDecl) Span() lexer.Span { return d.span }
 // FnDecl represents a function declaration.
 type FnDecl struct {
 	Name       *Ident
-	TypeParams []*TypeParam
+	TypeParams []GenericParam
 	Params     []*Param
 	ReturnType TypeExpr
 	Body       *BlockExpr
@@ -98,7 +98,7 @@ type FnDecl struct {
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
 // NewFnDecl constructs a function declaration node.
-func NewFnDecl(name *Ident, typeParams []*TypeParam, params []*Param, returnType TypeExpr, body *BlockExpr, span lexer.Span) *FnDecl {
+func NewFnDecl(name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, body *BlockExpr, span lexer.Span) *FnDecl {
 	return &FnDecl{
 		Name:       name,
 		TypeParams: typeParams,
@@ -117,20 +117,28 @@ func (d *FnDecl) SetSpan(span lexer.Span) {
 // declNode marks FnDecl as a declaration.
 func (*FnDecl) declNode() {}
 
+// GenericParam represents either a type or const generic parameter.
+type GenericParam interface {
+	Node
+	genericParamNode()
+}
+
 // TypeParam represents a generic type parameter.
 type TypeParam struct {
-	Name *Ident
-	span lexer.Span
+	Name   *Ident
+	Bounds []TypeExpr
+	span   lexer.Span
 }
 
 // Span returns the type parameter span.
 func (p *TypeParam) Span() lexer.Span { return p.span }
 
 // NewTypeParam constructs a type parameter node.
-func NewTypeParam(name *Ident, span lexer.Span) *TypeParam {
+func NewTypeParam(name *Ident, bounds []TypeExpr, span lexer.Span) *TypeParam {
 	return &TypeParam{
-		Name: name,
-		span: span,
+		Name:   name,
+		Bounds: bounds,
+		span:   span,
 	}
 }
 
@@ -138,6 +146,36 @@ func NewTypeParam(name *Ident, span lexer.Span) *TypeParam {
 func (p *TypeParam) SetSpan(span lexer.Span) {
 	p.span = span
 }
+
+// genericParamNode marks TypeParam as a generic parameter.
+func (*TypeParam) genericParamNode() {}
+
+// ConstParam represents a const generic parameter.
+type ConstParam struct {
+	Name *Ident
+	Type TypeExpr
+	span lexer.Span
+}
+
+// Span returns the const parameter span.
+func (p *ConstParam) Span() lexer.Span { return p.span }
+
+// NewConstParam constructs a const parameter node.
+func NewConstParam(name *Ident, typ TypeExpr, span lexer.Span) *ConstParam {
+	return &ConstParam{
+		Name: name,
+		Type: typ,
+		span: span,
+	}
+}
+
+// SetSpan updates the const parameter span.
+func (p *ConstParam) SetSpan(span lexer.Span) {
+	p.span = span
+}
+
+// genericParamNode marks ConstParam as a generic parameter.
+func (*ConstParam) genericParamNode() {}
 
 // Param represents a function parameter.
 type Param struct {
@@ -224,7 +262,7 @@ func (*LetStmt) stmtNode() {}
 // StructDecl represents a struct declaration with fields.
 type StructDecl struct {
 	Name       *Ident
-	TypeParams []*TypeParam
+	TypeParams []GenericParam
 	Fields     []*StructField
 	span       lexer.Span
 }
@@ -233,7 +271,7 @@ type StructDecl struct {
 func (d *StructDecl) Span() lexer.Span { return d.span }
 
 // NewStructDecl constructs a struct declaration node.
-func NewStructDecl(name *Ident, typeParams []*TypeParam, fields []*StructField, span lexer.Span) *StructDecl {
+func NewStructDecl(name *Ident, typeParams []GenericParam, fields []*StructField, span lexer.Span) *StructDecl {
 	return &StructDecl{
 		Name:       name,
 		TypeParams: typeParams,
@@ -277,7 +315,7 @@ func (f *StructField) SetSpan(span lexer.Span) {
 // EnumDecl represents an enum declaration with variants.
 type EnumDecl struct {
 	Name       *Ident
-	TypeParams []*TypeParam
+	TypeParams []GenericParam
 	Variants   []*EnumVariant
 	span       lexer.Span
 }
@@ -286,7 +324,7 @@ type EnumDecl struct {
 func (d *EnumDecl) Span() lexer.Span { return d.span }
 
 // NewEnumDecl constructs an enum declaration node.
-func NewEnumDecl(name *Ident, typeParams []*TypeParam, variants []*EnumVariant, span lexer.Span) *EnumDecl {
+func NewEnumDecl(name *Ident, typeParams []GenericParam, variants []*EnumVariant, span lexer.Span) *EnumDecl {
 	return &EnumDecl{
 		Name:       name,
 		TypeParams: typeParams,
@@ -330,7 +368,7 @@ func (v *EnumVariant) SetSpan(span lexer.Span) {
 // TypeAliasDecl represents a type alias declaration.
 type TypeAliasDecl struct {
 	Name       *Ident
-	TypeParams []*TypeParam
+	TypeParams []GenericParam
 	Target     TypeExpr
 	span       lexer.Span
 }
@@ -339,7 +377,7 @@ type TypeAliasDecl struct {
 func (d *TypeAliasDecl) Span() lexer.Span { return d.span }
 
 // NewTypeAliasDecl constructs a type alias node.
-func NewTypeAliasDecl(name *Ident, typeParams []*TypeParam, target TypeExpr, span lexer.Span) *TypeAliasDecl {
+func NewTypeAliasDecl(name *Ident, typeParams []GenericParam, target TypeExpr, span lexer.Span) *TypeAliasDecl {
 	return &TypeAliasDecl{
 		Name:       name,
 		TypeParams: typeParams,
@@ -388,7 +426,7 @@ func (*ConstDecl) declNode() {}
 // TraitDecl represents a trait declaration.
 type TraitDecl struct {
 	Name       *Ident
-	TypeParams []*TypeParam
+	TypeParams []GenericParam
 	Methods    []*FnDecl
 	span       lexer.Span
 }
@@ -397,7 +435,7 @@ type TraitDecl struct {
 func (d *TraitDecl) Span() lexer.Span { return d.span }
 
 // NewTraitDecl constructs a trait declaration node.
-func NewTraitDecl(name *Ident, typeParams []*TypeParam, methods []*FnDecl, span lexer.Span) *TraitDecl {
+func NewTraitDecl(name *Ident, typeParams []GenericParam, methods []*FnDecl, span lexer.Span) *TraitDecl {
 	return &TraitDecl{
 		Name:       name,
 		TypeParams: typeParams,
