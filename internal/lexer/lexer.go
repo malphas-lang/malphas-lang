@@ -462,6 +462,46 @@ func (l *Lexer) NextToken() Token {
 				return l.makeToken(SLASH, startLine, startColumn, startPos, l.pos, raw, raw)
 			}
 
+		case '&':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '&' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(AND, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+			raw := string(l.ch)
+			l.read()
+			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+			l.addError(
+				ErrIllegalRune,
+				"illegal character "+strconv.Quote(raw),
+				tok.Span,
+			)
+			return tok
+
+		case '|':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '|' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(OR, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+			raw := string(l.ch)
+			l.read()
+			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+			l.addError(
+				ErrIllegalRune,
+				"illegal character "+strconv.Quote(raw),
+				tok.Span,
+			)
+			return tok
+
 		case '<':
 			startLine, startColumn, startPos := l.currentSpanStart()
 			if l.peek() == '=' {

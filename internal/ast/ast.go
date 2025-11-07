@@ -257,6 +257,77 @@ func (l *IntegerLit) SetSpan(span lexer.Span) {
 // exprNode marks IntegerLit as an expression.
 func (*IntegerLit) exprNode() {}
 
+// StringLit represents a string literal.
+type StringLit struct {
+	Value string
+	span  lexer.Span
+}
+
+// Span returns the literal span.
+func (l *StringLit) Span() lexer.Span { return l.span }
+
+// NewStringLit constructs a string literal node.
+func NewStringLit(value string, span lexer.Span) *StringLit {
+	return &StringLit{
+		Value: value,
+		span:  span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (l *StringLit) SetSpan(span lexer.Span) {
+	l.span = span
+}
+
+// exprNode marks StringLit as an expression.
+func (*StringLit) exprNode() {}
+
+// BoolLit represents a boolean literal.
+type BoolLit struct {
+	Value bool
+	span  lexer.Span
+}
+
+// Span returns the literal span.
+func (l *BoolLit) Span() lexer.Span { return l.span }
+
+// NewBoolLit constructs a boolean literal node.
+func NewBoolLit(value bool, span lexer.Span) *BoolLit {
+	return &BoolLit{
+		Value: value,
+		span:  span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (l *BoolLit) SetSpan(span lexer.Span) {
+	l.span = span
+}
+
+// exprNode marks BoolLit as an expression.
+func (*BoolLit) exprNode() {}
+
+// NilLit represents the nil literal.
+type NilLit struct {
+	span lexer.Span
+}
+
+// Span returns the literal span.
+func (l *NilLit) Span() lexer.Span { return l.span }
+
+// NewNilLit constructs a nil literal node.
+func NewNilLit(span lexer.Span) *NilLit {
+	return &NilLit{span: span}
+}
+
+// SetSpan updates the literal span.
+func (l *NilLit) SetSpan(span lexer.Span) {
+	l.span = span
+}
+
+// exprNode marks NilLit as an expression.
+func (*NilLit) exprNode() {}
+
 // PrefixExpr represents a prefix expression.
 type PrefixExpr struct {
 	Op   lexer.TokenType
@@ -323,6 +394,20 @@ type AssignExpr struct {
 // Span returns the expression span.
 func (e *AssignExpr) Span() lexer.Span { return e.span }
 
+// NewAssignExpr constructs an assignment expression node.
+func NewAssignExpr(target, value Expr, span lexer.Span) *AssignExpr {
+	return &AssignExpr{
+		Target: target,
+		Value:  value,
+		span:   span,
+	}
+}
+
+// SetSpan updates the assignment expression span.
+func (e *AssignExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
 // exprNode marks AssignExpr as an expression.
 func (*AssignExpr) exprNode() {}
 
@@ -335,6 +420,20 @@ type CallExpr struct {
 
 // Span returns the expression span.
 func (e *CallExpr) Span() lexer.Span { return e.span }
+
+// NewCallExpr constructs a call expression node.
+func NewCallExpr(callee Expr, args []Expr, span lexer.Span) *CallExpr {
+	return &CallExpr{
+		Callee: callee,
+		Args:   args,
+		span:   span,
+	}
+}
+
+// SetSpan updates the call expression span.
+func (e *CallExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
 
 // exprNode marks CallExpr as an expression.
 func (*CallExpr) exprNode() {}
@@ -349,8 +448,49 @@ type FieldExpr struct {
 // Span returns the expression span.
 func (e *FieldExpr) Span() lexer.Span { return e.span }
 
+// NewFieldExpr constructs a field access expression node.
+func NewFieldExpr(target Expr, field *Ident, span lexer.Span) *FieldExpr {
+	return &FieldExpr{
+		Target: target,
+		Field:  field,
+		span:   span,
+	}
+}
+
+// SetSpan updates the field expression span.
+func (e *FieldExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
 // exprNode marks FieldExpr as an expression.
 func (*FieldExpr) exprNode() {}
+
+// IndexExpr represents an indexing operation (target[index]).
+type IndexExpr struct {
+	Target Expr
+	Index  Expr
+	span   lexer.Span
+}
+
+// Span returns the expression span.
+func (e *IndexExpr) Span() lexer.Span { return e.span }
+
+// NewIndexExpr constructs an index expression node.
+func NewIndexExpr(target, index Expr, span lexer.Span) *IndexExpr {
+	return &IndexExpr{
+		Target: target,
+		Index:  index,
+		span:   span,
+	}
+}
+
+// SetSpan updates the index expression span.
+func (e *IndexExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
+// exprNode marks IndexExpr as an expression.
+func (*IndexExpr) exprNode() {}
 
 // NamedType represents a named type reference.
 type NamedType struct {

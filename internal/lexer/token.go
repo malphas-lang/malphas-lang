@@ -39,6 +39,8 @@ const (
 	BANG     TokenType = "!"
 	ASTERISK TokenType = "*"
 	SLASH    TokenType = "/"
+	AND      TokenType = "&&"
+	OR       TokenType = "||"
 
 	LT  TokenType = "<"
 	GT  TokenType = ">"

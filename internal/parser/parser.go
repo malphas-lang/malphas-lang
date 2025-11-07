@@ -12,16 +12,34 @@ type (
 
 const (
 	precedenceLowest = iota
+	precedenceAssign
+	precedenceOr
+	precedenceAnd
+	precedenceEquality
+	precedenceComparison
 	precedenceSum
 	precedenceProduct
 	precedencePrefix
+	precedencePostfix
 )
 
 var precedences = map[lexer.TokenType]int{
+	lexer.ASSIGN:   precedenceAssign,
+	lexer.OR:       precedenceOr,
+	lexer.AND:      precedenceAnd,
+	lexer.EQ:       precedenceEquality,
+	lexer.NOT_EQ:   precedenceEquality,
+	lexer.LT:       precedenceComparison,
+	lexer.LE:       precedenceComparison,
+	lexer.GT:       precedenceComparison,
+	lexer.GE:       precedenceComparison,
 	lexer.PLUS:     precedenceSum,
 	lexer.MINUS:    precedenceSum,
 	lexer.ASTERISK: precedenceProduct,
 	lexer.SLASH:    precedenceProduct,
+	lexer.LPAREN:   precedencePostfix,
+	lexer.LBRACKET: precedencePostfix,
+	lexer.DOT:      precedencePostfix,
 }
 
 // ParseError captures a recoverable parsing error with location context.
@@ -67,14 +85,30 @@ func New(input string) *Parser {
 
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.INT, p.parseIntegerLiteral)
+	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
+	p.registerPrefix(lexer.TRUE, p.parseBoolLiteral)
+	p.registerPrefix(lexer.FALSE, p.parseBoolLiteral)
+	p.registerPrefix(lexer.NIL, p.parseNilLiteral)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
 
+	p.registerInfix(lexer.ASSIGN, p.parseAssignExpr)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
 	p.registerInfix(lexer.MINUS, p.parseInfixExpr)
 	p.registerInfix(lexer.ASTERISK, p.parseInfixExpr)
 	p.registerInfix(lexer.SLASH, p.parseInfixExpr)
+	p.registerInfix(lexer.AND, p.parseInfixExpr)
+	p.registerInfix(lexer.OR, p.parseInfixExpr)
+	p.registerInfix(lexer.EQ, p.parseInfixExpr)
+	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpr)
+	p.registerInfix(lexer.LT, p.parseInfixExpr)
+	p.registerInfix(lexer.LE, p.parseInfixExpr)
+	p.registerInfix(lexer.GT, p.parseInfixExpr)
+	p.registerInfix(lexer.GE, p.parseInfixExpr)
+	p.registerInfix(lexer.LPAREN, p.parseCallExpr)
+	p.registerInfix(lexer.LBRACKET, p.parseIndexExpr)
+	p.registerInfix(lexer.DOT, p.parseFieldExpr)
 
 	// Seed curTok/peekTok.
 	p.nextToken()
@@ -379,6 +413,18 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	return lit
 }
 
+func (p *Parser) parseStringLiteral() ast.Expr {
+	return ast.NewStringLit(p.curTok.Value, p.curTok.Span)
+}
+
+func (p *Parser) parseBoolLiteral() ast.Expr {
+	return ast.NewBoolLit(p.curTok.Type == lexer.TRUE, p.curTok.Span)
+}
+
+func (p *Parser) parseNilLiteral() ast.Expr {
+	return ast.NewNilLit(p.curTok.Span)
+}
+
 func (p *Parser) parseIdentifier() ast.Expr {
 	return ast.NewIdent(p.curTok.Literal, p.curTok.Span)
 }
@@ -451,6 +497,102 @@ func (p *Parser) parseInfixExpr(left ast.Expr) ast.Expr {
 	span = mergeSpan(span, right.Span())
 
 	return ast.NewInfixExpr(operatorTok.Type, left, right, span)
+}
+
+func (p *Parser) parseAssignExpr(target ast.Expr) ast.Expr {
+	assignTok := p.curTok
+
+	p.nextToken()
+
+	nextPrec := precedenceAssign - 1
+	if nextPrec < precedenceLowest {
+		nextPrec = precedenceLowest
+	}
+
+	right := p.parseExprPrecedence(nextPrec)
+	if right == nil {
+		return nil
+	}
+
+	span := mergeSpan(target.Span(), assignTok.Span)
+	span = mergeSpan(span, right.Span())
+
+	return ast.NewAssignExpr(target, right, span)
+}
+
+func (p *Parser) parseCallExpr(callee ast.Expr) ast.Expr {
+	openTok := p.curTok
+
+	p.nextToken()
+
+	var args []ast.Expr
+
+	if p.curTok.Type != lexer.RPAREN {
+		arg := p.parseExpr()
+		if arg == nil {
+			return nil
+		}
+		args = append(args, arg)
+
+		for p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to comma
+			p.nextToken() // move to next argument start
+
+			arg = p.parseExpr()
+			if arg == nil {
+				return nil
+			}
+			args = append(args, arg)
+		}
+
+		if !p.expect(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		// Empty argument list: curTok already points at ')'
+	}
+
+	span := mergeSpan(callee.Span(), openTok.Span)
+	span = mergeSpan(span, p.curTok.Span)
+
+	return ast.NewCallExpr(callee, args, span)
+}
+
+func (p *Parser) parseFieldExpr(target ast.Expr) ast.Expr {
+	dotTok := p.curTok
+
+	if !p.expect(lexer.IDENT) {
+		return nil
+	}
+
+	fieldTok := p.curTok
+	field := ast.NewIdent(fieldTok.Literal, fieldTok.Span)
+
+	span := mergeSpan(target.Span(), dotTok.Span)
+	span = mergeSpan(span, fieldTok.Span)
+
+	return ast.NewFieldExpr(target, field, span)
+}
+
+func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
+	openTok := p.curTok
+
+	p.nextToken()
+
+	index := p.parseExpr()
+	if index == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.RBRACKET) {
+		return nil
+	}
+
+	span := mergeSpan(target.Span(), openTok.Span)
+	span = mergeSpan(span, index.Span())
+	span = mergeSpan(span, p.curTok.Span)
+
+	return ast.NewIndexExpr(target, index, span)
 }
 
 func (p *Parser) peekPrecedence() int {

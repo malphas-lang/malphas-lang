@@ -392,3 +392,301 @@ fn main() {
 		})
 	}
 }
+
+func TestParseLetStmtWithCallExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = add(1, x, "ok");
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	call, ok := letStmt.Value.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expression, got %T", letStmt.Value)
+	}
+
+	callee, ok := call.Callee.(*ast.Ident)
+	if !ok || callee.Name != "add" {
+		t.Fatalf("expected callee identifier 'add', got %#v", call.Callee)
+	}
+
+	if len(call.Args) != 3 {
+		t.Fatalf("expected 3 call arguments, got %d", len(call.Args))
+	}
+
+	if lit, ok := call.Args[0].(*ast.IntegerLit); !ok || lit.Text != "1" {
+		t.Fatalf("expected first arg integer literal '1', got %#v", call.Args[0])
+	}
+
+	if ident, ok := call.Args[1].(*ast.Ident); !ok || ident.Name != "x" {
+		t.Fatalf("expected second arg identifier 'x', got %#v", call.Args[1])
+	}
+
+	if strLit, ok := call.Args[2].(*ast.StringLit); !ok || strLit.Value != "ok" {
+		t.Fatalf("expected third arg string literal \"ok\", got %#v", call.Args[2])
+	}
+}
+
+func TestParseLetStmtWithFieldIndexAndCallChaining(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let value = service.clients[0].handler().name;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	field, ok := letStmt.Value.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("expected field expression, got %T", letStmt.Value)
+	}
+
+	if field.Field == nil || field.Field.Name != "name" {
+		t.Fatalf("expected outer field 'name', got %#v", field.Field)
+	}
+
+	call, ok := field.Target.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expression as field target, got %T", field.Target)
+	}
+
+	if len(call.Args) != 0 {
+		t.Fatalf("expected handler() to have no args, got %d", len(call.Args))
+	}
+
+	calleeField, ok := call.Callee.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("expected callee to be field expression, got %T", call.Callee)
+	}
+
+	if calleeField.Field == nil || calleeField.Field.Name != "handler" {
+		t.Fatalf("expected handler() field access, got %#v", calleeField.Field)
+	}
+
+	indexExpr, ok := calleeField.Target.(*ast.IndexExpr)
+	if !ok {
+		t.Fatalf("expected index expression before handler access, got %T", calleeField.Target)
+	}
+
+	if idxLit, ok := indexExpr.Index.(*ast.IntegerLit); !ok || idxLit.Text != "0" {
+		t.Fatalf("expected index literal '0', got %#v", indexExpr.Index)
+	}
+
+	innerField, ok := indexExpr.Target.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("expected service.clients field expression, got %T", indexExpr.Target)
+	}
+
+	if innerField.Field == nil || innerField.Field.Name != "clients" {
+		t.Fatalf("expected field name 'clients', got %#v", innerField.Field)
+	}
+
+	rootIdent, ok := innerField.Target.(*ast.Ident)
+	if !ok || rootIdent.Name != "service" {
+		t.Fatalf("expected root identifier 'service', got %#v", innerField.Target)
+	}
+}
+
+func TestParseLetStmtWithBooleanAndNilLiterals(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let truthy = true;
+	let falsy = false;
+	let nothing = nil;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+
+	truthy := fn.Body.Stmts[0].(*ast.LetStmt)
+	if lit, ok := truthy.Value.(*ast.BoolLit); !ok || lit.Value != true {
+		t.Fatalf("expected true boolean literal, got %#v", truthy.Value)
+	}
+
+	falsy := fn.Body.Stmts[1].(*ast.LetStmt)
+	if lit, ok := falsy.Value.(*ast.BoolLit); !ok || lit.Value != false {
+		t.Fatalf("expected false boolean literal, got %#v", falsy.Value)
+	}
+
+	nothing := fn.Body.Stmts[2].(*ast.LetStmt)
+	if _, ok := nothing.Value.(*ast.NilLit); !ok {
+		t.Fatalf("expected nil literal, got %T", nothing.Value)
+	}
+}
+
+func TestParseLetStmtWithLogicalPrecedence(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = true || false && false;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	orExpr, ok := letStmt.Value.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected infix expression, got %T", letStmt.Value)
+	}
+
+	if orExpr.Op != lexer.OR {
+		t.Fatalf("expected '||' operator, got %q", orExpr.Op)
+	}
+
+	if leftLit, ok := orExpr.Left.(*ast.BoolLit); !ok || !leftLit.Value {
+		t.Fatalf("expected left operand true literal, got %#v", orExpr.Left)
+	}
+
+	andExpr, ok := orExpr.Right.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected right operand to be infix expression, got %T", orExpr.Right)
+	}
+
+	if andExpr.Op != lexer.AND {
+		t.Fatalf("expected '&&' operator, got %q", andExpr.Op)
+	}
+
+	if leftFalse, ok := andExpr.Left.(*ast.BoolLit); !ok || leftFalse.Value {
+		t.Fatalf("expected left operand false literal, got %#v", andExpr.Left)
+	}
+
+	if rightFalse, ok := andExpr.Right.(*ast.BoolLit); !ok || rightFalse.Value {
+		t.Fatalf("expected right operand false literal, got %#v", andExpr.Right)
+	}
+}
+
+func TestParseLetStmtWithEqualityPrecedence(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = 1 + 2 == 3;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	eqExpr, ok := letStmt.Value.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected infix expression, got %T", letStmt.Value)
+	}
+
+	if eqExpr.Op != lexer.EQ {
+		t.Fatalf("expected '==' operator, got %q", eqExpr.Op)
+	}
+
+	sumExpr, ok := eqExpr.Left.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected left operand to be infix expression, got %T", eqExpr.Left)
+	}
+
+	if sumExpr.Op != lexer.PLUS {
+		t.Fatalf("expected '+' operator on left side, got %q", sumExpr.Op)
+	}
+
+	if rightLit, ok := eqExpr.Right.(*ast.IntegerLit); !ok || rightLit.Text != "3" {
+		t.Fatalf("expected right operand integer literal '3', got %#v", eqExpr.Right)
+	}
+}
+
+func TestParseLetStmtWithAssignmentExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = a = b = c;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	assign, ok := letStmt.Value.(*ast.AssignExpr)
+	if !ok {
+		t.Fatalf("expected assignment expression, got %T", letStmt.Value)
+	}
+
+	target, ok := assign.Target.(*ast.Ident)
+	if !ok || target.Name != "a" {
+		t.Fatalf("expected outer assignment target 'a', got %#v", assign.Target)
+	}
+
+	innerAssign, ok := assign.Value.(*ast.AssignExpr)
+	if !ok {
+		t.Fatalf("expected inner assignment expression, got %T", assign.Value)
+	}
+
+	innerTarget, ok := innerAssign.Target.(*ast.Ident)
+	if !ok || innerTarget.Name != "b" {
+		t.Fatalf("expected inner assignment target 'b', got %#v", innerAssign.Target)
+	}
+
+	if finalValue, ok := innerAssign.Value.(*ast.Ident); !ok || finalValue.Name != "c" {
+		t.Fatalf("expected final value identifier 'c', got %#v", innerAssign.Value)
+	}
+}
+
+func TestParseLetStmtWithAssignmentPrecedence(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = target = lhs == rhs;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	assign, ok := letStmt.Value.(*ast.AssignExpr)
+	if !ok {
+		t.Fatalf("expected assignment expression, got %T", letStmt.Value)
+	}
+
+	if target, ok := assign.Target.(*ast.Ident); !ok || target.Name != "target" {
+		t.Fatalf("expected assignment target 'target', got %#v", assign.Target)
+	}
+
+	eqExpr, ok := assign.Value.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected equality expression on assignment value, got %T", assign.Value)
+	}
+
+	if eqExpr.Op != lexer.EQ {
+		t.Fatalf("expected '==' operator, got %q", eqExpr.Op)
+	}
+}
