@@ -219,3 +219,131 @@ fn main() {
 		t.Fatalf("expected product right operand literal '3', got %#v", productExpr.Right)
 	}
 }
+
+func TestParseLetStmtWithParenthesizedExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = (1 + 2) * 3;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	product, ok := letStmt.Value.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected infix expression, got %T", letStmt.Value)
+	}
+
+	if product.Op != lexer.ASTERISK {
+		t.Fatalf("expected '*' operator, got %q", product.Op)
+	}
+
+	sum, ok := product.Left.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected left operand to be grouped sum, got %T", product.Left)
+	}
+
+	if sum.Op != lexer.PLUS {
+		t.Fatalf("expected '+' operator inside grouping, got %q", sum.Op)
+	}
+
+	leftLit, ok := sum.Left.(*ast.IntegerLit)
+	if !ok || leftLit.Text != "1" {
+		t.Fatalf("expected grouped left literal '1', got %#v", sum.Left)
+	}
+
+	rightLit, ok := sum.Right.(*ast.IntegerLit)
+	if !ok || rightLit.Text != "2" {
+		t.Fatalf("expected grouped right literal '2', got %#v", sum.Right)
+	}
+
+	productRight, ok := product.Right.(*ast.IntegerLit)
+	if !ok || productRight.Text != "3" {
+		t.Fatalf("expected product right literal '3', got %#v", product.Right)
+	}
+}
+
+func TestParseLetStmtWithPrefixExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = -(1 + 2);
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	prefix, ok := letStmt.Value.(*ast.PrefixExpr)
+	if !ok {
+		t.Fatalf("expected prefix expression, got %T", letStmt.Value)
+	}
+
+	if prefix.Op != lexer.MINUS {
+		t.Fatalf("expected prefix operator '-', got %q", prefix.Op)
+	}
+
+	inner, ok := prefix.Expr.(*ast.InfixExpr)
+	if !ok {
+		t.Fatalf("expected prefix operand to be infix expression, got %T", prefix.Expr)
+	}
+
+	if inner.Op != lexer.PLUS {
+		t.Fatalf("expected inner operator '+', got %q", inner.Op)
+	}
+}
+
+func TestParseLetStmtWithPrefixExprErrors(t *testing.T) {
+	testCases := []struct {
+		name   string
+		src    string
+		errMsg string
+	}{
+		{
+			name: "missing closing paren",
+			src: `
+package foo;
+
+fn main() {
+	let x = -(1 + 2;
+}
+`,
+			errMsg: "expected )",
+		},
+		{
+			name: "missing operand",
+			src: `
+package foo;
+
+fn main() {
+	let x = -;
+}
+`,
+			errMsg: "unexpected token in expression ;",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, errs := parseFile(t, tc.src)
+
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors")
+			}
+
+			if errs[0].Message != tc.errMsg {
+				t.Fatalf("expected first error %q, got %q", tc.errMsg, errs[0].Message)
+			}
+		})
+	}
+}

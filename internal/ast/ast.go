@@ -267,6 +267,20 @@ type PrefixExpr struct {
 // Span returns the expression span.
 func (e *PrefixExpr) Span() lexer.Span { return e.span }
 
+// NewPrefixExpr constructs a prefix expression node.
+func NewPrefixExpr(op lexer.TokenType, expr Expr, span lexer.Span) *PrefixExpr {
+	return &PrefixExpr{
+		Op:   op,
+		Expr: expr,
+		span: span,
+	}
+}
+
+// SetSpan updates the prefix expression span.
+func (e *PrefixExpr) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
 // exprNode marks PrefixExpr as an expression.
 func (*PrefixExpr) exprNode() {}
 

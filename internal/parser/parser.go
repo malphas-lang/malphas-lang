@@ -14,6 +14,7 @@ const (
 	precedenceLowest = iota
 	precedenceSum
 	precedenceProduct
+	precedencePrefix
 )
 
 var precedences = map[lexer.TokenType]int{
@@ -30,6 +31,14 @@ type ParseError struct {
 }
 
 // Parser implements a Pratt-style recursive descent parser for Malphas.
+// Invariants:
+//   - curTok always reflects the token currently under examination; peekTok
+//     mirrors the next token pulled from the lexer. The pair forms the parser's
+//     sole lookahead window and is only mutated via nextToken.
+//   - errors is an append-only accumulator of recoverable diagnostics. Clients
+//     are expected to consult Errors() after ParseFile to surface them.
+//   - Spans attached to constructed AST nodes must be monotonic and derived via
+//     mergeSpan so that tail.End is never less than head.End.
 type Parser struct {
 	lx      *lexer.Lexer
 	curTok  lexer.Token
@@ -50,6 +59,9 @@ func New(input string) *Parser {
 	}
 
 	p.registerPrefix(lexer.INT, p.parseIntegerLiteral)
+	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
+	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
+	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
 
 	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
 	p.registerInfix(lexer.MINUS, p.parseInfixExpr)
@@ -106,6 +118,8 @@ func (p *Parser) ParseFile() *ast.File {
 }
 
 // nextToken advances the parser's token window.
+// Contract: after calling nextToken, curTok == old(peekTok). The lexer is only
+// queried from this hop to keep lookahead bookkeeping centralized.
 func (p *Parser) nextToken() {
 	if p.lx == nil {
 		p.curTok = p.peekTok
@@ -118,6 +132,8 @@ func (p *Parser) nextToken() {
 }
 
 // expect asserts that the peek token matches the provided type.
+// The caller is responsible for inspecting curTok before invoking expect,
+// because expect never rewinds; on success it promotes peekTok into curTok.
 func (p *Parser) expect(tt lexer.TokenType) bool {
 	if p.peekTok.Type == tt {
 		p.nextToken()
@@ -128,6 +144,8 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 	return false
 }
 
+// reportError records a recoverable diagnostic without aborting parsing. All
+// call sites must supply the best-effort span available at the failure site.
 func (p *Parser) reportError(msg string, span lexer.Span) {
 	p.errors = append(p.errors, ParseError{
 		Message: msg,
@@ -349,6 +367,49 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	return lit
 }
 
+func (p *Parser) parsePrefixExpr() ast.Expr {
+	operatorTok := p.curTok
+
+	p.nextToken()
+
+	right := p.parseExprPrecedence(precedencePrefix)
+	if right == nil {
+		return nil
+	}
+
+	span := mergeSpan(operatorTok.Span, right.Span())
+
+	return ast.NewPrefixExpr(operatorTok.Type, right, span)
+}
+
+type spanSetter interface {
+	SetSpan(lexer.Span)
+}
+
+func (p *Parser) parseGroupedExpr() ast.Expr {
+	start := p.curTok.Span
+
+	p.nextToken()
+
+	expr := p.parseExpr()
+	if expr == nil {
+		return nil
+	}
+
+	if !p.expect(lexer.RPAREN) {
+		return nil
+	}
+
+	span := mergeSpan(start, expr.Span())
+	span = mergeSpan(span, p.curTok.Span)
+
+	if setter, ok := expr.(spanSetter); ok {
+		setter.SetSpan(span)
+	}
+
+	return expr
+}
+
 func (p *Parser) parseInfixExpr(left ast.Expr) ast.Expr {
 	operatorTok := p.curTok
 	precedence := p.curPrecedence()
@@ -382,6 +443,9 @@ func (p *Parser) curPrecedence() int {
 	return precedenceLowest
 }
 
+// mergeSpan assumes start.End <= end.End and returns a span covering both.
+// The parser relies on lexer spans being half-open; callers should pass the
+// earliest start span first to preserve monotonic growth for AST nodes.
 func mergeSpan(start, end lexer.Span) lexer.Span {
 	span := start
 

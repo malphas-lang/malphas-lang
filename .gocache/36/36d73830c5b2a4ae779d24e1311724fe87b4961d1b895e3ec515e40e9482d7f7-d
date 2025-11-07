@@ -1,0 +1,7 @@
+# test log
+open /Users/daearol/golang_code/malphas-lang/internal/lexer/lexer.go
+getenv LEXER_MANY_COMMENTS_HELPER
+open /dev/null
+open /dev/null
+open /dev/null
+open /var/folders/l_/x1701flx191d9l4_gm3pw0jc0000gn/T/go-build2803320999/b127/lexer.test
