@@ -31,14 +31,21 @@ type ParseError struct {
 }
 
 // Parser implements a Pratt-style recursive descent parser for Malphas.
-// Invariants:
-//   - curTok always reflects the token currently under examination; peekTok
-//     mirrors the next token pulled from the lexer. The pair forms the parser's
-//     sole lookahead window and is only mutated via nextToken.
-//   - errors is an append-only accumulator of recoverable diagnostics. Clients
-//     are expected to consult Errors() after ParseFile to surface them.
-//   - Spans attached to constructed AST nodes must be monotonic and derived via
-//     mergeSpan so that tail.End is never less than head.End.
+// Invariants (documented here so new syntax stays aligned with the existing
+// tests in parser_test.go):
+//   - Lookahead: curTok always reflects the token currently under examination;
+//     peekTok mirrors the next token pulled from the lexer. The pair forms the
+//     parser's sole lookahead window and is only mutated via nextToken. Violating
+//     this contract immediately breaks expressions such as the grouped arithmetic
+//     cases in TestParseLetStmtWithParenthesizedExpr.
+//   - Diagnostics: errors is an append-only accumulator of recoverable
+//     diagnostics. Callers are expected to consult Errors() after ParseFile to
+//     surface them. Negative suites (e.g. TestParseLetStmtWithPrefixExprErrors)
+//     assert ordering, so mutations must remain append-only and stable.
+//   - Spans: AST node spans are monotonic and composed via mergeSpan so that
+//     tail.End is never less than head.End. The precedence and prefix tests rely
+//     on SetSpan-capable nodes to reflect grouped source locations. Any new
+//     constructor must participate in this discipline.
 type Parser struct {
 	lx      *lexer.Lexer
 	curTok  lexer.Token
@@ -119,7 +126,9 @@ func (p *Parser) ParseFile() *ast.File {
 
 // nextToken advances the parser's token window.
 // Contract: after calling nextToken, curTok == old(peekTok). The lexer is only
-// queried from this hop to keep lookahead bookkeeping centralized.
+// queried from this hop to keep lookahead bookkeeping centralized. Grouped and
+// prefix expression tests depend on this guarantee to keep Pratt precedence
+// calculation stable across nested constructs.
 func (p *Parser) nextToken() {
 	if p.lx == nil {
 		p.curTok = p.peekTok
@@ -145,7 +154,9 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 }
 
 // reportError records a recoverable diagnostic without aborting parsing. All
-// call sites must supply the best-effort span available at the failure site.
+// call sites must supply the best-effort span available at the failure site so
+// assertions like TestParseLetStmtWithPrefixExprErrors can validate message and
+// span fidelity.
 func (p *Parser) reportError(msg string, span lexer.Span) {
 	p.errors = append(p.errors, ParseError{
 		Message: msg,
@@ -367,6 +378,10 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	return lit
 }
 
+// parsePrefixExpr handles prefix operators registered via registerPrefix. It
+// must consume the operator before recursing so Pratt precedence (see
+// precedencePrefix) controls binding. The prefix expression tests cover both
+// happy-path and diagnostic flows here.
 func (p *Parser) parsePrefixExpr() ast.Expr {
 	operatorTok := p.curTok
 
@@ -382,10 +397,16 @@ func (p *Parser) parsePrefixExpr() ast.Expr {
 	return ast.NewPrefixExpr(operatorTok.Type, right, span)
 }
 
+// spanSetter is satisfied by nodes that expose SetSpan. parseGroupedExpr uses it
+// to widen spans without wrapping the underlying node in a synthetic AST type.
 type spanSetter interface {
 	SetSpan(lexer.Span)
 }
 
+// parseGroupedExpr parses "(expr)" without introducing an explicit ParenExpr
+// node. Instead, it rewrites the span on the parsed sub-expression. This keeps
+// the AST lean while preserving diagnostics demanded by the grouped-expression
+// regression tests.
 func (p *Parser) parseGroupedExpr() ast.Expr {
 	start := p.curTok.Span
 
