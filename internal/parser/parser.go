@@ -1637,8 +1637,22 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 		arms = append(arms, ast.NewMatchArm(pattern, body, armSpan))
 		exprSpan = mergeSpan(exprSpan, armSpan)
 
-		if p.curTok.Type == lexer.COMMA {
+		switch p.curTok.Type {
+		case lexer.COMMA:
+			// Consume the comma and continue parsing the next arm.
 			p.nextToken()
+		case lexer.RBRACE:
+			// No trailing comma required when the next token is the closing brace.
+		default:
+			p.reportError("expected ',' or '}' after match arm", p.curTok.Span)
+
+			for p.curTok.Type != lexer.EOF && p.curTok.Type != lexer.COMMA && p.curTok.Type != lexer.RBRACE {
+				p.nextToken()
+			}
+
+			if p.curTok.Type == lexer.COMMA {
+				p.nextToken()
+			}
 		}
 	}
 

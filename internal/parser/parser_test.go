@@ -2340,7 +2340,7 @@ func TestParseBlockTailExpressions(t *testing.T) {
 			1 -> {
 				let y = value;
 				y + 1
-			}
+		},
 			other -> {
 				other
 			}
@@ -2888,7 +2888,7 @@ func TestParseMatchExpr(t *testing.T) {
 		let x = match value {
 			1 -> {
 				10
-			}
+		},
 			other -> {
 				0
 			}
@@ -2951,7 +2951,7 @@ func TestParseMatchExpr(t *testing.T) {
 			1 -> {
 				let next = value;
 				next + 1
-			}
+		},
 			other -> {
 				other
 			}
@@ -3026,5 +3026,78 @@ fn main() {
 
 	if errs[0].Message != "expected ->" {
 		t.Fatalf("expected first error %q, got %q", "expected ->", errs[0].Message)
+	}
+}
+
+func TestParseMatchArmDelimiters(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "missing comma between arms",
+			src: `
+package foo;
+
+fn main() {
+	match x {
+		1 -> 10
+		2 -> 20
+	}
+}
+`,
+			wantErr: true,
+			errMsg:  "expected ',' or '}' after match arm",
+		},
+		{
+			name: "commas with trailing comma",
+			src: `
+package foo;
+
+fn main() {
+	match x {
+		1 -> 10,
+		2 -> 20,
+	}
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "commas without trailing comma",
+			src: `
+package foo;
+
+fn main() {
+	match x {
+		1 -> 10,
+		2 -> 20
+	}
+}
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errs := parseFile(t, tt.src)
+
+			if tt.wantErr {
+				if len(errs) == 0 {
+					t.Fatalf("expected parse error, got none")
+				}
+				if tt.errMsg != "" && errs[0].Message != tt.errMsg {
+					t.Fatalf("expected first error %q, got %q", tt.errMsg, errs[0].Message)
+				}
+				return
+			}
+
+			if len(errs) > 0 {
+				t.Fatalf("unexpected parse errors: %v", errs)
+			}
+		})
 	}
 }
