@@ -122,6 +122,7 @@ func New(input string, opts ...Option) *Parser {
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
+	p.registerPrefix(lexer.IF, p.parseIfExpr)
 	p.registerPrefix(lexer.LBRACE, p.parseBlockLiteral)
 	p.registerPrefix(lexer.MATCH, p.parseMatchExpr)
 
@@ -1222,6 +1223,7 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close block", p.curTok.Span)
 		return block
 	}
 
@@ -1390,14 +1392,14 @@ func (p *Parser) parseExprStmt() ast.Stmt {
 	}
 }
 
-func (p *Parser) parseIfStmt() ast.Stmt {
+func (p *Parser) parseIfExpr() ast.Expr {
 	start := p.curTok.Span
-	stmtSpan := start
+	exprSpan := start
 	var clauses []*ast.IfClause
 
 	for {
 		if p.curTok.Type != lexer.IF {
-			p.reportError("expected 'if' keyword", p.curTok.Span)
+			p.reportError("expected 'if'", p.curTok.Span)
 			return nil
 		}
 
@@ -1424,52 +1426,70 @@ func (p *Parser) parseIfStmt() ast.Stmt {
 		if body == nil {
 			return nil
 		}
-		if p.curTok.Type == lexer.RBRACE {
-			p.nextToken()
-		}
 
 		clauseSpan := mergeSpan(clauseStart, condition.Span())
 		clauseSpan = mergeSpan(clauseSpan, body.Span())
-		clause := ast.NewIfClause(condition, body, clauseSpan)
-		clauses = append(clauses, clause)
+		clauses = append(clauses, ast.NewIfClause(condition, body, clauseSpan))
 
-		stmtSpan = mergeSpan(stmtSpan, clauseSpan)
+		exprSpan = mergeSpan(exprSpan, clauseSpan)
 
-		if p.curTok.Type == lexer.ELSE {
-			stmtSpan = mergeSpan(stmtSpan, p.curTok.Span)
-
-			if p.peekTok.Type == lexer.IF {
-				p.nextToken()
-				continue
-			}
-
-			if !p.expect(lexer.LBRACE) {
-				return nil
-			}
-
-			prevAllow := p.allowBlockTail
-			prevTail := p.pendingTail
-			p.allowBlockTail = true
-			p.pendingTail = nil
-			elseBlock := p.parseBlockExpr()
-			p.pendingTail = prevTail
-			p.allowBlockTail = prevAllow
-			if elseBlock == nil {
-				return nil
-			}
-			if p.curTok.Type == lexer.RBRACE {
-				p.nextToken()
-			}
-
-			stmtSpan = mergeSpan(stmtSpan, elseBlock.Span())
-
-			return ast.NewIfStmt(clauses, elseBlock, stmtSpan)
+		if p.peekTok.Type != lexer.ELSE {
+			break
 		}
 
-		break
+		p.nextToken()
+		exprSpan = mergeSpan(exprSpan, p.curTok.Span)
+
+		if p.peekTok.Type == lexer.IF {
+			p.nextToken()
+			continue
+		}
+
+		if !p.expect(lexer.LBRACE) {
+			return nil
+		}
+
+		elsePrevAllow := p.allowBlockTail
+		elsePrevTail := p.pendingTail
+		p.allowBlockTail = true
+		p.pendingTail = nil
+		elseBlock := p.parseBlockExpr()
+		p.pendingTail = elsePrevTail
+		p.allowBlockTail = elsePrevAllow
+		if elseBlock == nil {
+			return nil
+		}
+
+		exprSpan = mergeSpan(exprSpan, elseBlock.Span())
+
+		return ast.NewIfExpr(clauses, elseBlock, exprSpan)
 	}
 
-	return ast.NewIfStmt(clauses, nil, stmtSpan)
+	if len(clauses) == 0 {
+		p.reportError("expected 'if'", start)
+		return nil
+	}
+
+	return ast.NewIfExpr(clauses, nil, exprSpan)
+}
+
+func (p *Parser) parseIfStmt() ast.Stmt {
+	expr := p.parseIfExpr()
+	if expr == nil {
+		return nil
+	}
+
+	ifExpr, ok := expr.(*ast.IfExpr)
+	if !ok {
+		p.reportError("expected if expression", expr.Span())
+		return nil
+	}
+
+	if p.curTok.Type == lexer.RBRACE {
+		p.nextToken()
+	}
+
+	return ast.NewIfStmt(ifExpr.Clauses, ifExpr.Else, ifExpr.Span())
 }
 
 func (p *Parser) parseWhileStmt() ast.Stmt {
