@@ -2014,6 +2014,7 @@ package foo;
 
 fn main() {
 	add(1, 2)
+	let x = 1;
 }
 `
 
@@ -2026,6 +2027,177 @@ fn main() {
 	if errs[0].Message != "expected ;" {
 		t.Fatalf("expected first error %q, got %q", "expected ;", errs[0].Message)
 	}
+}
+
+func TestParseBlockTailExpressions(t *testing.T) {
+	t.Run("fn body tail expr", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn foo() -> i32 {
+		let x = 1;
+		x + 2
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		if len(file.Decls) != 1 {
+			t.Fatalf("expected single function declaration, got %d", len(file.Decls))
+		}
+
+		fn, ok := file.Decls[0].(*ast.FnDecl)
+		if !ok {
+			t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+		}
+
+		if fn.Body == nil {
+			t.Fatalf("expected function body to be populated")
+		}
+
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected block tail expression, got nil")
+		}
+
+		infix, ok := fn.Body.Tail.(*ast.InfixExpr)
+		if !ok {
+			t.Fatalf("expected tail expression type *ast.InfixExpr, got %T", fn.Body.Tail)
+		}
+
+		if infix.Op != lexer.PLUS {
+			t.Fatalf("expected tail expression operator '+', got %q", infix.Op)
+		}
+	})
+
+	t.Run("nested block tail expr", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let y = {
+			let x = 10;
+			{ x + 1 }
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+		}
+
+		outerBlock, ok := letStmt.Value.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.BlockExpr, got %T", letStmt.Value)
+		}
+
+		if outerBlock.Tail == nil {
+			t.Fatalf("expected outer block tail expression, got nil")
+		}
+
+		innerBlock, ok := outerBlock.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected outer tail to be nested block, got %T", outerBlock.Tail)
+		}
+
+		if innerBlock.Tail == nil {
+			t.Fatalf("expected inner block tail expression, got nil")
+		}
+
+		if _, ok := innerBlock.Tail.(*ast.InfixExpr); !ok {
+			t.Fatalf("expected inner tail expression type *ast.InfixExpr, got %T", innerBlock.Tail)
+		}
+	})
+
+	t.Run("block with trailing semicolon has no tail", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let y = {
+			let x = 1;
+			x + 2;
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+		block, ok := letStmt.Value.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.BlockExpr, got %T", letStmt.Value)
+		}
+
+		if block.Tail != nil {
+			t.Fatalf("expected block tail to be nil when terminated by semicolon, got %#v", block.Tail)
+		}
+	})
+
+	t.Run("match arm tail expr", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		match value {
+			1 -> {
+				let y = value;
+				y + 1
+			}
+			other -> {
+				other
+			}
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		matchStmt, ok := fn.Body.Stmts[0].(*ast.MatchStmt)
+		if !ok {
+			t.Fatalf("expected match statement, got %T", fn.Body.Stmts[0])
+		}
+
+		if len(matchStmt.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchStmt.Arms))
+		}
+
+		firstArm := matchStmt.Arms[0]
+		if firstArm.Body.Tail == nil {
+			t.Fatalf("expected match arm block tail expression, got nil")
+		}
+
+		if _, ok := firstArm.Body.Tail.(*ast.InfixExpr); !ok {
+			t.Fatalf("expected match arm tail expression type *ast.InfixExpr, got %T", firstArm.Body.Tail)
+		}
+
+		secondArm := matchStmt.Arms[1]
+		if secondArm.Body.Tail == nil {
+			t.Fatalf("expected second match arm tail expression, got nil")
+		}
+
+		if _, ok := secondArm.Body.Tail.(*ast.Ident); !ok {
+			t.Fatalf("expected second match arm tail expression type *ast.Ident, got %T", secondArm.Body.Tail)
+		}
+	})
 }
 
 func TestParserRecoveryWithinBlock(t *testing.T) {
@@ -2252,6 +2424,131 @@ fn main() {
 	}
 }
 
+func TestParseIfStmtFollowedByStmt(t *testing.T) {
+	const src = `
+	package foo;
+
+	fn main() {
+		if cond {
+			foo();
+		}
+		bar();
+	}
+	`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	if len(fn.Body.Stmts) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(fn.Body.Stmts))
+	}
+
+	ifStmt, ok := fn.Body.Stmts[0].(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("expected first stmt type *ast.IfStmt, got %T", fn.Body.Stmts[0])
+	}
+
+	if len(ifStmt.Clauses) != 1 {
+		t.Fatalf("expected single if clause, got %d", len(ifStmt.Clauses))
+	}
+
+	body := ifStmt.Clauses[0].Body
+	if len(body.Stmts) != 1 {
+		t.Fatalf("expected if body with 1 stmt, got %d", len(body.Stmts))
+	}
+
+	exprStmt, ok := fn.Body.Stmts[1].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("expected second stmt type *ast.ExprStmt, got %T", fn.Body.Stmts[1])
+	}
+
+	call, ok := exprStmt.Expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected expression type *ast.CallExpr, got %T", exprStmt.Expr)
+	}
+
+	callee, ok := call.Callee.(*ast.Ident)
+	if !ok || callee.Name != "bar" {
+		t.Fatalf("expected callee identifier 'bar', got %#v", call.Callee)
+	}
+}
+
+func TestParseIfElseFollowedByStmt(t *testing.T) {
+	const src = `
+	package foo;
+
+	fn main() {
+		if cond {
+			foo();
+		} else {
+			bar();
+		}
+		baz();
+	}
+	`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	if len(fn.Body.Stmts) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(fn.Body.Stmts))
+	}
+
+	ifStmt, ok := fn.Body.Stmts[0].(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("expected first stmt type *ast.IfStmt, got %T", fn.Body.Stmts[0])
+	}
+
+	if len(ifStmt.Clauses) != 1 {
+		t.Fatalf("expected single if clause, got %d", len(ifStmt.Clauses))
+	}
+
+	body := ifStmt.Clauses[0].Body
+	if len(body.Stmts) != 1 {
+		t.Fatalf("expected if body with 1 stmt, got %d", len(body.Stmts))
+	}
+
+	if ifStmt.Else == nil {
+		t.Fatalf("expected else block to be populated")
+	}
+
+	if len(ifStmt.Else.Stmts) != 1 {
+		t.Fatalf("expected else block with 1 stmt, got %d", len(ifStmt.Else.Stmts))
+	}
+
+	elseExpr, ok := ifStmt.Else.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("expected else stmt type *ast.ExprStmt, got %T", ifStmt.Else.Stmts[0])
+	}
+
+	elseCall, ok := elseExpr.Expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected else expression type *ast.CallExpr, got %T", elseExpr.Expr)
+	}
+
+	elseCallee, ok := elseCall.Callee.(*ast.Ident)
+	if !ok || elseCallee.Name != "bar" {
+		t.Fatalf("expected else callee identifier 'bar', got %#v", elseCall.Callee)
+	}
+
+	exprStmt, ok := fn.Body.Stmts[1].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("expected second stmt type *ast.ExprStmt, got %T", fn.Body.Stmts[1])
+	}
+
+	call, ok := exprStmt.Expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected expression type *ast.CallExpr, got %T", exprStmt.Expr)
+	}
+
+	callee, ok := call.Callee.(*ast.Ident)
+	if !ok || callee.Name != "baz" {
+		t.Fatalf("expected callee identifier 'baz', got %#v", call.Callee)
+	}
+}
+
 func TestParseIfStmtMissingBlock(t *testing.T) {
 	const src = `
 package foo;
@@ -2328,8 +2625,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing while condition")
 	}
 
-	if errs[0].Message != "unexpected token in expression {" {
-		t.Fatalf("expected first error %q, got %q", "unexpected token in expression {", errs[0].Message)
+	if errs[0].Message != "expected {" {
+		t.Fatalf("expected first error %q, got %q", "expected {", errs[0].Message)
 	}
 }
 

@@ -122,6 +122,7 @@ func New(input string, opts ...Option) *Parser {
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
+	p.registerPrefix(lexer.LBRACE, p.parseBlockLiteral)
 
 	p.registerInfix(lexer.ASSIGN, p.parseAssignExpr)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
@@ -355,9 +356,19 @@ func (p *Parser) parseFnDecl() ast.Decl {
 		return nil
 	}
 
+	prevAllow := p.allowBlockTail
+	prevTail := p.pendingTail
+	p.allowBlockTail = true
+	p.pendingTail = nil
 	body := p.parseBlockExpr()
+	p.pendingTail = prevTail
+	p.allowBlockTail = prevAllow
 	if body == nil {
 		return nil
+	}
+
+	if p.curTok.Type == lexer.RBRACE {
+		p.nextToken()
 	}
 
 	span := mergeSpan(headerSpan, body.Span())
@@ -391,6 +402,9 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 		p.allowBlockTail = prevAllow
 		if body == nil {
 			return nil
+		}
+		if p.curTok.Type == lexer.RBRACE {
+			p.nextToken()
 		}
 		span := mergeSpan(headerSpan, body.Span())
 		return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
@@ -1210,7 +1224,20 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 	}
 
 	block.SetSpan(mergeSpan(start, p.curTok.Span))
-	p.nextToken()
+
+	return block
+}
+
+func (p *Parser) parseBlockLiteral() ast.Expr {
+	prevAllow := p.allowBlockTail
+	prevTail := p.pendingTail
+	p.allowBlockTail = true
+	p.pendingTail = nil
+
+	block := p.parseBlockExpr()
+
+	p.pendingTail = prevTail
+	p.allowBlockTail = prevAllow
 
 	return block
 }
@@ -1387,9 +1414,18 @@ func (p *Parser) parseIfStmt() ast.Stmt {
 			return nil
 		}
 
+		prevAllow := p.allowBlockTail
+		prevTail := p.pendingTail
+		p.allowBlockTail = true
+		p.pendingTail = nil
 		body := p.parseBlockExpr()
+		p.pendingTail = prevTail
+		p.allowBlockTail = prevAllow
 		if body == nil {
 			return nil
+		}
+		if p.curTok.Type == lexer.RBRACE {
+			p.nextToken()
 		}
 
 		clauseSpan := mergeSpan(clauseStart, condition.Span())
@@ -1411,9 +1447,18 @@ func (p *Parser) parseIfStmt() ast.Stmt {
 				return nil
 			}
 
+			prevAllow := p.allowBlockTail
+			prevTail := p.pendingTail
+			p.allowBlockTail = true
+			p.pendingTail = nil
 			elseBlock := p.parseBlockExpr()
+			p.pendingTail = prevTail
+			p.allowBlockTail = prevAllow
 			if elseBlock == nil {
 				return nil
+			}
+			if p.curTok.Type == lexer.RBRACE {
+				p.nextToken()
 			}
 
 			stmtSpan = mergeSpan(stmtSpan, elseBlock.Span())
@@ -1441,9 +1486,18 @@ func (p *Parser) parseWhileStmt() ast.Stmt {
 		return nil
 	}
 
+	prevAllow := p.allowBlockTail
+	prevTail := p.pendingTail
+	p.allowBlockTail = true
+	p.pendingTail = nil
 	body := p.parseBlockExpr()
+	p.pendingTail = prevTail
+	p.allowBlockTail = prevAllow
 	if body == nil {
 		return nil
+	}
+	if p.curTok.Type == lexer.RBRACE {
+		p.nextToken()
 	}
 
 	span := mergeSpan(start, condition.Span())
@@ -1480,9 +1534,18 @@ func (p *Parser) parseForStmt() ast.Stmt {
 		return nil
 	}
 
+	prevAllow := p.allowBlockTail
+	prevTail := p.pendingTail
+	p.allowBlockTail = true
+	p.pendingTail = nil
 	body := p.parseBlockExpr()
+	p.pendingTail = prevTail
+	p.allowBlockTail = prevAllow
 	if body == nil {
 		return nil
+	}
+	if p.curTok.Type == lexer.RBRACE {
+		p.nextToken()
 	}
 
 	span := mergeSpan(start, iterator.Span())
@@ -1532,9 +1595,18 @@ func (p *Parser) parseMatchStmt() ast.Stmt {
 			return nil
 		}
 
+		prevAllow := p.allowBlockTail
+		prevTail := p.pendingTail
+		p.allowBlockTail = true
+		p.pendingTail = nil
 		body := p.parseBlockExpr()
+		p.pendingTail = prevTail
+		p.allowBlockTail = prevAllow
 		if body == nil {
 			return nil
+		}
+		if p.curTok.Type == lexer.RBRACE {
+			p.nextToken()
 		}
 
 		armSpan := mergeSpan(armStart, pattern.Span())
