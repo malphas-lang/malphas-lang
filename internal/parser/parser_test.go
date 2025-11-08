@@ -1073,6 +1073,69 @@ trait Foo {
 	}
 }
 
+func TestParseTraitMethodRequiredSpanIncludesSemicolon(t *testing.T) {
+	const src = `
+package foo;
+
+trait Foo {
+	fn required(x: i32) -> i32;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatalf("expected file to be returned")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
+	if !ok {
+		t.Fatalf("expected *ast.TraitDecl, got %T", file.Decls[0])
+	}
+
+	if len(traitDecl.Methods) != 1 {
+		t.Fatalf("expected 1 method, got %d", len(traitDecl.Methods))
+	}
+
+	method := traitDecl.Methods[0]
+	if method.Body != nil {
+		t.Fatalf("expected required method to have no body")
+	}
+
+	methodSpan := method.Span()
+
+	lx := lexer.New(src)
+
+	found := false
+	for {
+		tok := lx.NextToken()
+		if tok.Type == lexer.EOF {
+			break
+		}
+		if tok.Type != lexer.SEMICOLON {
+			continue
+		}
+		if tok.Span.Start < methodSpan.Start {
+			continue
+		}
+
+		if methodSpan.End != tok.Span.End {
+			t.Fatalf("expected method span to end at %d (semicolon), got %d", tok.Span.End, methodSpan.End)
+		}
+		found = true
+		break
+	}
+
+	if !found {
+		t.Fatalf("did not find method semicolon token")
+	}
+}
+
 func TestParseTraitMethodRequiredAndDefaulted(t *testing.T) {
 	const src = `
 package foo;
