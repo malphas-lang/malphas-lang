@@ -553,6 +553,31 @@ func NewIfClause(condition Expr, body *BlockExpr, span lexer.Span) *IfClause {
 	}
 }
 
+// IfExpr represents an if / else if / else expression chain.
+type IfExpr struct {
+	Clauses []*IfClause
+	Else    *BlockExpr
+	span    lexer.Span
+}
+
+// Span returns the expression span.
+func (e *IfExpr) Span() lexer.Span { return e.span }
+
+// SetSpan updates the expression span.
+func (e *IfExpr) SetSpan(span lexer.Span) { e.span = span }
+
+// NewIfExpr constructs an if expression node.
+func NewIfExpr(clauses []*IfClause, elseBlock *BlockExpr, span lexer.Span) *IfExpr {
+	return &IfExpr{
+		Clauses: clauses,
+		Else:    elseBlock,
+		span:    span,
+	}
+}
+
+// exprNode marks IfExpr as an expression.
+func (*IfExpr) exprNode() {}
+
 // IfStmt represents an if / else if / else statement chain.
 type IfStmt struct {
 	Clauses []*IfClause

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
@@ -68,6 +71,25 @@ func TestParseEmptyInput(t *testing.T) {
 
 	if len(errs) == 0 {
 		t.Fatalf("expected parse errors for empty input")
+	}
+}
+
+func TestParseUnterminatedBlock(t *testing.T) {
+	const src = `
+package foo;
+
+fn f() {
+	let x = 1;
+`
+
+	_, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatal("expected parse error for unterminated block, got none")
+	}
+
+	msg := errs[0].Message
+	if !strings.Contains(msg, "expected '}'") {
+		t.Fatalf("unexpected error: %v", msg)
 	}
 }
 
@@ -246,6 +268,108 @@ fn main() {
 	rightRightLit, ok := productExpr.Right.(*ast.IntegerLit)
 	if !ok || rightRightLit.Text != "3" {
 		t.Fatalf("expected product right operand literal '3', got %#v", productExpr.Right)
+	}
+}
+
+func TestParseIfExpression(t *testing.T) {
+	const src = `
+package foo;
+
+fn f() -> i32 {
+	let x = if true { 1 } else { 2 };
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatalf("expected file AST")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected first decl type *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if fn.Body == nil {
+		t.Fatalf("expected function body")
+	}
+
+	if len(fn.Body.Stmts) != 1 {
+		t.Fatalf("expected function body with 1 statement, got %d", len(fn.Body.Stmts))
+	}
+
+	letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected statement type *ast.LetStmt, got %T", fn.Body.Stmts[0])
+	}
+
+	if letStmt.Value == nil {
+		t.Fatalf("expected let binding value")
+	}
+
+	if got := fmt.Sprintf("%T", letStmt.Value); got != "*ast.IfExpr" {
+		t.Fatalf("expected let value type *ast.IfExpr, got %s", got)
+	}
+
+	ifExprVal := reflect.ValueOf(letStmt.Value)
+	if ifExprVal.Kind() != reflect.Ptr || ifExprVal.IsNil() {
+		t.Fatalf("expected IfExpr to be a non-nil pointer, got %#v", letStmt.Value)
+	}
+
+	ifExprStruct := ifExprVal.Elem()
+	if ifExprStruct.Kind() != reflect.Struct {
+		t.Fatalf("expected IfExpr underlying value to be struct, got %s", ifExprStruct.Kind())
+	}
+
+	clauses := ifExprStruct.FieldByName("Clauses")
+	if !clauses.IsValid() {
+		t.Fatalf("expected IfExpr to have Clauses field")
+	}
+	if clauses.Len() != 1 {
+		t.Fatalf("expected IfExpr with 1 clause, got %d", clauses.Len())
+	}
+
+	clause := clauses.Index(0)
+	if clause.Kind() != reflect.Ptr || clause.IsNil() {
+		t.Fatalf("expected clause to be non-nil pointer, got %#v", clause.Interface())
+	}
+
+	clauseStruct := clause.Elem()
+	if clauseStruct.Kind() != reflect.Struct {
+		t.Fatalf("expected clause underlying value to be struct, got %s", clauseStruct.Kind())
+	}
+
+	condition := clauseStruct.FieldByName("Condition")
+	if !condition.IsValid() {
+		t.Fatalf("expected clause to expose Condition field")
+	}
+	if condition.IsNil() {
+		t.Fatalf("expected clause to contain condition expression")
+	}
+	if got := fmt.Sprintf("%T", condition.Interface()); got != "*ast.BoolLit" {
+		t.Fatalf("expected clause condition type *ast.BoolLit, got %s", got)
+	}
+
+	body := clauseStruct.FieldByName("Body")
+	if !body.IsValid() {
+		t.Fatalf("expected clause to expose Body field")
+	}
+	if body.IsNil() {
+		t.Fatalf("expected clause body")
+	}
+
+	elseBlock := ifExprStruct.FieldByName("Else")
+	if !elseBlock.IsValid() {
+		t.Fatalf("expected IfExpr to have Else field")
+	}
+	if elseBlock.IsNil() {
+		t.Fatalf("expected else block to be present")
 	}
 }
 
