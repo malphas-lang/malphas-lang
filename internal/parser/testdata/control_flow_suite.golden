@@ -193,46 +193,44 @@
               }
             ],
             "Else": {
-              "Stmts": [
-                {
-                  "Subject": {
-                    "Name": "base"
-                  },
-                  "Arms": [
-                    {
-                      "Pattern": {
-                        "Text": "0"
-                      },
-                      "Body": {
-                        "Stmts": [
-                          {
-                            "Value": {
-                              "Name": "y"
-                            }
-                          }
-                        ],
-                        "Tail": null
-                      }
+              "Stmts": null,
+              "Tail": {
+                "Subject": {
+                  "Name": "base"
+                },
+                "Arms": [
+                  {
+                    "Pattern": {
+                      "Text": "0"
                     },
-                    {
-                      "Pattern": {
-                        "Name": "other"
-                      },
-                      "Body": {
-                        "Stmts": [
-                          {
-                            "Value": {
-                              "Name": "other"
-                            }
+                    "Body": {
+                      "Stmts": [
+                        {
+                          "Value": {
+                            "Name": "y"
                           }
-                        ],
-                        "Tail": null
-                      }
+                        }
+                      ],
+                      "Tail": null
                     }
-                  ]
-                }
-              ],
-              "Tail": null
+                  },
+                  {
+                    "Pattern": {
+                      "Name": "other"
+                    },
+                    "Body": {
+                      "Stmts": [
+                        {
+                          "Value": {
+                            "Name": "other"
+                          }
+                        }
+                      ],
+                      "Tail": null
+                    }
+                  }
+                ]
+              }
             }
           },
           {

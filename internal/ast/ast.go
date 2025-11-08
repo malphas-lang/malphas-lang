@@ -652,30 +652,30 @@ func NewMatchArm(pattern Expr, body *BlockExpr, span lexer.Span) *MatchArm {
 	}
 }
 
-// MatchStmt represents a match statement.
-type MatchStmt struct {
+// MatchExpr represents a match expression.
+type MatchExpr struct {
 	Subject Expr
 	Arms    []*MatchArm
 	span    lexer.Span
 }
 
-// Span returns the statement span.
-func (s *MatchStmt) Span() lexer.Span { return s.span }
+// Span returns the expression span.
+func (e *MatchExpr) Span() lexer.Span { return e.span }
 
-// SetSpan updates the statement span.
-func (s *MatchStmt) SetSpan(span lexer.Span) { s.span = span }
+// SetSpan updates the expression span.
+func (e *MatchExpr) SetSpan(span lexer.Span) { e.span = span }
 
-// NewMatchStmt constructs a match statement node.
-func NewMatchStmt(subject Expr, arms []*MatchArm, span lexer.Span) *MatchStmt {
-	return &MatchStmt{
+// NewMatchExpr constructs a match expression node.
+func NewMatchExpr(subject Expr, arms []*MatchArm, span lexer.Span) *MatchExpr {
+	return &MatchExpr{
 		Subject: subject,
 		Arms:    arms,
 		span:    span,
 	}
 }
 
-// stmtNode marks MatchStmt as a statement.
-func (*MatchStmt) stmtNode() {}
+// exprNode marks MatchExpr as an expression.
+func (*MatchExpr) exprNode() {}
 
 // Ident represents an identifier.
 type Ident struct {
