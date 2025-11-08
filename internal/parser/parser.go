@@ -123,6 +123,7 @@ func New(input string, opts ...Option) *Parser {
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
 	p.registerPrefix(lexer.LBRACE, p.parseBlockLiteral)
+	p.registerPrefix(lexer.MATCH, p.parseMatchExpr)
 
 	p.registerInfix(lexer.ASSIGN, p.parseAssignExpr)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpr)
@@ -1255,8 +1256,6 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseWhileStmt()
 	case lexer.FOR:
 		return p.parseForStmt()
-	case lexer.MATCH:
-		return p.parseMatchStmt()
 	default:
 		return p.parseExprStmt()
 	}
@@ -1556,7 +1555,7 @@ func (p *Parser) parseForStmt() ast.Stmt {
 	return ast.NewForStmt(iterator, iterable, body, span)
 }
 
-func (p *Parser) parseMatchStmt() ast.Stmt {
+func (p *Parser) parseMatchExpr() ast.Expr {
 	start := p.curTok.Span
 
 	p.nextToken()
@@ -1573,8 +1572,8 @@ func (p *Parser) parseMatchStmt() ast.Stmt {
 	openSpan := p.curTok.Span
 	p.nextToken()
 
-	stmtSpan := mergeSpan(start, subject.Span())
-	stmtSpan = mergeSpan(stmtSpan, openSpan)
+	exprSpan := mergeSpan(start, subject.Span())
+	exprSpan = mergeSpan(exprSpan, openSpan)
 
 	var arms []*ast.MatchArm
 
@@ -1592,29 +1591,55 @@ func (p *Parser) parseMatchStmt() ast.Stmt {
 
 		arrowTok := p.curTok
 
-		if !p.expect(lexer.LBRACE) {
-			return nil
-		}
-
 		prevAllow := p.allowBlockTail
 		prevTail := p.pendingTail
 		p.allowBlockTail = true
 		p.pendingTail = nil
-		body := p.parseBlockExpr()
+
+		var body *ast.BlockExpr
+
+		p.nextToken()
+
+		if p.curTok.Type == lexer.LBRACE {
+			body = p.parseBlockExpr()
+			if body == nil {
+				p.pendingTail = prevTail
+				p.allowBlockTail = prevAllow
+				return nil
+			}
+
+			if p.curTok.Type == lexer.RBRACE {
+				p.nextToken()
+			}
+		} else {
+			expr := p.parseExpr()
+			if expr == nil {
+				p.pendingTail = prevTail
+				p.allowBlockTail = prevAllow
+				return nil
+			}
+
+			body = ast.NewBlockExpr(nil, expr, expr.Span())
+
+			p.nextToken()
+		}
+
 		p.pendingTail = prevTail
 		p.allowBlockTail = prevAllow
+
 		if body == nil {
 			return nil
-		}
-		if p.curTok.Type == lexer.RBRACE {
-			p.nextToken()
 		}
 
 		armSpan := mergeSpan(armStart, pattern.Span())
 		armSpan = mergeSpan(armSpan, arrowTok.Span)
 		armSpan = mergeSpan(armSpan, body.Span())
 		arms = append(arms, ast.NewMatchArm(pattern, body, armSpan))
-		stmtSpan = mergeSpan(stmtSpan, armSpan)
+		exprSpan = mergeSpan(exprSpan, armSpan)
+
+		if p.curTok.Type == lexer.COMMA {
+			p.nextToken()
+		}
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
@@ -1622,12 +1647,9 @@ func (p *Parser) parseMatchStmt() ast.Stmt {
 		return nil
 	}
 
-	stmtSpan = mergeSpan(stmtSpan, p.curTok.Span)
-	stmt := ast.NewMatchStmt(subject, arms, stmtSpan)
+	exprSpan = mergeSpan(exprSpan, p.curTok.Span)
 
-	p.nextToken()
-
-	return stmt
+	return ast.NewMatchExpr(subject, arms, exprSpan)
 }
 
 func (p *Parser) parseExpr() ast.Expr {

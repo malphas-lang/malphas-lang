@@ -2209,6 +2209,128 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 	})
 
+	t.Run("match expr basic", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let result = match value {
+			1 -> 10,
+			other -> 0
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+		}
+
+		matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected match expression, got %T", letStmt.Value)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstArm := matchExpr.Arms[0]
+		if _, ok := firstArm.Pattern.(*ast.IntegerLit); !ok {
+			t.Fatalf("expected first arm pattern type *ast.IntegerLit, got %T", firstArm.Pattern)
+		}
+
+		if len(firstArm.Body.Stmts) != 0 {
+			t.Fatalf("expected implicit block body with zero statements, got %d", len(firstArm.Body.Stmts))
+		}
+
+		if firstArm.Body.Tail == nil {
+			t.Fatalf("expected first arm tail expression, got nil")
+		}
+
+		if lit, ok := firstArm.Body.Tail.(*ast.IntegerLit); !ok || lit.Text != "10" {
+			t.Fatalf("expected first arm tail integer literal '10', got %#v", firstArm.Body.Tail)
+		}
+
+		secondArm := matchExpr.Arms[1]
+		if _, ok := secondArm.Pattern.(*ast.Ident); !ok {
+			t.Fatalf("expected second arm pattern type *ast.Ident, got %T", secondArm.Pattern)
+		}
+
+		if secondArm.Body.Tail == nil {
+			t.Fatalf("expected second arm tail expression, got nil")
+		}
+
+		if lit, ok := secondArm.Body.Tail.(*ast.IntegerLit); !ok || lit.Text != "0" {
+			t.Fatalf("expected second arm tail integer literal '0', got %#v", secondArm.Body.Tail)
+		}
+	})
+
+	t.Run("match arm with block tail", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let result = match value {
+			1 -> {
+				value + 1
+			},
+			other -> {
+				0
+			}
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+		}
+
+		matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected match expression, got %T", letStmt.Value)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstArm := matchExpr.Arms[0]
+		if firstArm.Body.Tail == nil {
+			t.Fatalf("expected first arm block tail expression, got nil")
+		}
+
+		if _, ok := firstArm.Body.Tail.(*ast.InfixExpr); !ok {
+			t.Fatalf("expected first arm tail expression type *ast.InfixExpr, got %T", firstArm.Body.Tail)
+		}
+
+		secondArm := matchExpr.Arms[1]
+		if secondArm.Body.Tail == nil {
+			t.Fatalf("expected second arm block tail expression, got nil")
+		}
+
+		if lit, ok := secondArm.Body.Tail.(*ast.IntegerLit); !ok || lit.Text != "0" {
+			t.Fatalf("expected second arm tail integer literal '0', got %#v", secondArm.Body.Tail)
+		}
+	})
+
 	t.Run("match arm tail expr", func(t *testing.T) {
 		const src = `
 	package foo;
@@ -2230,20 +2352,24 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		assertNoErrors(t, errs)
 
 		fn := file.Decls[0].(*ast.FnDecl)
-		if len(fn.Body.Stmts) != 1 {
-			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		if len(fn.Body.Stmts) != 0 {
+			t.Fatalf("expected no statements before tail match expression, got %d", len(fn.Body.Stmts))
 		}
 
-		matchStmt, ok := fn.Body.Stmts[0].(*ast.MatchStmt)
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected block tail match expression, got nil")
+		}
+
+		matchExpr, ok := fn.Body.Tail.(*ast.MatchExpr)
 		if !ok {
-			t.Fatalf("expected match statement, got %T", fn.Body.Stmts[0])
+			t.Fatalf("expected match expression, got %T", fn.Body.Tail)
 		}
 
-		if len(matchStmt.Arms) != 2 {
-			t.Fatalf("expected two match arms, got %d", len(matchStmt.Arms))
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
 		}
 
-		firstArm := matchStmt.Arms[0]
+		firstArm := matchExpr.Arms[0]
 		if firstArm.Body.Tail == nil {
 			t.Fatalf("expected match arm block tail expression, got nil")
 		}
@@ -2252,7 +2378,7 @@ func TestParseBlockTailExpressions(t *testing.T) {
 			t.Fatalf("expected match arm tail expression type *ast.InfixExpr, got %T", firstArm.Body.Tail)
 		}
 
-		secondArm := matchStmt.Arms[1]
+		secondArm := matchExpr.Arms[1]
 		if secondArm.Body.Tail == nil {
 			t.Fatalf("expected second match arm tail expression, got nil")
 		}
@@ -2753,60 +2879,133 @@ fn main() {
 	}
 }
 
-func TestParseMatchStmt(t *testing.T) {
-	const src = `
-package foo;
+func TestParseMatchExpr(t *testing.T) {
+	t.Run("basic let binding", func(t *testing.T) {
+		const src = `
+	package foo;
 
-fn main() {
-	match value {
-		1 -> {
-			return;
+	fn main() {
+		let x = match value {
+			1 -> {
+				10
+			}
+			other -> {
+				0
+			}
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
 		}
-		other -> {
-			value = other;
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected stmt type *ast.LetStmt, got %T", fn.Body.Stmts[0])
 		}
+
+		matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.MatchExpr, got %T", letStmt.Value)
+		}
+
+		subject, ok := matchExpr.Subject.(*ast.Ident)
+		if !ok || subject.Name != "value" {
+			t.Fatalf("expected match subject identifier 'value', got %#v", matchExpr.Subject)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected 2 match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstPattern, ok := matchExpr.Arms[0].Pattern.(*ast.IntegerLit)
+		if !ok || firstPattern.Text != "1" {
+			t.Fatalf("expected first arm integer literal pattern '1', got %#v", matchExpr.Arms[0].Pattern)
+		}
+
+		if matchExpr.Arms[0].Body.Tail == nil {
+			t.Fatalf("expected first arm body tail expression, got nil")
+		}
+
+		secondPattern, ok := matchExpr.Arms[1].Pattern.(*ast.Ident)
+		if !ok || secondPattern.Name != "other" {
+			t.Fatalf("expected second arm identifier pattern 'other', got %#v", matchExpr.Arms[1].Pattern)
+		}
+
+		if matchExpr.Arms[1].Body.Tail == nil {
+			t.Fatalf("expected second arm body tail expression, got nil")
+		}
+	})
+
+	t.Run("arm with block tail expression", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let delta = match value {
+			1 -> {
+				let next = value;
+				next + 1
+			}
+			other -> {
+				other
+			}
+		};
 	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected stmt type *ast.LetStmt, got %T", fn.Body.Stmts[0])
+		}
+
+		matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.MatchExpr, got %T", letStmt.Value)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected 2 match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstArm := matchExpr.Arms[0]
+		if len(firstArm.Body.Stmts) != 1 {
+			t.Fatalf("expected first arm block to contain 1 statement, got %d", len(firstArm.Body.Stmts))
+		}
+
+		if firstArm.Body.Tail == nil {
+			t.Fatalf("expected first arm block tail expression, got nil")
+		}
+
+		if _, ok := firstArm.Body.Tail.(*ast.InfixExpr); !ok {
+			t.Fatalf("expected first arm block tail type *ast.InfixExpr, got %T", firstArm.Body.Tail)
+		}
+
+		secondArm := matchExpr.Arms[1]
+		if secondArm.Body.Tail == nil {
+			t.Fatalf("expected second arm block tail expression, got nil")
+		}
+
+		if _, ok := secondArm.Body.Tail.(*ast.Ident); !ok {
+			t.Fatalf("expected second arm block tail type *ast.Ident, got %T", secondArm.Body.Tail)
+		}
+	})
 }
-`
 
-	file, errs := parseFile(t, src)
-	assertNoErrors(t, errs)
-
-	fn := file.Decls[0].(*ast.FnDecl)
-	if len(fn.Body.Stmts) != 1 {
-		t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
-	}
-
-	matchStmt, ok := fn.Body.Stmts[0].(*ast.MatchStmt)
-	if !ok {
-		t.Fatalf("expected stmt type *ast.MatchStmt, got %T", fn.Body.Stmts[0])
-	}
-
-	subject, ok := matchStmt.Subject.(*ast.Ident)
-	if !ok || subject.Name != "value" {
-		t.Fatalf("expected match subject identifier 'value', got %#v", matchStmt.Subject)
-	}
-
-	if len(matchStmt.Arms) != 2 {
-		t.Fatalf("expected 2 match arms, got %d", len(matchStmt.Arms))
-	}
-
-	firstPattern, ok := matchStmt.Arms[0].Pattern.(*ast.IntegerLit)
-	if !ok || firstPattern.Text != "1" {
-		t.Fatalf("expected first arm integer literal pattern '1', got %#v", matchStmt.Arms[0].Pattern)
-	}
-
-	if len(matchStmt.Arms[0].Body.Stmts) != 1 {
-		t.Fatalf("expected first arm body to have 1 stmt, got %d", len(matchStmt.Arms[0].Body.Stmts))
-	}
-
-	secondPattern, ok := matchStmt.Arms[1].Pattern.(*ast.Ident)
-	if !ok || secondPattern.Name != "other" {
-		t.Fatalf("expected second arm identifier pattern 'other', got %#v", matchStmt.Arms[1].Pattern)
-	}
-}
-
-func TestParseMatchStmtMissingArrow(t *testing.T) {
+func TestParseMatchExprMissingArrow(t *testing.T) {
 	const src = `
 package foo;
 
