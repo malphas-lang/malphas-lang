@@ -93,6 +93,37 @@ fn f() {
 	}
 }
 
+func TestDiagnostics_ConsistentFormatting(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	match x {
+		1 -> 10
+		2 -> 20
+`
+
+	_, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	first := errs[0].Message
+	if !strings.Contains(first, "expected ',' or '}' after match arm") {
+		t.Fatalf("unexpected first message: %q", first)
+	}
+
+	foundClosing := false
+	for _, err := range errs {
+		if strings.Contains(err.Message, "expected '}' to close match expression") {
+			foundClosing = true
+			break
+		}
+	}
+	if !foundClosing {
+		t.Fatalf("missing closing brace diagnostic: %#v", errs)
+	}
+}
+
 func TestParsePackageDeclMissingName(t *testing.T) {
 	const src = `
 package;

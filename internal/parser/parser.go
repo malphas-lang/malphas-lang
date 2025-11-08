@@ -1677,7 +1677,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
-		p.reportError("expected }", p.curTok.Span)
+		p.reportError("expected '}' to close match expression", p.curTok.Span)
 		return nil
 	}
 
