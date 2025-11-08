@@ -387,8 +387,9 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 		if !p.expect(lexer.SEMICOLON) {
 			return nil
 		}
+		span := mergeSpan(headerSpan, p.curTok.Span)
 		p.nextToken()
-		return ast.NewFnDecl(name, typeParams, params, returnType, nil, headerSpan)
+		return ast.NewFnDecl(name, typeParams, params, returnType, nil, span)
 	case lexer.LBRACE:
 		if !p.expect(lexer.LBRACE) {
 			return nil
