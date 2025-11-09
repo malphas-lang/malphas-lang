@@ -362,13 +362,7 @@ func (p *Parser) parseFnDecl() ast.Decl {
 		return nil
 	}
 
-	prevAllow := p.allowBlockTail
-	prevTail := p.pendingTail
-	p.allowBlockTail = true
-	p.pendingTail = nil
-	body := p.parseBlockExpr()
-	p.pendingTail = prevTail
-	p.allowBlockTail = prevAllow
+	body := p.withBlockTail(p.parseBlockExpr)
 	if body == nil {
 		return nil
 	}
@@ -400,13 +394,7 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 		if !p.expect(lexer.LBRACE) {
 			return nil
 		}
-		prevAllow := p.allowBlockTail
-		prevTail := p.pendingTail
-		p.allowBlockTail = true
-		p.pendingTail = nil
-		body := p.parseBlockExpr()
-		p.pendingTail = prevTail
-		p.allowBlockTail = prevAllow
+		body := p.withBlockTail(p.parseBlockExpr)
 		if body == nil {
 			return nil
 		}
@@ -1236,18 +1224,23 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 	return block
 }
 
-func (p *Parser) parseBlockLiteral() ast.Expr {
+func (p *Parser) withBlockTail(parse func() *ast.BlockExpr) *ast.BlockExpr {
 	prevAllow := p.allowBlockTail
 	prevTail := p.pendingTail
+
 	p.allowBlockTail = true
 	p.pendingTail = nil
 
-	block := p.parseBlockExpr()
+	defer func() {
+		p.pendingTail = prevTail
+		p.allowBlockTail = prevAllow
+	}()
 
-	p.pendingTail = prevTail
-	p.allowBlockTail = prevAllow
+	return parse()
+}
 
-	return block
+func (p *Parser) parseBlockLiteral() ast.Expr {
+	return p.withBlockTail(p.parseBlockExpr)
 }
 
 func (p *Parser) parseStmt() ast.Stmt {
@@ -1420,13 +1413,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 			return nil
 		}
 
-		prevAllow := p.allowBlockTail
-		prevTail := p.pendingTail
-		p.allowBlockTail = true
-		p.pendingTail = nil
-		body := p.parseBlockExpr()
-		p.pendingTail = prevTail
-		p.allowBlockTail = prevAllow
+		body := p.withBlockTail(p.parseBlockExpr)
 		if body == nil {
 			return nil
 		}
@@ -1453,13 +1440,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 			return nil
 		}
 
-		elsePrevAllow := p.allowBlockTail
-		elsePrevTail := p.pendingTail
-		p.allowBlockTail = true
-		p.pendingTail = nil
-		elseBlock := p.parseBlockExpr()
-		p.pendingTail = elsePrevTail
-		p.allowBlockTail = elsePrevAllow
+		elseBlock := p.withBlockTail(p.parseBlockExpr)
 		if elseBlock == nil {
 			return nil
 		}
@@ -1489,6 +1470,11 @@ func (p *Parser) parseIfStmt() ast.Stmt {
 		return nil
 	}
 
+	if p.allowBlockTail && ifExpr.Else != nil && p.curTok.Type == lexer.RBRACE && p.peekTok.Type == lexer.RBRACE {
+		p.pendingTail = ifExpr
+		return nil
+	}
+
 	if p.curTok.Type == lexer.RBRACE {
 		p.nextToken()
 	}
@@ -1510,13 +1496,7 @@ func (p *Parser) parseWhileStmt() ast.Stmt {
 		return nil
 	}
 
-	prevAllow := p.allowBlockTail
-	prevTail := p.pendingTail
-	p.allowBlockTail = true
-	p.pendingTail = nil
-	body := p.parseBlockExpr()
-	p.pendingTail = prevTail
-	p.allowBlockTail = prevAllow
+	body := p.withBlockTail(p.parseBlockExpr)
 	if body == nil {
 		return nil
 	}
@@ -1558,13 +1538,7 @@ func (p *Parser) parseForStmt() ast.Stmt {
 		return nil
 	}
 
-	prevAllow := p.allowBlockTail
-	prevTail := p.pendingTail
-	p.allowBlockTail = true
-	p.pendingTail = nil
-	body := p.parseBlockExpr()
-	p.pendingTail = prevTail
-	p.allowBlockTail = prevAllow
+	body := p.withBlockTail(p.parseBlockExpr)
 	if body == nil {
 		return nil
 	}
@@ -1615,41 +1589,33 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 
 		arrowTok := p.curTok
 
-		prevAllow := p.allowBlockTail
-		prevTail := p.pendingTail
-		p.allowBlockTail = true
-		p.pendingTail = nil
+		body := p.withBlockTail(func() *ast.BlockExpr {
+			p.nextToken()
 
-		var body *ast.BlockExpr
+			if p.curTok.Type == lexer.LBRACE {
+				block := p.parseBlockExpr()
+				if block == nil {
+					return nil
+				}
 
-		p.nextToken()
+				if p.curTok.Type == lexer.RBRACE {
+					p.nextToken()
+				}
 
-		if p.curTok.Type == lexer.LBRACE {
-			body = p.parseBlockExpr()
-			if body == nil {
-				p.pendingTail = prevTail
-				p.allowBlockTail = prevAllow
-				return nil
+				return block
 			}
 
-			if p.curTok.Type == lexer.RBRACE {
-				p.nextToken()
-			}
-		} else {
 			expr := p.parseExpr()
 			if expr == nil {
-				p.pendingTail = prevTail
-				p.allowBlockTail = prevAllow
 				return nil
 			}
 
-			body = ast.NewBlockExpr(nil, expr, expr.Span())
+			block := ast.NewBlockExpr(nil, expr, expr.Span())
 
 			p.nextToken()
-		}
 
-		p.pendingTail = prevTail
-		p.allowBlockTail = prevAllow
+			return block
+		})
 
 		if body == nil {
 			return nil

@@ -456,6 +456,20 @@ func assertSpanEndsWith(t *testing.T, runes []rune, span lexer.Span, want rune) 
 	}
 }
 
+func assertSpanText(t *testing.T, src string, span lexer.Span, want string) {
+	t.Helper()
+
+	runes := []rune(src)
+	if span.Start < 0 || span.End > len(runes) || span.Start > span.End {
+		t.Fatalf("invalid span: start=%d end=%d len=%d", span.Start, span.End, len(runes))
+	}
+
+	got := string(runes[span.Start:span.End])
+	if got != want {
+		t.Fatalf("expected span text %q, got %q", want, got)
+	}
+}
+
 func TestParseIfExpression(t *testing.T) {
 	const src = `
 package foo;
@@ -2490,6 +2504,253 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 	})
 
+	t.Run("fn nested block tail spans", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn nested() {
+		{
+			{
+				42
+			}
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		if len(file.Decls) != 1 {
+			t.Fatalf("expected single declaration, got %d", len(file.Decls))
+		}
+
+		fn, ok := file.Decls[0].(*ast.FnDecl)
+		if !ok {
+			t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+		}
+
+		if fn.Body == nil {
+			t.Fatalf("expected function body")
+		}
+
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected function block tail expression")
+		}
+
+		outerTail, ok := fn.Body.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected function tail type *ast.BlockExpr, got %T", fn.Body.Tail)
+		}
+
+		assertSpanText(t, src, outerTail.Span(), "{\n\t\t\t{\n\t\t\t\t42\n\t\t\t}\n\t\t}")
+
+		innerTail, ok := outerTail.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected nested block tail type *ast.BlockExpr, got %T", outerTail.Tail)
+		}
+
+		assertSpanText(t, src, innerTail.Span(), "{\n\t\t\t\t42\n\t\t\t}")
+	})
+
+	t.Run("if clause nested block tail spans", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		if true {
+			{
+				1
+			}
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if fn.Body == nil {
+			t.Fatalf("expected function body")
+		}
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		ifStmt, ok := fn.Body.Stmts[0].(*ast.IfStmt)
+		if !ok {
+			t.Fatalf("expected statement type *ast.IfStmt, got %T", fn.Body.Stmts[0])
+		}
+
+		if len(ifStmt.Clauses) != 1 {
+			t.Fatalf("expected single if clause, got %d", len(ifStmt.Clauses))
+		}
+
+		clause := ifStmt.Clauses[0]
+		assertSpanText(t, src, clause.Body.Span(), "{\n\t\t\t{\n\t\t\t\t1\n\t\t\t}\n\t\t}")
+
+		innerTail, ok := clause.Body.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected nested block tail type *ast.BlockExpr, got %T", clause.Body.Tail)
+		}
+
+		assertSpanText(t, src, innerTail.Span(), "{\n\t\t\t\t1\n\t\t\t}")
+	})
+
+	t.Run("if expression nested block tail spans", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() -> i32 {
+		if true {
+			{
+				1
+			}
+		} else {
+			2
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if fn.Body == nil {
+			t.Fatalf("expected function body")
+		}
+
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected function tail expression")
+		}
+
+		ifExpr, ok := fn.Body.Tail.(*ast.IfExpr)
+		if !ok {
+			t.Fatalf("expected function tail type *ast.IfExpr, got %T", fn.Body.Tail)
+		}
+
+		if len(ifExpr.Clauses) != 1 {
+			t.Fatalf("expected single if clause, got %d", len(ifExpr.Clauses))
+		}
+
+		clause := ifExpr.Clauses[0]
+		assertSpanText(t, src, clause.Body.Span(), "{\n\t\t\t{\n\t\t\t\t1\n\t\t\t}\n\t\t}")
+
+		nestedTail, ok := clause.Body.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected nested block tail type *ast.BlockExpr, got %T", clause.Body.Tail)
+		}
+
+		assertSpanText(t, src, nestedTail.Span(), "{\n\t\t\t\t1\n\t\t\t}")
+
+		if ifExpr.Else == nil {
+			t.Fatalf("expected else block")
+		}
+	})
+
+	t.Run("match arm nested block tail spans", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let result = match 0 {
+			0 => {
+				{
+					10
+				}
+			},
+			_ => {
+				20
+			},
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in function body, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+		}
+
+		matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.MatchExpr, got %T", letStmt.Value)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstArm := matchExpr.Arms[0]
+		assertSpanText(t, src, firstArm.Body.Span(), "{\n\t\t\t\t{\n\t\t\t\t\t10\n\t\t\t\t}\n\t\t\t}")
+
+		nestedTail, ok := firstArm.Body.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected nested block tail type *ast.BlockExpr, got %T", firstArm.Body.Tail)
+		}
+
+		assertSpanText(t, src, nestedTail.Span(), "{\n\t\t\t\t\t10\n\t\t\t\t}")
+
+		secondArm := matchExpr.Arms[1]
+		if secondArm.Body.Tail == nil {
+			t.Fatalf("expected second arm tail expression, got nil")
+		}
+	})
+
+	t.Run("match expression nested block tail spans", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() -> i32 {
+		match 0 {
+			0 => {
+				{
+					10
+				}
+			},
+			_ => 20,
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		if fn.Body == nil {
+			t.Fatalf("expected function body")
+		}
+
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected function tail expression")
+		}
+
+		matchExpr, ok := fn.Body.Tail.(*ast.MatchExpr)
+		if !ok {
+			t.Fatalf("expected function tail type *ast.MatchExpr, got %T", fn.Body.Tail)
+		}
+
+		if len(matchExpr.Arms) != 2 {
+			t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+		}
+
+		firstArm := matchExpr.Arms[0]
+		assertSpanText(t, src, firstArm.Body.Span(), "{\n\t\t\t\t{\n\t\t\t\t\t10\n\t\t\t\t}\n\t\t\t}")
+
+		nestedTail, ok := firstArm.Body.Tail.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected nested block tail type *ast.BlockExpr, got %T", firstArm.Body.Tail)
+		}
+
+		assertSpanText(t, src, nestedTail.Span(), "{\n\t\t\t\t\t10\n\t\t\t\t}")
+	})
+
 	t.Run("block with trailing semicolon has no tail", func(t *testing.T) {
 		const src = `
 	package foo;
@@ -2877,48 +3138,64 @@ fn main() {
 	assertNoErrors(t, errs)
 
 	fn := file.Decls[0].(*ast.FnDecl)
-	if len(fn.Body.Stmts) != 1 {
-		t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
+
+	var (
+		clauses   []*ast.IfClause
+		elseBlock *ast.BlockExpr
+	)
+
+	switch {
+	case len(fn.Body.Stmts) == 1:
+		ifStmt, ok := fn.Body.Stmts[0].(*ast.IfStmt)
+		if !ok {
+			t.Fatalf("expected stmt type *ast.IfStmt, got %T", fn.Body.Stmts[0])
+		}
+		clauses = ifStmt.Clauses
+		elseBlock = ifStmt.Else
+	case fn.Body.Tail != nil:
+		ifExpr, ok := fn.Body.Tail.(*ast.IfExpr)
+		if !ok {
+			t.Fatalf("expected function tail type *ast.IfExpr, got %T", fn.Body.Tail)
+		}
+		clauses = ifExpr.Clauses
+		elseBlock = ifExpr.Else
+	default:
+		t.Fatalf("expected if statement or tail expression; got statements=%d tail=%T", len(fn.Body.Stmts), fn.Body.Tail)
 	}
 
-	ifStmt, ok := fn.Body.Stmts[0].(*ast.IfStmt)
+	if len(clauses) != 2 {
+		t.Fatalf("expected 2 clauses (if + else if), got %d", len(clauses))
+	}
+
+	firstCond, ok := clauses[0].Condition.(*ast.InfixExpr)
 	if !ok {
-		t.Fatalf("expected stmt type *ast.IfStmt, got %T", fn.Body.Stmts[0])
-	}
-
-	if len(ifStmt.Clauses) != 2 {
-		t.Fatalf("expected 2 clauses (if + else if), got %d", len(ifStmt.Clauses))
-	}
-
-	firstCond, ok := ifStmt.Clauses[0].Condition.(*ast.InfixExpr)
-	if !ok {
-		t.Fatalf("expected first clause condition type *ast.InfixExpr, got %T", ifStmt.Clauses[0].Condition)
+		t.Fatalf("expected first clause condition type *ast.InfixExpr, got %T", clauses[0].Condition)
 	}
 
 	if firstCond.Op != lexer.LT {
 		t.Fatalf("expected first clause condition operator '<', got %q", firstCond.Op)
 	}
 
-	ifStmtBody := ifStmt.Clauses[0].Body
+	ifStmtBody := clauses[0].Body
 	if len(ifStmtBody.Stmts) != 1 {
 		t.Fatalf("expected first clause body to have 1 stmt, got %d", len(ifStmtBody.Stmts))
 	}
 
-	secondCond, ok := ifStmt.Clauses[1].Condition.(*ast.InfixExpr)
+	secondCond, ok := clauses[1].Condition.(*ast.InfixExpr)
 	if !ok {
-		t.Fatalf("expected second clause condition type *ast.InfixExpr, got %T", ifStmt.Clauses[1].Condition)
+		t.Fatalf("expected second clause condition type *ast.InfixExpr, got %T", clauses[1].Condition)
 	}
 
 	if secondCond.Op != lexer.LT {
 		t.Fatalf("expected second clause condition operator '<', got %q", secondCond.Op)
 	}
 
-	if ifStmt.Else == nil {
+	if elseBlock == nil {
 		t.Fatalf("expected else block to be populated")
 	}
 
-	if len(ifStmt.Else.Stmts) != 1 {
-		t.Fatalf("expected else block with 1 stmt, got %d", len(ifStmt.Else.Stmts))
+	if len(elseBlock.Stmts) != 1 {
+		t.Fatalf("expected else block with 1 stmt, got %d", len(elseBlock.Stmts))
 	}
 }
 
