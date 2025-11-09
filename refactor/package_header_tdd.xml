@@ -1,0 +1,25 @@
+<refactorPlan name="StabilizePackageParsing" methodology="TDD">
+  <context>
+    <summary>Ensure package declarations advance tokens even when the semicolon is missing.</summary>
+    <entrypoint>internal/parser/parser.go::parsePackageDecl</entrypoint>
+  </context>
+  <red>
+    <test name="PackageDeclMissingSemicolonReportsSingleError">
+      <file>internal/parser/parser_test.go</file>
+      <action>Author a failing test covering `package foo` without trailing semicolon, asserting only one diagnostic.</action>
+    </test>
+  </red>
+  <green>
+    <change>
+      <file>internal/parser/parser.go</file>
+      <action>Advance past the identifier before returning early; ensure span propagation stays consistent.</action>
+    </change>
+  </green>
+  <refactor>
+    <task>Scan for other early returns that leave `curTok` untouched and queue follow-up if found.</task>
+  </refactor>
+  <validation>
+    <command>go test ./internal/parser -run PackageDecl</command>
+    <command>go test ./internal/parser -run Diagnostics</command>
+  </validation>
+</refactorPlan>

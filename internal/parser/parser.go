@@ -296,7 +296,9 @@ func (p *Parser) parsePackageDecl() *ast.PackageDecl {
 	name := ast.NewIdent(nameTok.Literal, nameTok.Span)
 
 	if !p.expect(lexer.SEMICOLON) {
-		return ast.NewPackageDecl(name, start)
+		decl := ast.NewPackageDecl(name, mergeSpan(start, nameTok.Span))
+		p.nextToken()
+		return decl
 	}
 
 	decl := ast.NewPackageDecl(name, mergeSpan(start, p.curTok.Span))

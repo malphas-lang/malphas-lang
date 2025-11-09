@@ -1,0 +1,40 @@
+<refactorPlan name="ParserFileSplit" methodology="TDD">
+  <context>
+    <summary>Split monolithic parser into domain-specific files while preserving behaviour.</summary>
+    <entrypoint>internal/parser</entrypoint>
+  </context>
+  <preconditions>
+    <task>Ensure previous TDD steps are green before structural changes.</task>
+  </preconditions>
+  <red>
+    <test name="ParserSuiteSnapshot">
+      <file>internal/parser/parser_test.go</file>
+      <action>Capture baseline test suite (no code change) by adding a failing meta-test comparing spans vs fixtures; remove once split passes.</action>
+    </test>
+  </red>
+  <green>
+    <change>
+      <file>internal/parser/parser.go</file>
+      <action>Extract declaration logic to `decls.go`, statements to `stmts.go`, expressions to `exprs.go`, keeping shared utilities in `parser.go` or `parser_common.go`.</action>
+    </change>
+    <change>
+      <file>internal/parser/decls.go</file>
+      <action>Move declaration parsing functions with updated imports.</action>
+    </change>
+    <change>
+      <file>internal/parser/stmts.go</file>
+      <action>Move statement parsing functions and helpers, ensure visibility of shared symbols.</action>
+    </change>
+    <change>
+      <file>internal/parser/exprs.go</file>
+      <action>Move Pratt core, literal parsers, infix/prefix handlers, and expression helpers.</action>
+    </change>
+  </green>
+  <refactor>
+    <task>Remove the temporary meta-test once suite stabilizes; tidy imports and run gofmt.</task>
+  </refactor>
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

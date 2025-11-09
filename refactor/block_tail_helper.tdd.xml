@@ -1,0 +1,30 @@
+<refactorPlan name="BlockTailHelper" methodology="TDD">
+  <context>
+    <summary>Centralize block tail state handling to avoid manual save/restore.</summary>
+    <entrypoint>internal/parser/parser.go</entrypoint>
+  </context>
+  <red>
+    <test name="NestedBlocksPreserveTailState">
+      <file>internal/parser/parser_test.go</file>
+      <action>Add failing cases for nested block tails inside fn/if/match to capture expected spans.</action>
+    </test>
+  </red>
+  <green>
+    <change>
+      <file>internal/parser/parser.go</file>
+      <action>Introduce helper `withBlockTail(func() *ast.BlockExpr) *ast.BlockExpr` that handles `allowBlockTail` and `pendingTail` lifecycle.</action>
+    </change>
+    <change>
+      <file>internal/parser/parser.go</file>
+      <action>Refactor call sites (`parseFnDecl`, `parseTraitMethod`, `parseIfExpr`, `parseWhileStmt`, `parseForStmt`, `parseMatchExpr`) to use the helper.</action>
+    </change>
+  </green>
+  <refactor>
+    <task>Inline redundant tail checks, ensure helper captures panic safety if needed.</task>
+  </refactor>
+  <validation>
+    <command>go test ./internal/parser -run BlockTail</command>
+    <command>go test ./internal/parser -run Match</command>
+    <command>golangci-lint run ./internal/parser</command>
+  </validation>
+</refactorPlan>

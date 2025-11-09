@@ -172,6 +172,22 @@ package;
 	}
 }
 
+func TestParsePackageDeclMissingSemicolonReportsSingleError(t *testing.T) {
+	const src = `
+package foo
+`
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d (%#v)", len(errs), errs)
+	}
+
+	if !strings.Contains(errs[0].Message, "expected ';'") {
+		t.Fatalf("expected the diagnostic to mention missing semicolon, got %#v", errs[0])
+	}
+}
+
 func TestParsePackageDecl(t *testing.T) {
 	const src = `
 package foo;

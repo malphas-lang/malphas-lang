@@ -1,0 +1,14 @@
+<refactorPlan name="Verification" methodology="TDD">
+  <context>
+    <summary>Aggregated verification steps after each phase.</summary>
+  </context>
+  <validation>
+    <command>go test ./internal/parser/... -run 'Package|BlockTail|Match'</command>
+    <command>go test ./internal/lexer ./internal/ast</command>
+    <command>golangci-lint run ./...</command>
+  </validation>
+  <postconditions>
+    <task>Update HOWTO docs if parser entry points move.</task>
+    <task>Create follow-up tickets for any deferred cleanups.</task>
+  </postconditions>
+</refactorPlan>
