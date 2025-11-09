@@ -219,7 +219,9 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 		return true
 	}
 
-	p.reportError("expected "+string(tt), p.peekTok.Span)
+	lexeme := string(tt)
+	msg := "expected '" + lexeme + "'"
+	p.reportError(msg, p.peekTok.Span)
 	return false
 }
 
@@ -1387,7 +1389,7 @@ func (p *Parser) parseExprStmt() ast.Stmt {
 		}
 		fallthrough
 	default:
-		p.reportError("expected ;", p.peekTok.Span)
+		p.reportError("expected ';' after expression", p.peekTok.Span)
 		return nil
 	}
 }
@@ -1605,7 +1607,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 			return nil
 		}
 
-		if !p.expect(lexer.ARROW) {
+		if !p.expect(lexer.FATARROW) {
 			return nil
 		}
 
@@ -1677,7 +1679,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 	}
 
 	if p.curTok.Type != lexer.RBRACE {
-		p.reportError("expected }", p.curTok.Span)
+		p.reportError("expected '}' to close match expression", p.curTok.Span)
 		return nil
 	}
 
@@ -1693,7 +1695,7 @@ func (p *Parser) parseExpr() ast.Expr {
 func (p *Parser) parseExprPrecedence(precedence int) ast.Expr {
 	prefix := p.prefixFns[p.curTok.Type]
 	if prefix == nil {
-		p.reportError("unexpected token in expression "+string(p.curTok.Type), p.curTok.Span)
+		p.reportError("unexpected token in expression '"+string(p.curTok.Type)+"'", p.curTok.Span)
 		return nil
 	}
 
