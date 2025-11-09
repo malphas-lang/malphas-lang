@@ -35,6 +35,7 @@ const (
 
 	// Operators
 	ASSIGN   TokenType = "="
+	FATARROW TokenType = "=>"
 	PLUS     TokenType = "+"
 	MINUS    TokenType = "-"
 	BANG     TokenType = "!"

@@ -395,13 +395,20 @@ func (l *Lexer) NextToken() Token {
 
 		case '=':
 			startLine, startColumn, startPos := l.currentSpanStart()
-			if l.peek() == '=' {
+			switch l.peek() {
+			case '=':
 				ch := l.ch
 				l.read()
 				raw := string(ch) + string(l.ch)
 				l.read()
 				return l.makeToken(EQ, startLine, startColumn, startPos, l.pos, raw, raw)
-			} else {
+			case '>':
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(FATARROW, startLine, startColumn, startPos, l.pos, raw, raw)
+			default:
 				raw := string(l.ch)
 				l.read()
 				return l.makeToken(ASSIGN, startLine, startColumn, startPos, l.pos, raw, raw)

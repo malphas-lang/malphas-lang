@@ -99,8 +99,8 @@ package foo;
 
 fn main() {
 	match x {
-		1 -> 10
-		2 -> 20
+		1 => 10
+		2 => 20
 `
 
 	_, errs := parseFile(t, src)
@@ -124,6 +124,34 @@ fn main() {
 	}
 }
 
+func TestExpectReportsQuotedToken(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	return add(1, 2)
+}
+`
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) == 0 {
+		t.Fatalf("expected at least one diagnostic")
+	}
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Message, "expected ';'") {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected diagnostic containing %q, got %#v", "expected ';'", errs)
+	}
+}
+
 func TestParsePackageDeclMissingName(t *testing.T) {
 	const src = `
 package;
@@ -139,8 +167,8 @@ package;
 		t.Fatalf("expected parse errors for malformed package decl")
 	}
 
-	if errs[0].Message != "expected IDENT" {
-		t.Fatalf("expected first error %q, got %q", "expected IDENT", errs[0].Message)
+	if errs[0].Message != "expected 'IDENT'" {
+		t.Fatalf("expected first error %q, got %q", "expected 'IDENT'", errs[0].Message)
 	}
 }
 
@@ -299,6 +327,116 @@ fn main() {
 	rightRightLit, ok := productExpr.Right.(*ast.IntegerLit)
 	if !ok || rightRightLit.Text != "3" {
 		t.Fatalf("expected product right operand literal '3', got %#v", productExpr.Right)
+	}
+}
+
+func TestSpan_IncludesClosingDelimiters(t *testing.T) {
+	const src = `
+package foo;
+
+trait T {
+	fn foo();
+	fn bar() {
+		match x {
+			1 => 10,
+			2 => 20,
+		}
+	}
+}
+
+fn main() {
+	let result = match x {
+		1 => {
+			10
+		},
+		2 => {
+			20
+		},
+	};
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	if file == nil {
+		t.Fatal("expected file AST")
+	}
+
+	if len(file.Decls) != 2 {
+		t.Fatalf("expected 2 top-level decls, got %d", len(file.Decls))
+	}
+
+	runes := []rune(src)
+
+	traitDecl, ok := file.Decls[0].(*ast.TraitDecl)
+	if !ok {
+		t.Fatalf("expected first decl *ast.TraitDecl, got %T", file.Decls[0])
+	}
+	assertSpanEndsWith(t, runes, traitDecl.Span(), '}')
+
+	if len(traitDecl.Methods) != 2 {
+		t.Fatalf("expected trait with 2 methods, got %d", len(traitDecl.Methods))
+	}
+	assertSpanEndsWith(t, runes, traitDecl.Methods[0].Span(), ';')
+
+	barMethod := traitDecl.Methods[1]
+	assertSpanEndsWith(t, runes, barMethod.Span(), '}')
+
+	if barMethod.Body == nil {
+		t.Fatalf("expected trait method body")
+	}
+	assertSpanEndsWith(t, runes, barMethod.Body.Span(), '}')
+
+	if barMethod.Body.Tail == nil {
+		t.Fatalf("expected trait method tail expression")
+	}
+
+	matchInTrait, ok := barMethod.Body.Tail.(*ast.MatchExpr)
+	if !ok {
+		t.Fatalf("expected trait method tail match expression, got %T", barMethod.Body.Tail)
+	}
+	assertSpanEndsWith(t, runes, matchInTrait.Span(), '}')
+
+	fnDecl, ok := file.Decls[1].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected second decl *ast.FnDecl, got %T", file.Decls[1])
+	}
+	assertSpanEndsWith(t, runes, fnDecl.Span(), '}')
+
+	if fnDecl.Body == nil {
+		t.Fatalf("expected function body")
+	}
+	if len(fnDecl.Body.Stmts) != 1 {
+		t.Fatalf("expected 1 statement in fn body, got %d", len(fnDecl.Body.Stmts))
+	}
+
+	letStmt, ok := fnDecl.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", fnDecl.Body.Stmts[0])
+	}
+
+	matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+	if !ok {
+		t.Fatalf("expected match expression, got %T", letStmt.Value)
+	}
+	assertSpanEndsWith(t, runes, matchExpr.Span(), '}')
+}
+
+func assertSpanEndsWith(t *testing.T, runes []rune, span lexer.Span, want rune) {
+	t.Helper()
+
+	if span.End <= span.Start {
+		t.Fatalf("invalid span: start=%d end=%d", span.Start, span.End)
+	}
+
+	if span.End > len(runes) {
+		t.Fatalf("span end %d exceeds source length %d", span.End, len(runes))
+	}
+
+	got := runes[span.End-1]
+	if got != want {
+		t.Fatalf("expected span to end with %q, got %q", string(want), string(got))
 	}
 }
 
@@ -1414,7 +1552,7 @@ package foo;
 
 fn bad[T() {}
 `,
-			errMsg: "expected ]",
+			errMsg: "expected ']'",
 		},
 	}
 
@@ -1734,7 +1872,7 @@ fn main() {
 	let x = -(1 + 2;
 }
 `,
-			errMsg: "expected )",
+			errMsg: "expected ')'",
 		},
 		{
 			name: "missing operand",
@@ -1745,7 +1883,7 @@ fn main() {
 	let x = -;
 }
 `,
-			errMsg: "unexpected token in expression ;",
+			errMsg: "unexpected token in expression ';'",
 		},
 	}
 
@@ -2242,8 +2380,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing semicolon")
 	}
 
-	if errs[0].Message != "expected ;" {
-		t.Fatalf("expected first error %q, got %q", "expected ;", errs[0].Message)
+	if errs[0].Message != "expected ';' after expression" {
+		t.Fatalf("expected first error %q, got %q", "expected ';' after expression", errs[0].Message)
 	}
 }
 
@@ -2370,8 +2508,8 @@ func TestParseBlockTailExpressions(t *testing.T) {
 
 	fn main() {
 		let result = match value {
-			1 -> 10,
-			other -> 0
+			1 => 10,
+			other => 0
 		};
 	}
 	`
@@ -2435,10 +2573,10 @@ func TestParseBlockTailExpressions(t *testing.T) {
 
 	fn main() {
 		let result = match value {
-			1 -> {
+			1 => {
 				value + 1
 			},
-			other -> {
+			other => {
 				0
 			}
 		};
@@ -2491,12 +2629,12 @@ func TestParseBlockTailExpressions(t *testing.T) {
 	package foo;
 
 	fn main() {
-		match value {
-			1 -> {
+	match value {
+		1 => {
 				let y = value;
 				y + 1
 		},
-			other -> {
+		other => {
 				other
 			}
 		}
@@ -2699,8 +2837,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing semicolon")
 	}
 
-	if errs[0].Message != "expected ;" {
-		t.Fatalf("expected first error %q, got %q", "expected ;", errs[0].Message)
+	if errs[0].Message != "expected ';'" {
+		t.Fatalf("expected first error %q, got %q", "expected ';'", errs[0].Message)
 	}
 }
 
@@ -2909,8 +3047,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing if block")
 	}
 
-	if errs[0].Message != "expected {" {
-		t.Fatalf("expected first error %q, got %q", "expected {", errs[0].Message)
+	if errs[0].Message != "expected '{'" {
+		t.Fatalf("expected first error %q, got %q", "expected '{'", errs[0].Message)
 	}
 }
 
@@ -2969,8 +3107,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing while condition")
 	}
 
-	if errs[0].Message != "expected {" {
-		t.Fatalf("expected first error %q, got %q", "expected {", errs[0].Message)
+	if errs[0].Message != "expected '{'" {
+		t.Fatalf("expected first error %q, got %q", "expected '{'", errs[0].Message)
 	}
 }
 
@@ -3029,8 +3167,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing 'in' keyword")
 	}
 
-	if errs[0].Message != "expected IN" {
-		t.Fatalf("expected first error %q, got %q", "expected IN", errs[0].Message)
+	if errs[0].Message != "expected 'IN'" {
+		t.Fatalf("expected first error %q, got %q", "expected 'IN'", errs[0].Message)
 	}
 }
 
@@ -3041,10 +3179,10 @@ func TestParseMatchExpr(t *testing.T) {
 
 	fn main() {
 		let x = match value {
-			1 -> {
+			1 => {
 				10
 		},
-			other -> {
+			other => {
 				0
 			}
 		};
@@ -3103,11 +3241,11 @@ func TestParseMatchExpr(t *testing.T) {
 
 	fn main() {
 		let delta = match value {
-			1 -> {
+			1 => {
 				let next = value;
 				next + 1
 		},
-			other -> {
+			other => {
 				other
 			}
 		};
@@ -3179,8 +3317,8 @@ fn main() {
 		t.Fatalf("expected parse errors for missing match arm arrow")
 	}
 
-	if errs[0].Message != "expected ->" {
-		t.Fatalf("expected first error %q, got %q", "expected ->", errs[0].Message)
+	if errs[0].Message != "expected '=>'" {
+		t.Fatalf("expected first error %q, got %q", "expected '=>'", errs[0].Message)
 	}
 }
 
@@ -3198,8 +3336,8 @@ package foo;
 
 fn main() {
 	match x {
-		1 -> 10
-		2 -> 20
+		1 => 10
+		2 => 20
 	}
 }
 `,
@@ -3213,8 +3351,8 @@ package foo;
 
 fn main() {
 	match x {
-		1 -> 10,
-		2 -> 20,
+		1 => 10,
+		2 => 20,
 	}
 }
 `,
@@ -3227,8 +3365,8 @@ package foo;
 
 fn main() {
 	match x {
-		1 -> 10,
-		2 -> 20
+		1 => 10,
+		2 => 20
 	}
 }
 `,

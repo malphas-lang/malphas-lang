@@ -154,7 +154,7 @@ func TestNextToken_Keywords(t *testing.T) {
 }
 
 func TestNextToken_Punctuation(t *testing.T) {
-	input := `(){}[];,:.->`
+	input := `(){}[];,:.->=>`
 
 	tests := []struct {
 		expectedType    TokenType
@@ -171,6 +171,7 @@ func TestNextToken_Punctuation(t *testing.T) {
 		{COLON, ":"},
 		{DOT, "."},
 		{ARROW, "->"},
+		{FATARROW, "=>"},
 		{EOF, ""},
 	}
 
@@ -835,4 +836,3 @@ func TestNextToken_MixedLiterals(t *testing.T) {
 		}
 	}
 }
-
