@@ -382,6 +382,7 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 
 	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
 		prevTok := p.curTok
+		errCount := len(p.errors)
 		result := p.parseStmtResult(true)
 		if result.stmt != nil {
 			block.Stmts = append(block.Stmts, result.stmt)
@@ -391,18 +392,25 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 		if result.tail != nil {
 			if block.Tail != nil {
 				p.reportError("unexpected expression after block tail", p.curTok.Span)
+			} else if p.peekTok.Type != lexer.RBRACE {
+				p.reportError("expected '}' after block tail expression", p.peekTok.Span)
+				p.recoverStatement(prevTok)
+				continue
 			} else {
 				block.Tail = result.tail
 			}
 
-			if p.peekTok.Type != lexer.RBRACE {
-				p.reportError("expected '}' after block tail expression", p.peekTok.Span)
-				p.recoverStatement(prevTok)
-				continue
-			}
-
 			p.nextToken()
 			break
+		}
+
+		if result.stmt == nil && len(p.errors) > errCount {
+			for _, err := range p.errors[errCount:] {
+				if err.Message == "expected ';' after expression" {
+					p.reportError("expected '}' after block tail expression", p.peekTok.Span)
+					break
+				}
+			}
 		}
 
 		if p.curTok.Type == lexer.RBRACE || p.curTok.Type == lexer.EOF {

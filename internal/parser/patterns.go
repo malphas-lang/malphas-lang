@@ -394,6 +394,20 @@ func (p *Parser) parsePatternStruct(path *ast.PatternPath, isEnum bool) ast.Patt
 	var restSpan lexer.Span
 
 	for {
+		if hasRest && p.curTok.Type != lexer.RBRACE {
+			p.reportPatternError("rest pattern must be the final field in a struct pattern", p.curTok.Span)
+
+			for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+				p.nextToken()
+			}
+
+			if p.curTok.Type == lexer.RBRACE {
+				break
+			}
+
+			return nil
+		}
+
 		if p.curTok.Type == lexer.DOTDOT {
 			if hasRest {
 				p.reportPatternError("struct patterns can contain at most one '..' rest", p.curTok.Span)

@@ -2634,6 +2634,59 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 	})
 
+	t.Run("recovery clears tail expression", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let block = {
+			value
+			let x = 1;
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+
+		if len(errs) == 0 {
+			t.Fatal("expected parse error for block tail recovery, got none")
+		}
+
+		foundTailDiag := false
+		for _, err := range errs {
+			if err.Message == "expected '}' after block tail expression" {
+				foundTailDiag = true
+				break
+			}
+		}
+		if !foundTailDiag {
+			t.Fatalf("expected diagnostics to include %q; got %#v", "expected '}' after block tail expression", errs)
+		}
+
+		fn, ok := file.Decls[0].(*ast.FnDecl)
+		if !ok {
+			t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+		}
+
+		if len(fn.Body.Stmts) != 1 {
+			t.Fatalf("expected single statement in fn body, got %d", len(fn.Body.Stmts))
+		}
+
+		letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+		if !ok {
+			t.Fatalf("expected first statement type *ast.LetStmt, got %T", fn.Body.Stmts[0])
+		}
+
+		block, ok := letStmt.Value.(*ast.BlockExpr)
+		if !ok {
+			t.Fatalf("expected let binding value *ast.BlockExpr, got %T", letStmt.Value)
+		}
+
+		if block.Tail != nil {
+			t.Fatalf("expected block tail to be cleared after recovery, got %T", block.Tail)
+		}
+	})
+
 	t.Run("if expression tail expr", func(t *testing.T) {
 		const src = `
 	package foo;
@@ -4248,6 +4301,59 @@ func TestParseMatchPattern_SliceRestDiagnostics(t *testing.T) {
 			if !strings.Contains(errs[0].Message, tc.wantContains) {
 				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, tc.wantContains, errs[0].Message)
 			}
+		})
+	}
+}
+
+func TestParseMatchPattern_StructRestDiagnostics(t *testing.T) {
+	t.Helper()
+
+	const wantContains = "rest pattern must be the final field in a struct pattern"
+
+	cases := []struct {
+		name    string
+		pattern string
+	}{
+		{name: "shorthand field after rest", pattern: "Vec { .., tail }"},
+		{name: "binding field after rest", pattern: "Vec { .., tail: value }"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := buildMatchPatternSource(tc.pattern)
+
+			file, errs := parseFile(t, src)
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors for pattern %q", tc.pattern)
+			}
+
+			if got := errs[0].Message; !strings.Contains(got, wantContains) {
+				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, wantContains, got)
+			}
+
+			if file == nil {
+				t.Fatalf("expected non-nil file AST for pattern %q", tc.pattern)
+			}
+
+			matchExpr := singleLetMatchExpr(t, file)
+			if len(matchExpr.Arms) != 2 {
+				t.Fatalf("expected exactly two match arms, got %d", len(matchExpr.Arms))
+			}
+
+			structPat, ok := matchExpr.Arms[0].Pattern.(*ast.PatternStruct)
+			if !ok {
+				t.Fatalf("expected first match arm to be struct pattern, got %T", matchExpr.Arms[0].Pattern)
+			}
+
+			if !structPat.HasRest {
+				t.Fatalf("expected struct pattern to report rest marker presence")
+			}
+
+			if len(structPat.Fields) != 0 {
+				t.Fatalf("expected parser to drop fields after rest marker, got %d", len(structPat.Fields))
+			}
+
+			assertSpanText(t, src, structPat.Span(), tc.pattern)
 		})
 	}
 }
