@@ -12,10 +12,12 @@
   <plans>
     <plan file="assignment_target_validation.tdd.xml" summary="Validate assignable targets via negative fixtures." />
     <plan file="block_tail_control_flow.tdd.xml" summary="Make block tail handling explicit and tested." />
+    <plan file="block_tail_tail_recovery_fix.tdd.xml" summary="Prevent recovered blocks from retaining stale tail expressions." />
     <plan file="delimited_list_helper.tdd.xml" summary="Unify comma-delimited parsing logic behind a helper." />
     <plan file="diagnostics_consistency_audit.tdd.xml" summary="Guarantee filenames and order in diagnostics." />
     <plan file="pattern_recovery_delimiters.tdd.xml" summary="Stop pattern recovery from overrunning closing delimiters." />
     <plan file="struct_pattern_trailing_comma.tdd.xml" summary="Permit trailing commas in struct patterns and test the regression." />
+    <plan file="struct_pattern_rest_terminal.tdd.xml" summary="Require '..' rest markers to be terminal in struct patterns." />
   </plans>
 
   <verification>

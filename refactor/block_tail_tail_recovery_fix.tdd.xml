@@ -1,0 +1,40 @@
+<refactorPlan name="BlockTailTailRecoveryFix" methodology="TDD">
+  <context>
+    <summary>Ensure block parsing never retains a tail expression once recovery continues past the missing closing brace.</summary>
+    <issue>When `parseBlockExpr` encounters a tail expression followed by additional statements (after missing `}`), it appends the tail before validating the brace, so recovery keeps the stale tail in the AST.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <goal>Guard tail assignment behind successful brace validation and assert via tests that recovered blocks end up tail-less.</goal>
+  </context>
+
+  <preconditions>
+    <task>Identify existing block-tail fixtures in `parser_test.go` (search for `TailExpr` assertions).</task>
+    <task>Review `block_tail_internal_test.go` to reuse the helper style for unit-level parser invocation.</task>
+  </preconditions>
+
+  <red>
+    <test name="BlockTail_RecoveryClearsTail">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a regression where `{ value\nlet x = 1; }` parses to a block with `Tail == nil`, asserting the current behaviour is wrong so the test fails.</action>
+    </test>
+    <test name="BlockTail_DiagnosticsPreserved">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Augment the regression to assert we still emit the `"expected '}' after block tail expression"` diagnostic, locking in recovery messaging.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser.go</file>
+      <action>Defer setting `block.Tail` until the closing brace is confirmed; if recovery triggers, ensure the tail is cleared.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Update the new regression to pass by observing `Tail == nil` and unchanged diagnostics.</action>
+    </change>
+  </green>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+  </validation>
+</refactorPlan>
+

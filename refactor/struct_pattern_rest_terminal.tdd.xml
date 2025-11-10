@@ -1,0 +1,40 @@
+<refactorPlan name="StructPatternRestTerminal" methodology="TDD">
+  <context>
+    <summary>Disallow additional struct pattern fields after a `..` rest marker and document the expectation via tests.</summary>
+    <issue>`parsePatternStruct` currently permits `Vec { .., tail }`, silently accepting fields that should be rejected and misaligning with Rust-style destructuring semantics.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <goal>Emit a targeted diagnostic when tokens follow the rest marker and ensure recovery stops before consuming extra fields.</goal>
+  </context>
+
+  <preconditions>
+    <task>Catalogue existing rest-pattern diagnostics in `parser_test.go` for reuse.</task>
+    <task>Review the `hasRest` logic in `patterns.go` to confirm the precise branch that needs tightening.</task>
+  </preconditions>
+
+  <red>
+    <test name="StructPattern_RestMustBeTerminal">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing table entry asserting `Vec { .., tail }` yields a diagnostic mentioning that fields cannot follow the rest marker.</action>
+    </test>
+    <test name="StructPattern_BindingAfterRest">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Extend coverage to `Vec { .., tail: value }` to ensure both shorthand and explicit bindings trigger the new diagnostic.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Adjust the loop so once `hasRest` is set it immediately reports an error and breaks instead of continuing to parse more fields.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Assert the new diagnostic text and ensure the parser recovers to the closing brace without appending bogus fields.</action>
+    </change>
+  </green>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+  </validation>
+</refactorPlan>
+
