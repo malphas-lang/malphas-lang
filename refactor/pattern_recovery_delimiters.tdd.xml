@@ -1,0 +1,41 @@
+<refactorPlan name="PatternRecoveryDelimiters" methodology="TDD">
+  <context>
+    <summary>Errors inside tuple, slice, or parenthesised patterns currently advance past their closing delimiter, corrupting the remainder of the match arm.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <issue>`recoverPattern` stops only at fat arrows, commas, and `}`. Diagnostics that occur inside `(…)` or `[…]` therefore run off the edge of the pattern payload and desynchronise the parser.</issue>
+    <goal>Teach `recoverPattern` to bail out when it hits `)` or `]`, and protect the behaviour with regression tests.</goal>
+  </context>
+
+  <preconditions>
+    <task>Audit existing pattern recovery coverage in `parser_test.go` (search for `RestPlacementDiagnostics`).</task>
+    <task>Identify realistic malformed patterns that should still allow the rest of the match arm to parse, e.g. `(head, ?)` or `[x, ?] =>`.</task>
+  </preconditions>
+
+  <red>
+    <test name="PatternRecovery_TupleStopsAtParen">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a regression that feeds a match arm like `(value, ?) => 1, other => 2`. The test should currently fail because the parser misreads the `other` arm. Assert both the diagnostic message and that the second arm still parses once the fix lands.</action>
+    </test>
+    <test name="PatternRecovery_SliceStopsAtBracket">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce a failing case for `[a, ?, ..rest] => expr` that expects the parser to emit a single diagnostic and continue to the next arm. This goes red until recovery recognises `]` as a stop token.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Extend `recoverPattern` to also break on `lexer.RPAREN` and `lexer.RBRACKET`. Keep the token walk identical in style to existing recovery helpers.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Make the newly added regression tests pass; ensure they assert both diagnostic count/order and that downstream match arms remain intact.</action>
+    </change>
+  </green>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>
+

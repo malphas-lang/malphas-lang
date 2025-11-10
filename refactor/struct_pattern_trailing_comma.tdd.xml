@@ -1,0 +1,41 @@
+<refactorPlan name="StructPatternTrailingComma" methodology="TDD">
+  <context>
+    <summary>Struct patterns reject a valid trailing comma after the last field, diverging from tuple and slice behaviour.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <issue>The loop inside `parsePatternStruct` consumes a comma but immediately expects another field, so inputs like `Vec { len, }` trigger an erroneous “expected field name” diagnostic.</issue>
+    <goal>Align struct-pattern parsing with tuple/slice handling by allowing an optional trailing comma and locking it down with focused tests.</goal>
+  </context>
+
+  <preconditions>
+    <task>Review the tuple and slice pattern implementations to mirror their trailing-comma handling.</task>
+    <task>Scan `TestParseMatchPattern_Valid` for existing struct pattern cases to extend.</task>
+  </preconditions>
+
+  <red>
+    <test name="StructPattern_AllowsTrailingComma">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing positive test (e.g. `Vec { len, }`) to the valid-pattern table, expecting a successful parse into `*ast.PatternStruct`.</action>
+    </test>
+    <test name="StructPattern_DoesNotDuplicateFields">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Extend diagnostics coverage to ensure `Vec { len,, }` still reports a separator error so the fix does not over-permit malformed input.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>After consuming a comma inside `parsePatternStruct`, check for a closing `}` before recursing—mirroring tuple logic—or migrate the loop to `parseDelimited`.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Update the new tests to green, ensuring both the valid trailing-comma path and the double-comma diagnostic are stable.</action>
+    </change>
+  </green>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>
+

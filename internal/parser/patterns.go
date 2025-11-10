@@ -85,7 +85,7 @@ func (p *Parser) parsePatternPrimary() ast.Pattern {
 	case lexer.INT, lexer.STRING, lexer.CHAR:
 		return p.parseLiteralPattern()
 	case lexer.DOTDOT:
-		return ast.NewPatternRest(nil, p.curTok.Span)
+		return p.parsePatternRest()
 	case lexer.LPAREN:
 		return p.parsePatternParenOrTuple()
 	case lexer.LBRACKET:
@@ -312,6 +312,10 @@ func (p *Parser) parsePatternTupleStruct(path *ast.PatternPath, isEnum bool) ast
 	p.nextToken() // move to '('
 	p.nextToken()
 
+	prevAllow := p.allowPatternRest
+	p.allowPatternRest = true
+	defer func() { p.allowPatternRest = prevAllow }()
+
 	if p.curTok.Type == lexer.RPAREN {
 		patternSpan := mergeSpan(path.Span(), p.curTok.Span)
 		if isEnum {
@@ -401,6 +405,9 @@ func (p *Parser) parsePatternStruct(path *ast.PatternPath, isEnum bool) ast.Patt
 			if p.peekTok.Type == lexer.COMMA {
 				p.nextToken()
 				p.nextToken()
+				if p.curTok.Type == lexer.RBRACE {
+					break
+				}
 				continue
 			}
 
@@ -439,6 +446,9 @@ func (p *Parser) parsePatternStruct(path *ast.PatternPath, isEnum bool) ast.Patt
 		if p.peekTok.Type == lexer.COMMA {
 			p.nextToken()
 			p.nextToken()
+			if p.curTok.Type == lexer.RBRACE {
+				break
+			}
 			continue
 		}
 
@@ -469,6 +479,8 @@ func (p *Parser) reportPatternError(msg string, span lexer.Span) {
 func (p *Parser) recoverPattern() {
 	for p.curTok.Type != lexer.FATARROW &&
 		p.curTok.Type != lexer.COMMA &&
+		p.curTok.Type != lexer.RPAREN &&
+		p.curTok.Type != lexer.RBRACKET &&
 		p.curTok.Type != lexer.RBRACE &&
 		p.curTok.Type != lexer.EOF {
 		p.nextToken()
@@ -485,6 +497,18 @@ func isRestPattern(pat ast.Pattern) bool {
 	default:
 		return false
 	}
+}
+
+func restPatternSpan(pat ast.Pattern) lexer.Span {
+	switch pat := pat.(type) {
+	case *ast.PatternRest:
+		return pat.Span()
+	case *ast.PatternBinding:
+		if rest, ok := pat.Pattern.(*ast.PatternRest); ok {
+			return rest.Span()
+		}
+	}
+	return pat.Span()
 }
 
 func isUppercaseIdentifier(name string) bool {
@@ -540,37 +564,29 @@ func (p *Parser) parsePatternParenOrTuple() ast.Pattern {
 		return ast.NewPatternTuple(nil, span)
 	}
 
-	first := p.parsePattern()
-	if first == nil {
-		return nil
-	}
-
-	elements := []ast.Pattern{first}
-	trailingComma := false
-
-	for p.peekTok.Type == lexer.COMMA {
-		trailingComma = true
-		p.nextToken() // move to ','
-		p.nextToken() // move to next element start
-
+	res, ok := parseDelimited[ast.Pattern](p, delimitedConfig{
+		Closing:             lexer.RPAREN,
+		Separator:           lexer.COMMA,
+		MissingElementMsg:   "expected pattern",
+		MissingSeparatorMsg: "expected ',' or ')' in pattern tuple",
+	}, func(int) (ast.Pattern, bool) {
 		elem := p.parsePattern()
 		if elem == nil {
-			return nil
+			return nil, false
 		}
-		elements = append(elements, elem)
-	}
-
-	if !p.expect(lexer.RPAREN) {
+		return elem, true
+	})
+	if !ok {
 		return nil
 	}
 
 	span := mergeSpan(openTok.Span, p.curTok.Span)
 
-	if len(elements) == 1 && !trailingComma {
-		return ast.NewPatternParen(first, span)
+	if len(res.Items) == 1 {
+		return ast.NewPatternParen(res.Items[0], span)
 	}
 
-	return ast.NewPatternTuple(elements, span)
+	return ast.NewPatternTuple(res.Items, span)
 }
 
 func (p *Parser) parsePatternSlice() ast.Pattern {
@@ -597,9 +613,9 @@ func (p *Parser) parsePatternSlice() ast.Pattern {
 			return nil
 		}
 
-		if rest, ok := elem.(*ast.PatternRest); ok {
+		if isRestPattern(elem) {
 			if hasRest {
-				p.reportError("multiple rest patterns are not allowed", rest.Span())
+				p.reportError("multiple rest patterns are not allowed", restPatternSpan(elem))
 				return nil
 			}
 			hasRest = true
@@ -609,6 +625,10 @@ func (p *Parser) parsePatternSlice() ast.Pattern {
 
 		if p.peekTok.Type == lexer.COMMA {
 			p.nextToken() // move to ','
+			if p.peekTok.Type == lexer.RBRACKET {
+				p.nextToken()
+				break
+			}
 			p.nextToken() // advance to next element
 			continue
 		}

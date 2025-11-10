@@ -224,7 +224,16 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 
 		pattern := p.parsePattern()
 		if pattern == nil {
-			return nil
+			for p.curTok.Type == lexer.COMMA {
+				p.nextToken()
+				p.recoverPattern()
+			}
+
+			placeholderSpan := armStart
+			if p.curTok.Span.End > placeholderSpan.End {
+				placeholderSpan = mergeSpan(placeholderSpan, p.curTok.Span)
+			}
+			pattern = ast.NewPatternWild(p.spanWithFilename(placeholderSpan))
 		}
 
 		var guard ast.Expr
@@ -411,26 +420,23 @@ func (p *Parser) parseCallExpr(callee ast.Expr) ast.Expr {
 	var args []ast.Expr
 
 	if p.curTok.Type != lexer.RPAREN {
-		arg := p.parseExpr()
-		if arg == nil {
-			return nil
-		}
-		args = append(args, arg)
-
-		for p.peekTok.Type == lexer.COMMA {
-			p.nextToken() // move to comma
-			p.nextToken() // move to next argument start
-
-			arg = p.parseExpr()
+		argRes, ok := parseDelimited[ast.Expr](p, delimitedConfig{
+			Closing:             lexer.RPAREN,
+			Separator:           lexer.COMMA,
+			MissingElementMsg:   "expected expression",
+			MissingSeparatorMsg: "expected ',' or ')' after argument",
+		}, func(int) (ast.Expr, bool) {
+			arg := p.parseExpr()
 			if arg == nil {
-				return nil
+				return nil, false
 			}
-			args = append(args, arg)
-		}
-
-		if !p.expect(lexer.RPAREN) {
+			return arg, true
+		})
+		if !ok {
 			return nil
 		}
+
+		args = argRes.Items
 	}
 
 	span := mergeSpan(callee.Span(), openTok.Span)

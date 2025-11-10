@@ -173,50 +173,44 @@ func (p *Parser) parseOptionalTypeParams() ([]ast.GenericParam, bool) {
 		return nil, false
 	}
 
-	params := make([]ast.GenericParam, 0)
-
 	p.nextToken() // move to first potential parameter token
 
-	for {
-		var param ast.GenericParam
+	res, ok := parseDelimited[ast.GenericParam](p, delimitedConfig{
+		Closing:           lexer.RBRACKET,
+		Separator:         lexer.COMMA,
+		MissingElementMsg: "expected type parameter or 'const'",
+		OnMissingSeparator: func() bool {
+			if p.peekTok.Type == lexer.CONST {
+				p.reportError("missing comma before const", p.peekTok.Span)
+			} else {
+				p.reportError("expected ']'", p.peekTok.Span)
+			}
+			return true
+		},
+	}, func(int) (ast.GenericParam, bool) {
 		switch p.curTok.Type {
 		case lexer.CONST:
-			param = p.parseConstParam()
+			param := p.parseConstParam()
+			if param == nil {
+				return nil, false
+			}
+			return param, true
 		case lexer.IDENT:
-			param = p.parseTypeParam()
+			param := p.parseTypeParam()
+			if param == nil {
+				return nil, false
+			}
+			return param, true
 		default:
 			p.reportError("expected type parameter or 'const'", p.curTok.Span)
 			return nil, false
 		}
-
-		if param == nil {
-			return nil, false
-		}
-		params = append(params, param)
-
-		if p.peekTok.Type == lexer.COMMA {
-			p.nextToken() // move to ','
-			p.nextToken() // move to next parameter token
-			if p.curTok.Type == lexer.RBRACKET {
-				p.reportError("expected type parameter name", p.curTok.Span)
-				return nil, false
-			}
-			continue
-		}
-
-		if p.peekTok.Type == lexer.CONST {
-			p.reportError("missing comma before const", p.peekTok.Span)
-			return nil, false
-		}
-
-		break
-	}
-
-	if !p.expect(lexer.RBRACKET) {
+	})
+	if !ok {
 		return nil, false
 	}
 
-	return params, true
+	return res.Items, true
 }
 
 func (p *Parser) parseTypeParam() *ast.TypeParam {
@@ -309,29 +303,25 @@ func (p *Parser) parseParamList() ([]*ast.Param, bool) {
 		return params, true
 	}
 
-	p.nextToken()
-	param := p.parseParam()
-	if param == nil {
-		return nil, false
-	}
-	params = append(params, param)
+	p.nextToken() // advance to first parameter token
 
-	for p.peekTok.Type == lexer.COMMA {
-		p.nextToken() // move to comma
-		p.nextToken() // move to next parameter start
-
-		param = p.parseParam()
+	res, ok := parseDelimited[*ast.Param](p, delimitedConfig{
+		Closing:             lexer.RPAREN,
+		Separator:           lexer.COMMA,
+		MissingElementMsg:   "expected parameter name",
+		MissingSeparatorMsg: "expected ',' or ')' after parameter",
+	}, func(int) (*ast.Param, bool) {
+		param := p.parseParam()
 		if param == nil {
 			return nil, false
 		}
-		params = append(params, param)
-	}
-
-	if !p.expect(lexer.RPAREN) {
+		return param, true
+	})
+	if !ok {
 		return nil, false
 	}
 
-	return params, true
+	return res.Items, true
 }
 
 func (p *Parser) parseParam() *ast.Param {
@@ -390,14 +380,19 @@ func (p *Parser) parseStructDecl() ast.Decl {
 		return nil
 	}
 
-	fields := make([]*ast.StructField, 0)
-
 	p.nextToken()
 
-	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+	fieldRes, ok := parseDelimited[*ast.StructField](p, delimitedConfig{
+		Closing:             lexer.RBRACE,
+		Separator:           lexer.COMMA,
+		AllowEmpty:          true,
+		AllowTrailing:       true,
+		MissingElementMsg:   "expected struct field name",
+		MissingSeparatorMsg: "expected ',' or '}' after struct field",
+	}, func(int) (*ast.StructField, bool) {
 		if p.curTok.Type != lexer.IDENT {
 			p.reportError("expected struct field name", p.curTok.Span)
-			return nil
+			return nil, false
 		}
 
 		fieldTok := p.curTok
@@ -405,7 +400,7 @@ func (p *Parser) parseStructDecl() ast.Decl {
 
 		if p.peekTok.Type != lexer.COLON {
 			p.reportError("expected ':' after struct field '"+fieldTok.Literal+"'", p.peekTok.Span)
-			return nil
+			return nil, false
 		}
 
 		p.nextToken() // move to ':'
@@ -413,34 +408,23 @@ func (p *Parser) parseStructDecl() ast.Decl {
 
 		if !isTypeStart(p.curTok.Type) {
 			p.reportError("expected type expression after ':' in struct field '"+fieldTok.Literal+"'", p.curTok.Span)
-			return nil
+			return nil, false
 		}
 
 		fieldType := p.parseType()
 		if fieldType == nil {
-			return nil
+			return nil, false
 		}
 
 		fieldSpan := mergeSpan(fieldTok.Span, fieldType.Span())
-		fields = append(fields, ast.NewStructField(fieldName, fieldType, fieldSpan))
-
-		switch p.peekTok.Type {
-		case lexer.COMMA:
-			p.nextToken() // move to ','
-			p.nextToken() // move to next token (field name or '}')
-			if p.curTok.Type == lexer.RBRACE {
-				continue
-			}
-		case lexer.RBRACE:
-			p.nextToken() // consume '}'
-			goto doneStruct
-		default:
-			p.reportError("expected ',' or '}' after struct field", p.peekTok.Span)
-			return nil
-		}
+		return ast.NewStructField(fieldName, fieldType, fieldSpan), true
+	})
+	if !ok {
+		return nil
 	}
 
-doneStruct:
+	fields := fieldRes.Items
+
 	if p.curTok.Type != lexer.RBRACE {
 		p.reportError("expected '}' to close struct declaration", p.curTok.Span)
 		return nil
@@ -477,14 +461,19 @@ func (p *Parser) parseEnumDecl() ast.Decl {
 		return nil
 	}
 
-	variants := make([]*ast.EnumVariant, 0)
-
 	p.nextToken()
 
-	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+	variantRes, ok := parseDelimited[*ast.EnumVariant](p, delimitedConfig{
+		Closing:             lexer.RBRACE,
+		Separator:           lexer.COMMA,
+		AllowEmpty:          true,
+		AllowTrailing:       true,
+		MissingElementMsg:   "expected enum variant name",
+		MissingSeparatorMsg: "expected ',' or '}' after enum variant",
+	}, func(int) (*ast.EnumVariant, bool) {
 		if p.curTok.Type != lexer.IDENT {
 			p.reportError("expected enum variant name", p.curTok.Span)
-			return nil
+			return nil, false
 		}
 
 		variantTok := p.curTok
@@ -497,62 +486,45 @@ func (p *Parser) parseEnumDecl() ast.Decl {
 
 			if p.peekTok.Type == lexer.RPAREN {
 				p.reportError("expected type expression in enum variant payload", p.peekTok.Span)
-				return nil
+				return nil, false
 			}
 
 			p.nextToken() // move to first payload type token
 
-			for {
+			payloadRes, ok := parseDelimited[ast.TypeExpr](p, delimitedConfig{
+				Closing:             lexer.RPAREN,
+				Separator:           lexer.COMMA,
+				MissingElementMsg:   "expected type expression in enum variant payload",
+				MissingSeparatorMsg: "expected ',' or ')' in enum variant payload",
+			}, func(int) (ast.TypeExpr, bool) {
 				if !isTypeStart(p.curTok.Type) {
 					p.reportError("expected type expression in enum variant payload", p.curTok.Span)
-					return nil
+					return nil, false
 				}
 
 				payload := p.parseType()
 				if payload == nil {
-					return nil
-				}
-				payloads = append(payloads, payload)
-
-				if p.peekTok.Type == lexer.COMMA {
-					p.nextToken()
-					p.nextToken()
-					if p.curTok.Type == lexer.RPAREN {
-						p.reportError("expected type expression in enum variant payload", p.curTok.Span)
-						return nil
-					}
-					continue
+					return nil, false
 				}
 
-				break
+				return payload, true
+			})
+			if !ok {
+				return nil, false
 			}
 
-			if !p.expect(lexer.RPAREN) {
-				return nil
-			}
-
+			payloads = payloadRes.Items
 			variantSpan = mergeSpan(variantSpan, p.curTok.Span)
 		}
 
-		variants = append(variants, ast.NewEnumVariant(variantName, payloads, variantSpan))
-
-		switch p.peekTok.Type {
-		case lexer.COMMA:
-			p.nextToken()
-			p.nextToken()
-			if p.curTok.Type == lexer.RBRACE {
-				continue
-			}
-		case lexer.RBRACE:
-			p.nextToken()
-			goto doneEnum
-		default:
-			p.reportError("expected ',' or '}' after enum variant", p.peekTok.Span)
-			return nil
-		}
+		return ast.NewEnumVariant(variantName, payloads, variantSpan), true
+	})
+	if !ok {
+		return nil
 	}
 
-doneEnum:
+	variants := variantRes.Items
+
 	if p.curTok.Type != lexer.RBRACE {
 		p.reportError("expected '}' to close enum declaration", p.curTok.Span)
 		return nil

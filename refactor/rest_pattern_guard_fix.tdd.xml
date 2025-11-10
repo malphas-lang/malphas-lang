@@ -1,0 +1,44 @@
+<refactorPlan name="RestPatternGuardFix" methodology="TDD">
+  <context>
+    <summary>Restore enforcement of rest-pattern placement rules and fix slice rest validation.</summary>
+    <issue>Direct construction of rest nodes bypasses `allowPatternRest`, allowing illegal `..` patterns (e.g. `match value { .. => ... }`). Slice patterns also miss `binding @ ..`, and comma handling rejects `[a,]` with a generic error.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</entrypoint>
+  </context>
+
+  <preconditions>
+    <task>Survey existing pattern tests in `parser_test.go` covering rest usage, slice syntax, and diagnostics.</task>
+    <task>Confirm desired diagnostics with the grammar spec: rest belongs only inside tuple, slice, and struct payloads.</task>
+  </preconditions>
+
+  <red>
+    <test name="RestPatternIllegalOutsideAggregates">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add failing cases asserting `match value { .. => 0 }` and similar trigger the “rest pattern is only allowed…” diagnostic.</action>
+    </test>
+    <test name="SlicePatternRestAndTrailingComma">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce failing table rows for `[head @ .., tail @ ..]` (duplicate rest) and `[item,]` (trailing comma) to capture the target behaviour.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Route the `lexer.DOTDOT` branch through `parsePatternRest`, reuse `isRestPattern` when checking slice elements, and recognise trailing commas before closing brackets.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Update the newly added tests to pass by reflecting the corrected behaviour and targeted diagnostics.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Evaluate other delimited pattern loops (struct payloads, tuple payloads) for similar trailing-comma handling; extract helper if duplicate logic emerges.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>
+

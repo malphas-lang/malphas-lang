@@ -4010,6 +4010,91 @@ fn main() {
 	}
 }
 
+func TestParseDelimitedScenarios(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name    string
+		src     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "fn params trailing comma rejected",
+			src: `
+package foo;
+
+fn main(a: i32,) {}
+`,
+			wantErr: true,
+			errMsg:  "expected parameter name",
+		},
+		{
+			name: "fn params empty list accepted",
+			src: `
+package foo;
+
+fn main() {}
+`,
+			wantErr: false,
+		},
+		{
+			name: "call args trailing comma rejected",
+			src: `
+package foo;
+
+fn main() {
+	println(1,);
+}
+`,
+			wantErr: true,
+		},
+		{
+			name: "struct fields trailing comma accepted",
+			src: `
+package foo;
+
+struct Point {
+	x: i32,
+}
+`,
+			wantErr: false,
+		},
+		{
+			name: "enum variants trailing comma accepted",
+			src: `
+package foo;
+
+enum Option {
+	Some(i32),
+	None,
+}
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errs := parseFile(t, tt.src)
+
+			if tt.wantErr {
+				if len(errs) == 0 {
+					t.Fatalf("expected parse error, got none")
+				}
+				if tt.errMsg != "" && errs[0].Message != tt.errMsg {
+					t.Fatalf("expected first error %q, got %q", tt.errMsg, errs[0].Message)
+				}
+				return
+			}
+
+			if len(errs) > 0 {
+				t.Fatalf("unexpected parse errors: %v", errs)
+			}
+		})
+	}
+}
+
 func TestParseMatchPattern_Valid(t *testing.T) {
 	t.Helper()
 
@@ -4034,12 +4119,14 @@ func TestParseMatchPattern_Valid(t *testing.T) {
 		{name: "tuple struct", pattern: "Point(x, y)", wantType: "*ast.PatternTupleStruct"},
 		{name: "tuple struct rest", pattern: "Color(.., g)", wantType: "*ast.PatternTupleStruct"},
 		{name: "struct", pattern: "Vec { len, .. }", wantType: "*ast.PatternStruct"},
+		{name: "struct trailing comma", pattern: "Vec { len, }", wantType: "*ast.PatternStruct"},
 		{name: "enum tuple", pattern: "Option::Some(value)", wantType: "*ast.PatternEnum"},
 		{name: "enum struct", pattern: "Result::Err { code, .. }", wantType: "*ast.PatternEnum"},
 		{name: "slice", pattern: "[head, .., tail]", wantType: "*ast.PatternSlice"},
 		{name: "slice trailing rest", pattern: "[a, b, ..]", wantType: "*ast.PatternSlice"},
 		{name: "slice binding rest", pattern: "[middle @ ..]", wantType: "*ast.PatternSlice"},
 		{name: "slice rest only", pattern: "[..]", wantType: "*ast.PatternSlice"},
+		{name: "slice trailing comma", pattern: "[item,]", wantType: "*ast.PatternSlice"},
 		{name: "reference", pattern: "&value", wantType: "*ast.PatternReference"},
 		{name: "mut reference", pattern: "&mut value", wantType: "*ast.PatternReference"},
 		{name: "box", pattern: "box inner", wantType: "*ast.PatternBox"},
@@ -4107,6 +4194,175 @@ func TestParseMatchPattern_InvalidExpr(t *testing.T) {
 				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, tc.wantContains, errs[0].Message)
 			}
 		})
+	}
+}
+
+func TestParseMatchPattern_RestPlacementDiagnostics(t *testing.T) {
+	t.Helper()
+
+	cases := []struct {
+		name         string
+		pattern      string
+		wantContains string
+	}{
+		{name: "top level rest", pattern: "..", wantContains: "rest pattern is only allowed inside tuple, slice, or struct patterns"},
+		{name: "binding rest", pattern: "value @ ..", wantContains: "rest pattern is only allowed inside tuple, slice, or struct patterns"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := buildMatchPatternSource(tc.pattern)
+
+			_, errs := parseFile(t, src)
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors for pattern %q", tc.pattern)
+			}
+
+			if !strings.Contains(errs[0].Message, tc.wantContains) {
+				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, tc.wantContains, errs[0].Message)
+			}
+		})
+	}
+}
+
+func TestParseMatchPattern_SliceRestDiagnostics(t *testing.T) {
+	t.Helper()
+
+	cases := []struct {
+		name         string
+		pattern      string
+		wantContains string
+	}{
+		{name: "duplicate binding rest", pattern: "[head @ .., tail @ ..]", wantContains: "multiple rest patterns are not allowed"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := buildMatchPatternSource(tc.pattern)
+
+			_, errs := parseFile(t, src)
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors for pattern %q", tc.pattern)
+			}
+
+			if !strings.Contains(errs[0].Message, tc.wantContains) {
+				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, tc.wantContains, errs[0].Message)
+			}
+		})
+	}
+}
+
+func TestParseMatchPattern_SliceAllowsTrailingComma(t *testing.T) {
+	t.Helper()
+
+	src := buildMatchPatternSource("[item,]")
+
+	_, errs := parseFile(t, src)
+	if len(errs) != 0 {
+		t.Fatalf("expected no parse errors, got %#v", errs)
+	}
+}
+
+func TestParseMatchPattern_StructRejectsDoubleComma(t *testing.T) {
+	t.Helper()
+
+	src := buildMatchPatternSource("Vec { len,, }")
+
+	_, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors, got none")
+	}
+
+	if !strings.Contains(errs[0].Message, "expected field name in struct pattern") {
+		t.Fatalf("expected first diagnostic to mention missing field name, got %q", errs[0].Message)
+	}
+}
+
+func TestPatternRecovery_TupleStopsAtParen(t *testing.T) {
+	t.Helper()
+
+	const src = `
+package foo;
+
+fn main() {
+	let result = match value {
+		(head, ?) => 1,
+		other => 2,
+	};
+}
+`
+
+	file, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors, got none")
+	}
+
+	if len(errs) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d: %#v", len(errs), errs)
+	}
+
+	if got := errs[0].Message; !strings.Contains(got, "expected pattern") {
+		t.Fatalf("expected first diagnostic to mention missing pattern, got %q", got)
+	}
+
+	matchExpr := singleLetMatchExpr(t, file)
+
+	if len(matchExpr.Arms) != 2 {
+		t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+	}
+
+	second := matchExpr.Arms[1]
+	ident, ok := second.Pattern.(*ast.PatternIdent)
+	if !ok {
+		t.Fatalf("expected second arm to use identifier pattern, got %T", second.Pattern)
+	}
+
+	if ident.Name == nil || ident.Name.Name != "other" {
+		t.Fatalf("expected second arm identifier to be %q, got %#v", "other", ident.Name)
+	}
+}
+
+func TestPatternRecovery_SliceStopsAtBracket(t *testing.T) {
+	t.Helper()
+
+	const src = `
+package foo;
+
+fn main() {
+	let result = match value {
+		[head, ?, ..] => 1,
+		other => 2,
+	};
+}
+`
+
+	file, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatalf("expected parse errors, got none")
+	}
+
+	if len(errs) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d: %#v", len(errs), errs)
+	}
+
+	if got := errs[0].Message; !strings.Contains(got, "expected pattern") {
+		t.Fatalf("expected first diagnostic to mention missing pattern, got %q", got)
+	}
+
+	matchExpr := singleLetMatchExpr(t, file)
+
+	if len(matchExpr.Arms) != 2 {
+		t.Fatalf("expected two match arms, got %d", len(matchExpr.Arms))
+	}
+
+	second := matchExpr.Arms[1]
+	ident, ok := second.Pattern.(*ast.PatternIdent)
+	if !ok {
+		t.Fatalf("expected second arm to use identifier pattern, got %T", second.Pattern)
+	}
+
+	if ident.Name == nil || ident.Name.Name != "other" {
+		t.Fatalf("expected second arm identifier to be %q, got %#v", "other", ident.Name)
 	}
 }
 

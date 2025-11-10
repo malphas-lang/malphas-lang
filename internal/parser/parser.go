@@ -294,33 +294,27 @@ func (p *Parser) parseNamedOrGenericType() ast.TypeExpr {
 		return nil
 	}
 
-	args := make([]ast.TypeExpr, 0)
-
 	p.nextToken()
-	arg := p.parseType()
-	if arg == nil {
-		return nil
-	}
-	args = append(args, arg)
 
-	for p.peekTok.Type == lexer.COMMA {
-		p.nextToken() // move to ','
-		p.nextToken() // move to next argument start
-
-		arg = p.parseType()
+	argRes, ok := parseDelimited[ast.TypeExpr](p, delimitedConfig{
+		Closing:             lexer.RBRACKET,
+		Separator:           lexer.COMMA,
+		MissingElementMsg:   "expected type expression in generic argument list",
+		MissingSeparatorMsg: "expected ',' or ']' in generic argument list",
+	}, func(int) (ast.TypeExpr, bool) {
+		arg := p.parseType()
 		if arg == nil {
-			return nil
+			return nil, false
 		}
-		args = append(args, arg)
-	}
-
-	if !p.expect(lexer.RBRACKET) {
+		return arg, true
+	})
+	if !ok {
 		return nil
 	}
 
 	span := mergeSpan(named.Span(), p.curTok.Span)
 
-	return ast.NewGenericType(named, args, span)
+	return ast.NewGenericType(named, argRes.Items, span)
 }
 
 func (p *Parser) parseFunctionType() ast.TypeExpr {
@@ -335,26 +329,23 @@ func (p *Parser) parseFunctionType() ast.TypeExpr {
 	if p.peekTok.Type != lexer.RPAREN {
 		p.nextToken()
 
-		param := p.parseType()
-		if param == nil {
-			return nil
-		}
-		params = append(params, param)
-
-		for p.peekTok.Type == lexer.COMMA {
-			p.nextToken() // move to ','
-			p.nextToken() // move to next parameter start
-
-			param = p.parseType()
+		paramRes, ok := parseDelimited[ast.TypeExpr](p, delimitedConfig{
+			Closing:             lexer.RPAREN,
+			Separator:           lexer.COMMA,
+			MissingElementMsg:   "expected type expression",
+			MissingSeparatorMsg: "expected ',' or ')' in function type",
+		}, func(int) (ast.TypeExpr, bool) {
+			param := p.parseType()
 			if param == nil {
-				return nil
+				return nil, false
 			}
-			params = append(params, param)
-		}
-
-		if !p.expect(lexer.RPAREN) {
+			return param, true
+		})
+		if !ok {
 			return nil
 		}
+
+		params = paramRes.Items
 	} else {
 		if !p.expect(lexer.RPAREN) {
 			return nil
