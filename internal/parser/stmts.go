@@ -5,20 +5,25 @@ import (
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
 )
 
-func (p *Parser) parseStmt() ast.Stmt {
+type stmtResult struct {
+	stmt ast.Stmt
+	tail ast.Expr
+}
+
+func (p *Parser) parseStmtResult(allowTail bool) stmtResult {
 	switch p.curTok.Type {
 	case lexer.LET:
-		return p.parseLetStmt()
+		return stmtResult{stmt: p.parseLetStmt()}
 	case lexer.RETURN:
-		return p.parseReturnStmt()
+		return stmtResult{stmt: p.parseReturnStmt()}
 	case lexer.IF:
-		return p.parseIfStmt()
+		return p.parseIfStmt(allowTail)
 	case lexer.WHILE:
-		return p.parseWhileStmt()
+		return stmtResult{stmt: p.parseWhileStmt()}
 	case lexer.FOR:
-		return p.parseForStmt()
+		return stmtResult{stmt: p.parseForStmt()}
 	default:
-		return p.parseExprStmt()
+		return p.parseExprStmt(allowTail)
 	}
 }
 
@@ -121,16 +126,16 @@ func (p *Parser) parseReturnStmt() ast.Stmt {
 	return stmt
 }
 
-func (p *Parser) parseExprStmt() ast.Stmt {
+func (p *Parser) parseExprStmt(allowTail bool) stmtResult {
 	expr := p.parseExpr()
 	if expr == nil {
-		return nil
+		return stmtResult{}
 	}
 
 	switch p.peekTok.Type {
 	case lexer.SEMICOLON:
 		if !p.expect(lexer.SEMICOLON) {
-			return nil
+			return stmtResult{}
 		}
 
 		span := mergeSpan(expr.Span(), p.curTok.Span)
@@ -138,41 +143,39 @@ func (p *Parser) parseExprStmt() ast.Stmt {
 
 		p.nextToken()
 
-		return stmt
+		return stmtResult{stmt: stmt}
 	case lexer.RBRACE:
-		if p.allowBlockTail {
-			p.pendingTail = expr
-			return nil
+		if allowTail {
+			return stmtResult{tail: expr}
 		}
 		fallthrough
 	default:
 		p.reportError("expected ';' after expression", p.peekTok.Span)
-		return nil
+		return stmtResult{}
 	}
 }
 
-func (p *Parser) parseIfStmt() ast.Stmt {
+func (p *Parser) parseIfStmt(allowTail bool) stmtResult {
 	expr := p.parseIfExpr()
 	if expr == nil {
-		return nil
+		return stmtResult{}
 	}
 
 	ifExpr, ok := expr.(*ast.IfExpr)
 	if !ok {
 		p.reportError("expected if expression", expr.Span())
-		return nil
+		return stmtResult{}
 	}
 
-	if p.allowBlockTail && ifExpr.Else != nil && p.curTok.Type == lexer.RBRACE && p.peekTok.Type == lexer.RBRACE {
-		p.pendingTail = ifExpr
-		return nil
+	if allowTail && ifExpr.Else != nil && p.curTok.Type == lexer.RBRACE && p.peekTok.Type == lexer.RBRACE {
+		return stmtResult{tail: ifExpr}
 	}
 
 	if p.curTok.Type == lexer.RBRACE {
 		p.nextToken()
 	}
 
-	return ast.NewIfStmt(ifExpr.Clauses, ifExpr.Else, ifExpr.Span())
+	return stmtResult{stmt: ast.NewIfStmt(ifExpr.Clauses, ifExpr.Else, ifExpr.Span())}
 }
 
 func (p *Parser) parseWhileStmt() ast.Stmt {

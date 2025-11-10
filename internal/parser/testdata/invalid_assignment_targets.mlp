@@ -1,9 +1,14 @@
 package invalid;
 
 fn main() {
-    foo() = 1;
-    42 = foo;
-    (a + b) = c;
-    "str" = baz;
+    foo() = 1;            // function call target
+    42 = foo;             // literal target
+    (foo()) = 1;          // grouped expression wrapping a call
+    match x {
+        _ => 1,
+    } = y;                // match expression target
+    foo().bar = 1;        // field access on call result
+    "str".len = 1;        // field access on literal
+    foo()[0] = 1;         // index access on call result
 }
 

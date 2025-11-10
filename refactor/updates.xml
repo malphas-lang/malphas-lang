@@ -1,0 +1,26 @@
+<refactorSummary name="PatternPrattRemovalCleanup" branch="feat/parser-refactor" date="2025-11-10">
+  <completedWork>
+    <item>Confirmed parser no longer exposes pattern Pratt tables; red-phase tests already green.</item>
+    <item>Updated docs (`docs/patterns.md`) to document recursive pattern ownership and absence of Pratt maps.</item>
+    <item>Recorded validation run (`go test ./internal/parser/...`, `go test ./...`) in `refactor/pattern_pratt_removal/log.md`.</item>
+    <item>Pruned obsolete TDD guides tied to the old Pratt implementation (`context.tdd.xml`, `preconditions.tdd.xml`, `red_phase.tdd.xml`, `green_phase.tdd.xml`, `staging_plan.tdd.xml`, and the top-level index).</item>
+  </completedWork>
+  <currentArtifacts>
+    <document path="refactor/pattern_pratt_removal/refactor_validation.tdd.xml" status="retained" />
+    <document path="docs/patterns.md" status="updated" />
+    <document path="refactor/pattern_pratt_removal/log.md" status="updated" />
+  </currentArtifacts>
+  <remainingPlans>
+    <plan file="refactor/block_tail_control_flow.tdd.xml" status="open" />
+    <plan file="refactor/delimited_list_helper.tdd.xml" status="open" />
+    <plan file="refactor/diagnostics_consistency_audit.tdd.xml" status="open" />
+    <plan file="refactor/pattern_diagnostics.tdd.xml" status="open" />
+    <plan file="refactor/pattern_expr_placeholder_removal.tdd.xml" status="open" />
+    <plan file="refactor/pattern_grammar_guardrails.tdd.xml" status="open" />
+    <plan file="refactor/pinned/MatchPatternParser.xml" status="open" />
+  </remainingPlans>
+  <nextSteps>
+    <item>Choose the next active plan (e.g., block-tail control flow or diagnostics) and re-enter the red phase with failing tests logged in that plan.</item>
+    <item>Continue documenting progress in `refactor/pattern_pratt_removal/log.md` or the relevant plan log.</item>
+  </nextSteps>
+</refactorSummary>

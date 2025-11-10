@@ -82,6 +82,7 @@ func (p *Parser) parsePrefixExpr() ast.Expr {
 	}
 
 	span := mergeSpan(operatorTok.Span, right.Span())
+	span = p.spanWithFilename(span)
 
 	return ast.NewPrefixExpr(operatorTok.Type, right, span)
 }
@@ -112,6 +113,7 @@ func (p *Parser) parseGroupedExpr() ast.Expr {
 
 	span := mergeSpan(start, expr.Span())
 	span = mergeSpan(span, p.curTok.Span)
+	span = p.spanWithFilename(span)
 
 	if setter, ok := expr.(spanSetter); ok {
 		setter.SetSpan(span)
@@ -151,9 +153,11 @@ func (p *Parser) parseIfExpr() ast.Expr {
 
 		clauseSpan := mergeSpan(clauseStart, condition.Span())
 		clauseSpan = mergeSpan(clauseSpan, body.Span())
+		clauseSpan = p.spanWithFilename(clauseSpan)
 		clauses = append(clauses, ast.NewIfClause(condition, body, clauseSpan))
 
 		exprSpan = mergeSpan(exprSpan, clauseSpan)
+		exprSpan = p.spanWithFilename(exprSpan)
 
 		if p.peekTok.Type != lexer.ELSE {
 			break
@@ -161,6 +165,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 
 		p.nextToken()
 		exprSpan = mergeSpan(exprSpan, p.curTok.Span)
+		exprSpan = p.spanWithFilename(exprSpan)
 
 		if p.peekTok.Type == lexer.IF {
 			p.nextToken()
@@ -177,6 +182,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 		}
 
 		exprSpan = mergeSpan(exprSpan, elseBlock.Span())
+		exprSpan = p.spanWithFilename(exprSpan)
 
 		return ast.NewIfExpr(clauses, elseBlock, exprSpan)
 	}
@@ -186,6 +192,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 		return nil
 	}
 
+	exprSpan = p.spanWithFilename(exprSpan)
 	return ast.NewIfExpr(clauses, nil, exprSpan)
 }
 
@@ -208,6 +215,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 
 	exprSpan := mergeSpan(start, subject.Span())
 	exprSpan = mergeSpan(exprSpan, openSpan)
+	exprSpan = p.spanWithFilename(exprSpan)
 
 	var arms []*ast.MatchArm
 
@@ -298,8 +306,10 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 		}
 		armSpan = mergeSpan(armSpan, arrowTok.Span)
 		armSpan = mergeSpan(armSpan, body.Span())
+		armSpan = p.spanWithFilename(armSpan)
 		arms = append(arms, ast.NewMatchArm(pattern, guard, body, armSpan))
 		exprSpan = mergeSpan(exprSpan, armSpan)
+		exprSpan = p.spanWithFilename(exprSpan)
 
 		switch p.curTok.Type {
 		case lexer.COMMA:
@@ -326,6 +336,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 	}
 
 	exprSpan = mergeSpan(exprSpan, p.curTok.Span)
+	exprSpan = p.spanWithFilename(exprSpan)
 
 	return ast.NewMatchExpr(subject, arms, exprSpan)
 }
@@ -343,14 +354,19 @@ func (p *Parser) parseInfixExpr(left ast.Expr) ast.Expr {
 
 	span := mergeSpan(left.Span(), operatorTok.Span)
 	span = mergeSpan(span, right.Span())
+	span = p.spanWithFilename(span)
 
 	return ast.NewInfixExpr(operatorTok.Type, left, right, span)
 }
 
 func isAssignableTarget(expr ast.Expr) bool {
-	switch expr.(type) {
-	case *ast.Ident, *ast.FieldExpr, *ast.IndexExpr:
+	switch e := expr.(type) {
+	case *ast.Ident:
 		return true
+	case *ast.FieldExpr:
+		return isAssignableTarget(e.Target)
+	case *ast.IndexExpr:
+		return isAssignableTarget(e.Target)
 	default:
 		return false
 	}
@@ -360,6 +376,11 @@ func (p *Parser) parseAssignExpr(target ast.Expr) ast.Expr {
 	assignTok := p.curTok
 
 	p.nextToken()
+
+	validTarget := isAssignableTarget(target)
+	if !validTarget {
+		p.reportError("invalid assignment target", target.Span())
+	}
 
 	nextPrec := precedenceAssign - 1
 	if nextPrec < precedenceLowest {
@@ -371,13 +392,13 @@ func (p *Parser) parseAssignExpr(target ast.Expr) ast.Expr {
 		return nil
 	}
 
-	if !isAssignableTarget(target) {
-		p.reportError("invalid assignment target", target.Span())
+	if !validTarget {
 		return nil
 	}
 
 	span := mergeSpan(target.Span(), assignTok.Span)
 	span = mergeSpan(span, right.Span())
+	span = p.spanWithFilename(span)
 
 	return ast.NewAssignExpr(target, right, span)
 }
@@ -414,6 +435,7 @@ func (p *Parser) parseCallExpr(callee ast.Expr) ast.Expr {
 
 	span := mergeSpan(callee.Span(), openTok.Span)
 	span = mergeSpan(span, p.curTok.Span)
+	span = p.spanWithFilename(span)
 
 	return ast.NewCallExpr(callee, args, span)
 }
@@ -430,6 +452,7 @@ func (p *Parser) parseFieldExpr(target ast.Expr) ast.Expr {
 
 	span := mergeSpan(target.Span(), dotTok.Span)
 	span = mergeSpan(span, fieldTok.Span)
+	span = p.spanWithFilename(span)
 
 	return ast.NewFieldExpr(target, field, span)
 }
@@ -451,6 +474,7 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 	span := mergeSpan(target.Span(), openTok.Span)
 	span = mergeSpan(span, index.Span())
 	span = mergeSpan(span, p.curTok.Span)
+	span = p.spanWithFilename(span)
 
 	return ast.NewIndexExpr(target, index, span)
 }

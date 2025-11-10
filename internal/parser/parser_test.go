@@ -2060,6 +2060,94 @@ package;
 	}
 }
 
+func TestDiagnosticsIncludeFilename(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	match x {
+		1 => 10
+		2 => 20
+	}
+}
+`
+
+	_, errs := parseFileWithFilename(t, src, "example.mlp")
+	if len(errs) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+
+	for i, err := range errs {
+		if err.Span.Filename != "example.mlp" {
+			t.Fatalf("diagnostic %d missing filename: %#v", i, err)
+		}
+	}
+}
+
+func TestDiagnosticsIncludeFilename_PatternGuard(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	match value {
+		1 | 2 if cond => 0
+		_ => {
+			x = 1
+		}
+	}
+}
+`
+
+	_, errs := parseFileWithFilename(t, src, "sample.mlp")
+	if len(errs) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+
+	for i, err := range errs {
+		if err.Span.Filename != "sample.mlp" {
+			t.Fatalf("diagnostic %d missing filename: %#v", i, err)
+		}
+	}
+}
+
+func TestDiagnosticsOrderStable(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	match value {
+		1 | 2 if cond => 0
+		_ => {
+			x = 1
+		}
+	}
+}
+`
+
+	_, errs := parseFileWithFilename(t, src, "ordered.mlp")
+	want := []string{
+		"pattern guard on alternation requires parentheses",
+		"expected ',' or '}' after match arm",
+		"unexpected top-level token }",
+	}
+
+	if len(errs) != len(want) {
+		t.Fatalf("expected %d diagnostics, got %d: %#v", len(want), len(errs), errs)
+	}
+
+	for i, wantMsg := range want {
+		if errs[i].Message != wantMsg {
+			t.Fatalf("diagnostic %d: expected message %q, got %q", i, wantMsg, errs[i].Message)
+		}
+		if errs[i].Span.Filename != "ordered.mlp" {
+			t.Fatalf("diagnostic %d missing filename: %#v", i, errs[i])
+		}
+		if i > 0 && errs[i-1].Span.Start > errs[i].Span.Start {
+			t.Fatalf("diagnostics out of order: span[%d]=%v, span[%d]=%v", i-1, errs[i-1].Span, i, errs[i].Span)
+		}
+	}
+}
+
 func TestParseLetStmtWithCallExpr(t *testing.T) {
 	const src = `
 package foo;
@@ -2359,33 +2447,42 @@ fn main() {
 }
 
 func TestParseInvalidAssignmentTargets(t *testing.T) {
+	t.Helper()
+
 	src := readTestdataFile(t, "invalid_assignment_targets.mlp")
+
+	cases := []struct {
+		name string
+		line int
+	}{
+		{name: "call expression", line: 4},
+		{name: "literal expression", line: 5},
+		{name: "grouped expression", line: 6},
+		{name: "match expression", line: 7},
+		{name: "field access on call", line: 10},
+		{name: "field access on literal", line: 11},
+		{name: "index access on call", line: 12},
+	}
 
 	_, errs := parseFile(t, src)
 
-	if len(errs) != 4 {
-		t.Fatalf("expected 4 diagnostics, got %d (%#v)", len(errs), errs)
+	if len(errs) != len(cases) {
+		t.Fatalf("expected %d diagnostics, got %d (%#v)", len(cases), len(errs), errs)
 	}
 
-	wantMessages := []string{
-		"invalid assignment target",
-		"invalid assignment target",
-		"invalid assignment target",
-		"invalid assignment target",
-	}
-	wantLines := []int{4, 5, 6, 7}
+	for i, tc := range cases {
+		err := errs[i]
 
-	for i := range wantMessages {
-		if errs[i].Message != wantMessages[i] {
-			t.Fatalf("diagnostic %d: expected message %q, got %q", i, wantMessages[i], errs[i].Message)
+		if err.Message != "invalid assignment target" {
+			t.Fatalf("diagnostic %d (%s): expected message %q, got %q", i, tc.name, "invalid assignment target", err.Message)
 		}
 
-		if errs[i].Severity != diag.SeverityError {
-			t.Fatalf("diagnostic %d: expected severity %q, got %q", i, diag.SeverityError, errs[i].Severity)
+		if err.Severity != diag.SeverityError {
+			t.Fatalf("diagnostic %d (%s): expected severity %q, got %q", i, tc.name, diag.SeverityError, err.Severity)
 		}
 
-		if errs[i].Span.Line != wantLines[i] {
-			t.Fatalf("diagnostic %d: expected line %d, got %d", i, wantLines[i], errs[i].Span.Line)
+		if err.Span.Line != tc.line {
+			t.Fatalf("diagnostic %d (%s): expected line %d, got %d", i, tc.name, tc.line, err.Span.Line)
 		}
 	}
 }
@@ -2534,6 +2631,49 @@ func TestParseBlockTailExpressions(t *testing.T) {
 
 		if _, ok := innerBlock.Tail.(*ast.InfixExpr); !ok {
 			t.Fatalf("expected inner tail expression type *ast.InfixExpr, got %T", innerBlock.Tail)
+		}
+	})
+
+	t.Run("if expression tail expr", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn foo() -> i32 {
+		if true {
+			1
+		} else {
+			2
+		}
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		if len(file.Decls) != 1 {
+			t.Fatalf("expected single function declaration, got %d", len(file.Decls))
+		}
+
+		fn, ok := file.Decls[0].(*ast.FnDecl)
+		if !ok {
+			t.Fatalf("expected decl type *ast.FnDecl, got %T", file.Decls[0])
+		}
+
+		if fn.Body == nil {
+			t.Fatalf("expected function body to be populated")
+		}
+
+		if fn.Body.Tail == nil {
+			t.Fatalf("expected block tail expression, got nil")
+		}
+
+		ifExpr, ok := fn.Body.Tail.(*ast.IfExpr)
+		if !ok {
+			t.Fatalf("expected tail expression type *ast.IfExpr, got %T", fn.Body.Tail)
+		}
+
+		if ifExpr.Else == nil {
+			t.Fatalf("expected if expression tail to include else branch")
 		}
 	})
 
@@ -2990,6 +3130,149 @@ func TestParseBlockTailExpressions(t *testing.T) {
 			t.Fatalf("expected second match arm tail expression type *ast.Ident, got %T", secondArm.Body.Tail)
 		}
 	})
+}
+
+func TestPendingTailInvariant(t *testing.T) {
+	t.Helper()
+
+	cases := []struct {
+		name       string
+		src        string
+		wantErrors bool
+	}{
+		{
+			name: "function tail if expression",
+			src: `
+package foo;
+
+fn main() -> i32 {
+	if true {
+		1
+	} else {
+		2
+	}
+}
+`,
+		},
+		{
+			name: "nested block tail in let binding",
+			src: `
+package foo;
+
+fn main() {
+	let value = {
+		let inner = 10;
+		inner + 1
+	};
+}
+`,
+		},
+		{
+			name: "match arm block tail with trailing comma",
+			src: `
+package foo;
+
+fn main() -> i32 {
+	match 0 {
+		0 => {
+			let x = 1;
+			x + 1
+		},
+		_ => 0,
+	}
+}
+`,
+		},
+		{
+			name: "error after tail expression triggers recovery",
+			src: `
+package foo;
+
+fn main() {
+	{
+		42
+	}
+	let x = 1
+}
+`,
+			wantErrors: true,
+		},
+		{
+			name: "multiple tail expressions emit diagnostic",
+			src: `
+package foo;
+
+fn main() {
+	{
+		1
+		2
+	}
+}
+`,
+			wantErrors: true,
+		},
+		{
+			name: "unterminated else block leaves parser mid-tail",
+			src: `
+package foo;
+
+fn main() {
+	if true {
+		1
+	} else {
+		2
+`,
+			wantErrors: true,
+		},
+		{
+			name: "missing closing brace after block tail",
+			src: `
+package foo;
+
+fn main() {
+	let value = {
+		40 + 2
+	}
+`,
+			wantErrors: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Helper()
+
+			p := parser.New(tc.src)
+			_ = p.ParseFile()
+
+			errs := p.Errors()
+			if tc.wantErrors {
+				if len(errs) == 0 {
+					t.Fatalf("expected parse errors, got none")
+				}
+			} else {
+				if len(errs) > 0 {
+					t.Fatalf("unexpected parse errors: %#v", errs)
+				}
+			}
+
+			state := parserPendingTail(p)
+			if state.hasPendingTailField {
+				t.Fatalf("expected parser to have no pendingTail field, but field was present")
+			}
+			if state.hasAllowBlockTailField {
+				t.Fatalf("expected parser to have no allowBlockTail field, but field was present")
+			}
+			if !state.isNil {
+				t.Fatalf("expected parser pendingTail to be nil after parsing, got %s", state.exprType)
+			}
+
+			if state.allowBlockTail {
+				t.Fatalf("expected parser allowBlockTail to be false after parsing")
+			}
+		})
+	}
 }
 
 func TestParserRecoveryWithinBlock(t *testing.T) {
@@ -4100,4 +4383,41 @@ func parserPatternMapState(p *parser.Parser, name string) (parserPatternTableSta
 	}
 
 	return parserPatternTableState{count: field.Len()}, true
+}
+
+type parserPendingTailState struct {
+	hasPendingTailField    bool
+	hasAllowBlockTailField bool
+	isNil                  bool
+	exprType               string
+	allowBlockTail         bool
+}
+
+func parserPendingTail(p *parser.Parser) parserPendingTailState {
+	val := reflect.ValueOf(p).Elem()
+	field := val.FieldByName("pendingTail")
+	if !field.IsValid() {
+		return parserPendingTailState{isNil: true}
+	}
+
+	field = reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+
+	state := parserPendingTailState{
+		hasPendingTailField: true,
+		isNil:               field.IsNil(),
+	}
+
+	if !state.isNil {
+		if expr, ok := field.Interface().(ast.Expr); ok {
+			state.exprType = fmt.Sprintf("%T", expr)
+		}
+	}
+
+	if allowField := val.FieldByName("allowBlockTail"); allowField.IsValid() {
+		state.hasAllowBlockTailField = true
+		allowField = reflect.NewAt(allowField.Type(), unsafe.Pointer(allowField.UnsafeAddr())).Elem()
+		state.allowBlockTail = allowField.Bool()
+	}
+
+	return state
 }

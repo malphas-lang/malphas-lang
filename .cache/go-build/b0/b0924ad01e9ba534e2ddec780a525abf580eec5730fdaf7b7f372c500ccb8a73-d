@@ -1,0 +1,10 @@
+# test log
+open testdata/type_annotations.mlp
+open testdata/type_annotations.golden
+open testdata/decls_suite.mlp
+open testdata/decls_suite.golden
+open testdata/control_flow_suite.mlp
+open testdata/control_flow_suite.golden
+open testdata/trait_methods_suite.mlp
+open testdata/trait_methods_suite.golden
+open testdata/invalid_assignment_targets.mlp

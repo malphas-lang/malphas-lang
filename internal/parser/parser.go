@@ -91,9 +91,6 @@ type Parser struct {
 	prefixFns map[lexer.TokenType]prefixParseFn
 	infixFns  map[lexer.TokenType]infixParseFn
 
-	pendingTail    ast.Expr
-	allowBlockTail bool
-
 	allowPatternRest bool
 }
 
@@ -233,15 +230,19 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 // assertions like TestParseLetStmtWithPrefixExprErrors can validate message and
 // span fidelity.
 func (p *Parser) emitParseDiagnostic(msg string, span lexer.Span, severity diag.Severity) {
-	if span.Filename == "" && p.filename != "" {
-		span.Filename = p.filename
-	}
-
+	span = p.spanWithFilename(span)
 	p.errors = append(p.errors, ParseError{
 		Message:  msg,
 		Span:     span,
 		Severity: severity,
 	})
+}
+
+func (p *Parser) spanWithFilename(span lexer.Span) lexer.Span {
+	if span.Filename == "" && p.filename != "" {
+		span.Filename = p.filename
+	}
+	return span
 }
 
 func (p *Parser) reportError(msg string, span lexer.Span) {
@@ -390,19 +391,18 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 
 	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
 		prevTok := p.curTok
-		stmt := p.parseStmt()
-		if stmt != nil {
-			block.Stmts = append(block.Stmts, stmt)
+		result := p.parseStmtResult(true)
+		if result.stmt != nil {
+			block.Stmts = append(block.Stmts, result.stmt)
 			continue
 		}
 
-		if p.allowBlockTail && p.pendingTail != nil {
+		if result.tail != nil {
 			if block.Tail != nil {
 				p.reportError("unexpected expression after block tail", p.curTok.Span)
 			} else {
-				block.Tail = p.pendingTail
+				block.Tail = result.tail
 			}
-			p.pendingTail = nil
 
 			if p.peekTok.Type != lexer.RBRACE {
 				p.reportError("expected '}' after block tail expression", p.peekTok.Span)
@@ -432,17 +432,6 @@ func (p *Parser) parseBlockExpr() *ast.BlockExpr {
 }
 
 func (p *Parser) withBlockTail(parse func() *ast.BlockExpr) *ast.BlockExpr {
-	prevAllow := p.allowBlockTail
-	prevTail := p.pendingTail
-
-	p.allowBlockTail = true
-	p.pendingTail = nil
-
-	defer func() {
-		p.pendingTail = prevTail
-		p.allowBlockTail = prevAllow
-	}()
-
 	return parse()
 }
 
@@ -502,6 +491,16 @@ func (p *Parser) recoverDecl(prev lexer.Token) {
 // earliest start span first to preserve monotonic growth for AST nodes.
 func mergeSpan(start, end lexer.Span) lexer.Span {
 	span := start
+
+	if span.Filename == "" {
+		span.Filename = end.Filename
+	}
+
+	if span.Line == 0 && end.Line != 0 {
+		span.Line = end.Line
+		span.Column = end.Column
+		span.Start = end.Start
+	}
 
 	if end.End > span.End {
 		span.End = end.End
