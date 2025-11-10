@@ -1,0 +1,44 @@
+<refactorPlan name="AssignmentTargetValidation" methodology="TDD">
+  <context>
+    <summary>Prevent `AssignExpr` nodes from accepting non-assignable left-hand sides.</summary>
+    <issue>Calls, literals, and grouped expressions currently slip through to `parseAssignExpr`, leading to invalid AST and missing diagnostics.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+  </context>
+
+  <preconditions>
+    <task>Snapshot current behavior by running `go test ./internal/parser/...`.</task>
+    <task>Document all existing assignment-related fixtures in `internal/parser/testdata`.</task>
+  </preconditions>
+
+  <red>
+    <test name="InvalidAssignmentTargets">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a table-driven regression referencing a new fixture (`invalid_assignment_targets.mlp`) that covers literals, function calls, grouped expressions, and match arms.</action>
+    </test>
+    <test name="InvalidAssignmentTargets Fixture">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/testdata/invalid_assignment_targets.mlp</file>
+      <action>Create the fixture with comments describing each invalid case; commit alongside the failing test.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/exprs.go</file>
+      <action>Harden `parseAssignExpr` by checking `isAssignableTarget` before descending, emitting an error diagnostic with `diag.SeverityError` when invalid.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/exprs.go</file>
+      <action>Extend `isAssignableTarget` to cover any additional AST nodes (e.g., destructuring) needed for positive paths.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Review other call sites constructing `AssignExpr` to ensure they rely on the helper and share diagnostics.</task>
+    <task>Update relevant documentation or inline comments describing assignment validation.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

@@ -1,0 +1,44 @@
+<refactorPlan name="DiagnosticsConsistencyAudit" methodology="TDD">
+  <context>
+    <summary>Ensure parser diagnostics consistently include filenames and follow a predictable order.</summary>
+    <issue>Certain error paths omit filename propagation or rely on implicit defaults, causing inconsistent reporting in editor integrations.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+  </context>
+
+  <preconditions>
+    <task>Enumerate diagnostics emitted in `parser_test.go`, noting which lack filename coverage.</task>
+    <task>Set up baseline results by running `go test ./internal/parser/...` with and without `WithFilename`.</task>
+  </preconditions>
+
+  <red>
+    <test name="DiagnosticsIncludeFilename">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add failing tests asserting that spans include filenames whenever the parser is constructed with `WithFilename`.</action>
+    </test>
+    <test name="DiagnosticsOrderStable">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce tests capturing diagnostic order for representative negative cases to lock the ordering contract.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser.go</file>
+      <action>Audit and update emission sites to ensure they call a central helper that attaches filenames.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/exprs.go</file>
+      <action>Fix any spans lacking filename propagation in expression or pattern parsing paths highlighted by the tests.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Document diagnostic guarantees in `docs/parser/diagnostics.md` (create if absent).</task>
+    <task>Update tooling or integration tests that consume diagnostics to align with the new guarantees.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

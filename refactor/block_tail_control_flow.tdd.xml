@@ -1,0 +1,44 @@
+<refactorPlan name="BlockTailControlFlow" methodology="TDD">
+  <context>
+    <summary>Clarify and harden the `pendingTail` handshake used to manage block tail expressions.</summary>
+    <issue>The current implicit `pendingTail` contract makes it easy to forget to consume or reset tail expressions, leading to nil dereferences and unreadable code paths.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+  </context>
+
+  <preconditions>
+    <task>List scenarios in `parser_test.go` that exercise tail expressions (nested `if`, `match`, loops).</task>
+    <task>Capture current spans emitted for tail expressions to compare after the refactor.</task>
+  </preconditions>
+
+  <red>
+    <test name="BlockTailCoverage">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add focused unit tests covering nested blocks, multiple tail expressions, and error recovery paths to lock in current behavior.</action>
+    </test>
+    <test name="PendingTailInvariant">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce a failing test that asserts tail expressions are always consumed exactly once (e.g., via helper that inspects parser state after parsing).</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser.go</file>
+      <action>Introduce a dedicated result type (e.g., `stmtResult`) encapsulating either a statement or a tail expression, replacing the implicit `pendingTail` contract.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/exprs.go</file>
+      <action>Adopt the new result type in statement parsing paths (`parseBlockExpr`, `withBlockTail`, etc.), ensuring tests drive each migration.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Remove any remaining `pendingTail` fields once all callers rely on the explicit result type.</task>
+    <task>Document the new control-flow model in `docs/parser/block_tail.md` (or update existing documentation).</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

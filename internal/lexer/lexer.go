@@ -3,6 +3,7 @@ package lexer
 import (
 	"strconv"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/malphas-lang/malphas-lang/internal/diag"
 )
@@ -495,13 +496,7 @@ func (l *Lexer) NextToken() Token {
 
 			raw := string(l.ch)
 			l.read()
-			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
-			l.addError(
-				ErrIllegalRune,
-				"illegal character "+strconv.Quote(raw),
-				tok.Span,
-			)
-			return tok
+			return l.makeToken(AMPERSAND, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '|':
 			startLine, startColumn, startPos := l.currentSpanStart()
@@ -515,13 +510,7 @@ func (l *Lexer) NextToken() Token {
 
 			raw := string(l.ch)
 			l.read()
-			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
-			l.addError(
-				ErrIllegalRune,
-				"illegal character "+strconv.Quote(raw),
-				tok.Span,
-			)
-			return tok
+			return l.makeToken(PIPE, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '<':
 			startLine, startColumn, startPos := l.currentSpanStart()
@@ -565,15 +554,43 @@ func (l *Lexer) NextToken() Token {
 
 		case ':':
 			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == ':' {
+				l.read() // consume first ':'
+				raw := "::"
+				l.read() // consume second ':'
+				return l.makeToken(DOUBLECOLON, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
 			raw := string(l.ch)
 			l.read()
 			return l.makeToken(COLON, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '.':
 			startLine, startColumn, startPos := l.currentSpanStart()
+			switch l.peek() {
+			case '.':
+				l.read() // consume first '.'
+				if l.peek() == '=' {
+					l.read() // consume second '.'
+					raw := "..="
+					l.read() // consume '='
+					return l.makeToken(DOTDOTEQ, startLine, startColumn, startPos, l.pos, raw, raw)
+				}
+
+				raw := ".."
+				l.read() // consume second '.'
+				return l.makeToken(DOTDOT, startLine, startColumn, startPos, l.pos, raw, raw)
+			default:
+				raw := string(l.ch)
+				l.read()
+				return l.makeToken(DOT, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+
+		case '@':
+			startLine, startColumn, startPos := l.currentSpanStart()
 			raw := string(l.ch)
 			l.read()
-			return l.makeToken(DOT, startLine, startColumn, startPos, l.pos, raw, raw)
+			return l.makeToken(AT, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '"':
 			startLine, startColumn, startPos := l.currentSpanStart()
@@ -582,6 +599,23 @@ func (l *Lexer) NextToken() Token {
 				return l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
 			}
 			return l.makeToken(STRING, startLine, startColumn, startPos, l.pos, raw, value)
+
+		case '\'':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw, value, terminated := l.readString(startLine, startColumn, startPos, '\'')
+			if !terminated {
+				return l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
+			if utf8.RuneCountInString(value) != 1 {
+				span := Span{Line: startLine, Column: startColumn, Start: startPos, End: l.pos}
+				l.addError(
+					ErrIllegalRune,
+					"character literal must contain exactly one code point",
+					span,
+				)
+				return l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, value)
+			}
+			return l.makeToken(CHAR, startLine, startColumn, startPos, l.pos, raw, value)
 
 		case '(':
 			startLine, startColumn, startPos := l.currentSpanStart()

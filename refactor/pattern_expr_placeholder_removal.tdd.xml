@@ -1,0 +1,45 @@
+<refactorPlan name="PatternExprPlaceholderRemoval" methodology="TDD">
+  <context>
+    <summary>Eliminate `PatternExprPlaceholder` so all match patterns are produced by the Rust-aligned grammar.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <issue>Some code paths still wrap expressions in `PatternExprPlaceholder`, leaking expression ASTs into pattern positions and hiding unsupported syntax.</issue>
+    <goal>Ensure every pattern node is emitted by the dedicated parser and delete the placeholder type once tests pass.</goal>
+  </context>
+
+  <preconditions>
+    <task>Search for all references to `PatternExprPlaceholder` and document why each exists.</task>
+    <task>Confirm coverage for every supported pattern kind (from `docs/patterns.md`).</task>
+  </preconditions>
+
+  <red>
+    <test name="PatternPlaceholder_Rejection">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing regression ensuring that patterns previously parsed via expression fallbacks now emit explicit diagnostics instead of placeholders.</action>
+    </test>
+    <test name="PatternPlaceholder_ASTShape">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing test asserting that parsing valid patterns yields concrete `Pattern*` nodes with no placeholders by walking the AST.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Replace any fallback that constructs `PatternExprPlaceholder` with proper grammar handling or diagnostics.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/ast/pattern.go</file>
+      <action>Delete the `PatternExprPlaceholder` type once no references remain.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Update `docs/patterns.md` to note the absence of expression placeholders.</task>
+    <task>Audit IDE tooling or syntax highlighters for dependencies on the placeholder node.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

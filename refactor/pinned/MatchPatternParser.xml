@@ -1,0 +1,93 @@
+<refactorPlan name="MatchPatternParser" methodology="TDD">
+  <context>
+    <summary>Replace expression-based pattern parsing with a Rust-aligned pattern grammar so match arms only accept valid patterns.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <alignment>Rust pattern grammar (§15 & §18 of The Rust Reference): identifiers (w/ mut/ref), wildcard `_`, literals, ranges, tuple/tuple-struct, struct, enum variants, slice/array, rest `..`, binding `@`, alternation `|`, references `&`, box/ptr (if supported), parenthesized patterns, guards parsed separately.</alignment>
+    <coverage>
+      <pattern type="wildcard">`_` matches any scrutinee without binding.</pattern>
+      <pattern type="identifier">`name`, `mut name`, `ref name`, `ref mut name` capture by move/reference per qualifier.</pattern>
+      <pattern type="path">`Type`, `Module::CONST`, `Enum::Variant` cover unit structs, constants, and unit enum variants.</pattern>
+      <pattern type="literal">Accept the full literal set (integers, floats, bools, chars, strings, bytes if enabled).</pattern>
+      <pattern type="range">`start .. end` and `start ..= end` (literal/const endpoints) with feature gating and diagnostics.</pattern>
+      <pattern type="tuple">`(p1, p2, _)` destructures fixed-arity tuples; `(p,)` required for single-element tuples; allow at most one `..` rest segment with optional bindings (`(head, .., tail)`, `(prefix @ .., last)`).</pattern>
+      <pattern type="tupleStruct">`Point(x, y)` matches tuple-struct constructors and supports a single `..` rest slot (`Point(.., y)`, `Color(r, ..)`), same constraint as tuples.</pattern>
+      <pattern type="struct">`Rect { width, height: h, .. }` supports shorthand, field patterns, and a single `..` rest.</pattern>
+      <pattern type="enumStruct">`Enum::Variant { field, .. }` mirrors struct destructuring for enum variants with named fields.</pattern>
+      <pattern type="enumTuple">`Enum::Variant(p1, p2)` mirrors tuple destructuring for tuple variants.</pattern>
+      <pattern type="slice">`[head, .., tail]`, `[a, b, ..]`, `[middle @ ..]`, `[..]` allow one rest marker with optional binding.</pattern>
+      <pattern type="binding">`ident @ subpattern` (with qualifiers) binds and matches simultaneously.</pattern>
+      <pattern type="reference">`&pat` and `&mut pat` push through references without consuming ownership.</pattern>
+      <pattern type="box">`box pat` (when supported) matches boxed values.</pattern>
+      <pattern type="macro">`path!(tokens...)` expands in pattern position; ensure macro invocation resolution matches expression macros, with diagnostics when expansion fails or yields non-pattern forms.</pattern>
+      <pattern type="or">`p1 | p2 | p3` provides alternation at the lowest precedence, mixable with all other forms.</pattern>
+      <pattern type="paren">`(pattern)` groups to control precedence and aid with guarded alternations.</pattern>
+      <pattern type="guard">`pattern if condition` parses the pattern first, then a full expression guard.</pattern>
+      <diagnostics>Emit `ErrPatternExpected`, `ErrPatternExprNotAllowed`, `ErrPatternInvalidRange`, `ErrPatternMacroExpansion` for expressions, unsupported constructs, or macro expansions that do not produce a valid pattern: assignments, blocks, loops, calls, closures, method chains, `_ = expr`, macro expansion failures, etc.</diagnostics>
+    </coverage>
+  </context>
+
+  <preconditions>
+    <task>Ensure `go test ./internal/parser/...` is currently green; capture baseline run in CI notes.</task>
+    <task>Produce `/Users/daearol/golang_code/malphas-lang/docs/patterns.md` outlining the supported Rust-aligned pattern surface plus any exclusions (e.g. `box` if not yet supported); circulate for sign-off.</task>
+    <task>Audit `internal/parser` for helpers reused between expressions and match parsing; document coupling risks in `/Users/daearol/golang_code/malphas-lang/docs/parser_coupling.md`.</task>
+  </preconditions>
+
+  <red>
+    <test name="MatchPattern_ValidRustSurface">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce `TestParseMatchPattern_Valid` table with one case per Rust pattern kind: `_`, `ident`, `mut ident`, `ref ident`, binding `ident @ pat`, literals (numeric, string, bool), ranges (`1..=5`, `'a'..'z'`), tuple (`(a, _)`), tuple-struct (`Point(x, y)`), struct (`Vec { len, .. }`), enum with payload (`Option::Some(value)`), slice (`[a, .., b]`), reference (`&pat`, `&mut pat`), alternation (`Foo | Bar | Baz`), parenthesized patterns, rest-only slice (`[..]`), macro invocation (`some_macro!(args...)`). Each case asserts AST shape and spans; mark TODO so suite fails until implementation lands.</action>
+    </test>
+    <test name="MatchPattern_InvalidExpressions">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Write `TestParseMatchPattern_InvalidExpr` covering rejected forms: assignment (`x = 5`), block (`{ x }`), control flow (`if cond {}`), call expressions, closures, `while`, `for`, chained method calls, and bare `_ = expr`. Assert specific diagnostics referencing the Rust rule (e.g. “match patterns cannot contain blocks; move logic to a guard”).</action>
+    </test>
+    <test name="MatchPattern_GuardSeparation">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add failing cases proving `pat if guard` parses pattern first, guard second; include alternations with guards (`(Foo | Bar) if cond`). Ensure guards reject pattern tokens beyond the grammar.</action>
+    </test>
+    <test name="MatchPattern_RangeFeatureGate">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>If numeric/char ranges are not yet fully supported, add failing regression capturing the intended diagnostic or feature gate response (`range patterns require feature flag` or similar).</action>
+    </test>
+    <test name="MatchPattern_MacroDiagnostics">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add coverage for macro expansion failures: pattern macros producing non-pattern tokens, emitting the dedicated diagnostic (`ErrPatternMacroExpansion`) and preserving span information. Include a TODO to ensure macro hygiene (captured bindings) is validated once expansion support lands.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/ast/pattern.go</file>
+      <action>Define Rust-aligned AST nodes: `PatternKind` enum with variants (`Wild`, `Ident`, `Binding`, `Literal`, `Range`, `Tuple`, `TupleStruct`, `Struct`, `Enum`, `Slice`, `Rest`, `Reference`, `Box`, `Macro`, `Or`, `Paren`); include metadata for mutability/ref qualifiers, binding mode, and macro path/token stream. Document ownership rules for macro-expanded subtrees.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Implement `parsePattern(precedence patternPrec)`, delegating to helpers (`parseWildPattern`, `parseIdentPattern`, `parseStructPattern`, `parseMacroPattern`, etc.). Mirror Rust precedence: alternation lowest, then bindings (`@`), then primary forms. Ensure span tracking, macro expansion hooks, and error recovery nodes are emitted.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser.go</file>
+      <action>Swap the expression call in `parseMatchExpr` for `parsePattern`, parse optional guards afterward, and adjust match arm loop to handle pattern alternations correctly.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/errors.go</file>
+      <action>Add targeted diagnostics: `ErrPatternExpected`, `ErrPatternExprNotAllowed`, `ErrPatternInvalidRange`, `ErrPatternMacroExpansion`. Include Rust-aligned help text (e.g. “Patterns cannot contain assignments; use a guard: `if expr`”) and macro-specific guidance when expansion fails or yields an invalid form.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/tokens.go</file>
+      <action>Confirm tokenizer exposes `@`, `..`, `..=`, `&`, `box`, `ref`, `mut`; add missing token kinds or keyword classification aligned with Rust semantics.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Remove or relocate expression helpers no longer required for patterns; keep shared utilities in `/Users/daearol/golang_code/malphas-lang/internal/parser/parser_common.go` with clear ownership comments.</task>
+    <task>Update `/Users/daearol/golang_code/malphas-lang/docs/language.md` sections on match statements to reflect the Rust-aligned grammar and cite diagnostics.</task>
+    <task>Review IDE hints (if any) to ensure syntax highlighting/token classification matches the new grammar.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+    <command>golangci-lint run ./...</command>
+    <command>grep -R "TODO MatchPattern" -n ./internal/parser && exit 1 || true</command>
+  </validation>
+</refactorPlan>

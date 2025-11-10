@@ -1,0 +1,9 @@
+package invalid;
+
+fn main() {
+    foo() = 1;
+    42 = foo;
+    (a + b) = c;
+    "str" = baz;
+}
+

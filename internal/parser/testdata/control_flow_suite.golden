@@ -201,8 +201,11 @@
                 "Arms": [
                   {
                     "Pattern": {
-                      "Text": "0"
+                      "Expr": {
+                        "Text": "0"
+                      }
                     },
+                    "Guard": null,
                     "Body": {
                       "Stmts": [
                         {
@@ -216,8 +219,13 @@
                   },
                   {
                     "Pattern": {
-                      "Name": "other"
+                      "Name": {
+                        "Name": "other"
+                      },
+                      "Mode": 0,
+                      "Mutable": false
                     },
+                    "Guard": null,
                     "Body": {
                       "Stmts": [
                         {

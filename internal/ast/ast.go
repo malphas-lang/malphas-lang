@@ -657,7 +657,8 @@ func (*ForStmt) stmtNode() {}
 
 // MatchArm represents a single match arm.
 type MatchArm struct {
-	Pattern Expr
+	Pattern Pattern
+	Guard   Expr
 	Body    *BlockExpr
 	span    lexer.Span
 }
@@ -669,9 +670,10 @@ func (a *MatchArm) Span() lexer.Span { return a.span }
 func (a *MatchArm) SetSpan(span lexer.Span) { a.span = span }
 
 // NewMatchArm constructs a match arm node.
-func NewMatchArm(pattern Expr, body *BlockExpr, span lexer.Span) *MatchArm {
+func NewMatchArm(pattern Pattern, guard Expr, body *BlockExpr, span lexer.Span) *MatchArm {
 	return &MatchArm{
 		Pattern: pattern,
+		Guard:   guard,
 		Body:    body,
 		span:    span,
 	}
@@ -776,6 +778,31 @@ func (l *StringLit) SetSpan(span lexer.Span) {
 
 // exprNode marks StringLit as an expression.
 func (*StringLit) exprNode() {}
+
+// RuneLit represents a rune/character literal.
+type RuneLit struct {
+	Value rune
+	span  lexer.Span
+}
+
+// Span returns the literal span.
+func (l *RuneLit) Span() lexer.Span { return l.span }
+
+// NewRuneLit constructs a rune literal node.
+func NewRuneLit(value rune, span lexer.Span) *RuneLit {
+	return &RuneLit{
+		Value: value,
+		span:  span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (l *RuneLit) SetSpan(span lexer.Span) {
+	l.span = span
+}
+
+// exprNode marks RuneLit as an expression.
+func (*RuneLit) exprNode() {}
 
 // BoolLit represents a boolean literal.
 type BoolLit struct {

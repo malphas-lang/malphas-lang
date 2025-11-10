@@ -1,0 +1,44 @@
+<refactorPlan name="PatternDiagnostics" methodology="TDD">
+  <context>
+    <summary>Introduce dedicated diagnostic enums for pattern parsing (`ErrPatternExpected`, `ErrPatternExprNotAllowed`, etc.) and wire them through `reportPatternError`.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <issue>Current diagnostics are plain strings emitted via `reportError`, preventing tests from asserting structured error kinds and making it hard to provide consistent help text.</issue>
+    <goal>Add typed diagnostics, update call sites, and expand tests to verify both kind and message.</goal>
+  </context>
+
+  <preconditions>
+    <task>Inventory all pattern-related error strings in `patterns.go`.</task>
+    <task>Confirm desired diagnostic identifiers and help text with the Rust-aligned grammar document.</task>
+  </preconditions>
+
+  <red>
+    <test name="PatternDiagnostics_StructuredErrors">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add table-driven coverage asserting that parsing invalid patterns (e.g., assignment, block, macro failure) yields the new diagnostic identifiers. Tests should fail until diagnostics are structured.</action>
+    </test>
+    <test name="PatternDiagnostics_HelpText">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce a failing regression verifying that `ErrPatternExprNotAllowed` includes guidance such as “move logic to a guard”.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/errors.go</file>
+      <action>Add diagnostic constructors/enums for pattern errors with associated help text.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Update `reportPatternError` (and call sites) to emit the new diagnostics instead of raw strings.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Update helper assertions to check diagnostic kind and help text.</action>
+    </change>
+  </green>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

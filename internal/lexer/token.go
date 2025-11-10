@@ -32,6 +32,7 @@ const (
 	INT    TokenType = "INT"    // 1343456
 	FLOAT  TokenType = "FLOAT"  // 3.14, 1e9
 	STRING TokenType = "STRING" // "hello"
+	CHAR   TokenType = "CHAR"   // 'a'
 
 	// Operators
 	ASSIGN   TokenType = "="
@@ -43,6 +44,9 @@ const (
 	SLASH    TokenType = "/"
 	AND      TokenType = "&&"
 	OR       TokenType = "||"
+	PIPE     TokenType = "|"
+	AMPERSAND TokenType = "&"
+	AT        TokenType = "@"
 
 	LT     TokenType = "<"
 	GT     TokenType = ">"
@@ -56,6 +60,9 @@ const (
 	SEMICOLON TokenType = ";"
 	COLON     TokenType = ":"
 	DOT       TokenType = "."
+	DOTDOT    TokenType = ".."
+	DOTDOTEQ  TokenType = "..="
+	DOUBLECOLON TokenType = "::"
 
 	LPAREN   TokenType = "("
 	RPAREN   TokenType = ")"
@@ -69,6 +76,7 @@ const (
 	// Keywords
 	LET      TokenType = "LET"
 	MUT      TokenType = "MUT"
+	REF      TokenType = "REF"
 	CONST    TokenType = "CONST"
 	FN       TokenType = "FN"
 	STRUCT   TokenType = "STRUCT"
@@ -91,6 +99,7 @@ const (
 	TRUE     TokenType = "TRUE"
 	FALSE    TokenType = "FALSE"
 	NIL      TokenType = "NIL"
+	BOX      TokenType = "BOX"
 	SPAWN    TokenType = "SPAWN"
 	CHAN     TokenType = "CHAN"
 	SELECT   TokenType = "SELECT"
@@ -105,6 +114,7 @@ const (
 var keywords = map[string]TokenType{
 	"let":      LET,
 	"mut":      MUT,
+	"ref":      REF,
 	"const":    CONST,
 	"fn":       FN,
 	"struct":   STRUCT,
@@ -127,6 +137,7 @@ var keywords = map[string]TokenType{
 	"true":     TRUE,
 	"false":    FALSE,
 	"nil":      NIL,
+	"box":      BOX,
 	"spawn":    SPAWN,
 	"chan":     CHAN,
 	"select":   SELECT,

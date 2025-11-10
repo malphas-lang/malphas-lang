@@ -114,37 +114,20 @@ func TestLexerErrors_UnterminatedBlockComment(t *testing.T) {
 	}
 }
 
-func TestLexerErrors_IllegalRune(t *testing.T) {
+func TestLexerRecognizesAtToken(t *testing.T) {
 	input := `@let`
 	l := New(input)
 
 	tok := l.NextToken()
-	if tok.Type != ILLEGAL {
-		t.Fatalf("expected ILLEGAL token, got %q", tok.Type)
+	if tok.Type != AT {
+		t.Fatalf("expected AT token, got %q", tok.Type)
 	}
 	if tok.Raw != "@" {
 		t.Fatalf("expected raw token '@', got %q", tok.Raw)
 	}
 
-	if len(l.Errors) != 1 {
-		t.Fatalf("expected 1 lexer error, got %d", len(l.Errors))
-	}
-
-	err := l.Errors[0]
-	if err.Kind != ErrIllegalRune {
-		t.Fatalf("expected ErrIllegalRune, got %v", err.Kind)
-	}
-	if err.Message != `illegal character "@"` {
-		t.Fatalf("unexpected error message %q", err.Message)
-	}
-	if err.Span.Line != 1 || err.Span.Column != 1 {
-		t.Fatalf("expected span line=1 column=1, got line=%d column=%d", err.Span.Line, err.Span.Column)
-	}
-	if err.Span.Start != 0 {
-		t.Fatalf("expected span start 0, got %d", err.Span.Start)
-	}
-	if err.Span.End != 1 {
-		t.Fatalf("expected span end 1, got %d", err.Span.End)
+	if len(l.Errors) != 0 {
+		t.Fatalf("expected no lexer errors, got %d", len(l.Errors))
 	}
 
 	next := l.NextToken()

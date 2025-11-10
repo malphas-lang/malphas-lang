@@ -1,0 +1,11 @@
+<refactorFollowUp name="PatternPrattRemoval">
+  <refactor>
+    <task>Search for any lingering Pratt-era helpers (e.g., `withPatternPrecedence`) and remove or migrate them.</task>
+    <task>Update `/Users/daearol/golang_code/malphas-lang/docs/patterns.md` to document the recursive-descent ownership of match patterns.</task>
+  </refactor>
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+    <notes>Record results in the refactor log after successful runs.</notes>
+  </validation>
+</refactorFollowUp>

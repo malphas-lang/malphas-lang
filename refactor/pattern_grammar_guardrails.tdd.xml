@@ -1,0 +1,49 @@
+<refactorPlan name="PatternGrammarGuardrails" methodology="TDD">
+  <context>
+    <summary>Move match-arm validation (assignments, method calls, guard syntax) into the pattern grammar so every caller receives uniform diagnostics.</summary>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+    <issue>`parseMatchExpr` still performs ad-hoc checks for assignments (`=`), method calls (`.`), and guard placement. This duplicates logic scattered across pattern helpers, makes diagnostics order-dependent, and prevents other consumers from leveraging the same guardrails.</issue>
+    <goal>Ensure the recursive-descent pattern parser rejects invalid constructs directly, with `parseMatchExpr` focusing solely on sequencing.</goal>
+  </context>
+
+  <preconditions>
+    <task>Record current failing diagnostics in `parser_test.go` to understand expected error text before migrating checks.</task>
+    <task>Identify which errors already surface via `reportPatternError` vs inline `parseMatchExpr` logic.</task>
+  </preconditions>
+
+  <red>
+    <test name="PatternParser_AssignmentGuardrail">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing test verifying that parsing `match x { _ = y => foo }` reports the guardrail via the pattern parser (no reliance on match-specific logic). The test should assert the diagnostic kind and span.</action>
+    </test>
+    <test name="PatternParser_MethodCallGuardrail">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add a failing case for `match x { foo.bar => baz }`, expecting a pattern-level diagnostic about method calls not being allowed.</action>
+    </test>
+    <test name="PatternParser_AlternationGuardSyntax">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Introduce a failing regression for `(Foo | Bar) if cond => baz` ensuring the parser requires parentheses around guarded alternations, emitted from the grammar layer.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/patterns.go</file>
+      <action>Extend `parsePatternIdentOrPath`, `parsePatternBinding`, and related helpers to emit the guardrail diagnostics and perform recovery when encountering assignments or method calls. Ensure guards on alternations are enforced while parsing patterns (e.g., tracking context).</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/exprs.go</file>
+      <action>Strip the guardrail checks from `parseMatchExpr`, leaving only guard parsing and arm assembly.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Consolidate any duplicate guardrail strings into dedicated diagnostic constructors (once available).</task>
+    <task>Document the new grammar responsibilities in `docs/patterns.md`.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

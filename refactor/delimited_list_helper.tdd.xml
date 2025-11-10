@@ -1,0 +1,44 @@
+<refactorPlan name="DelimitedListHelper" methodology="TDD">
+  <context>
+    <summary>Consolidate comma-delimited parsing patterns into a reusable helper.</summary>
+    <issue>Multiple parser sites reimplement comma handling, trailing comma acceptance, and empty-list semantics, increasing bug risk.</issue>
+    <entrypoint>/Users/daearol/golang_code/malphas-lang/internal/parser</entrypoint>
+  </context>
+
+  <preconditions>
+    <task>Enumerate existing delimited parsing functions (`parseParamList`, `parseOptionalTypeParams`, struct/enum fields).</task>
+    <task>Collect fixtures that cover edge cases (empty lists, trailing commas, single elements).</task>
+  </preconditions>
+
+  <red>
+    <test name="DelimitedHelperFixtures">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Add table-driven cases exercising diverse delimiter scenarios before introducing the helper.</action>
+    </test>
+    <test name="DelimitedHelperUnit">
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser_test.go</file>
+      <action>Create a focused test suite for the helper itself (using synthetic token streams or small parsers) that initially fails.</action>
+    </test>
+  </red>
+
+  <green>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/parser.go</file>
+      <action>Implement `parseDelimited` (or similar) guided by the failing tests, handling separators, terminators, and error recovery.</action>
+    </change>
+    <change>
+      <file>/Users/daearol/golang_code/malphas-lang/internal/parser/*</file>
+      <action>Migrate each delimited parsing site to use the helper one at a time, rerunning the parser suite after each migration.</action>
+    </change>
+  </green>
+
+  <refactor>
+    <task>Delete redundant local implementations once all call sites migrate.</task>
+    <task>Update inline comments or developer docs to point to the shared helper.</task>
+  </refactor>
+
+  <validation>
+    <command>go test ./internal/parser/...</command>
+    <command>go test ./...</command>
+  </validation>
+</refactorPlan>

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
@@ -2357,6 +2358,38 @@ fn main() {
 	}
 }
 
+func TestParseInvalidAssignmentTargets(t *testing.T) {
+	src := readTestdataFile(t, "invalid_assignment_targets.mlp")
+
+	_, errs := parseFile(t, src)
+
+	if len(errs) != 4 {
+		t.Fatalf("expected 4 diagnostics, got %d (%#v)", len(errs), errs)
+	}
+
+	wantMessages := []string{
+		"invalid assignment target",
+		"invalid assignment target",
+		"invalid assignment target",
+		"invalid assignment target",
+	}
+	wantLines := []int{4, 5, 6, 7}
+
+	for i := range wantMessages {
+		if errs[i].Message != wantMessages[i] {
+			t.Fatalf("diagnostic %d: expected message %q, got %q", i, wantMessages[i], errs[i].Message)
+		}
+
+		if errs[i].Severity != diag.SeverityError {
+			t.Fatalf("diagnostic %d: expected severity %q, got %q", i, diag.SeverityError, errs[i].Severity)
+		}
+
+		if errs[i].Span.Line != wantLines[i] {
+			t.Fatalf("diagnostic %d: expected line %d, got %d", i, wantLines[i], errs[i].Span.Line)
+		}
+	}
+}
+
 func TestParseExprStmt(t *testing.T) {
 	const src = `
 package foo;
@@ -2814,8 +2847,8 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 
 		firstArm := matchExpr.Arms[0]
-		if _, ok := firstArm.Pattern.(*ast.IntegerLit); !ok {
-			t.Fatalf("expected first arm pattern type *ast.IntegerLit, got %T", firstArm.Pattern)
+		if _, ok := firstArm.Pattern.(*ast.PatternLiteral); !ok {
+			t.Fatalf("expected first arm pattern type *ast.PatternLiteral, got %T", firstArm.Pattern)
 		}
 
 		if len(firstArm.Body.Stmts) != 0 {
@@ -2831,8 +2864,8 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 
 		secondArm := matchExpr.Arms[1]
-		if _, ok := secondArm.Pattern.(*ast.Ident); !ok {
-			t.Fatalf("expected second arm pattern type *ast.Ident, got %T", secondArm.Pattern)
+		if _, ok := secondArm.Pattern.(*ast.PatternIdent); !ok {
+			t.Fatalf("expected second arm pattern type *ast.PatternIdent, got %T", secondArm.Pattern)
 		}
 
 		if secondArm.Body.Tail == nil {
@@ -3509,18 +3542,24 @@ func TestParseMatchExpr(t *testing.T) {
 			t.Fatalf("expected 2 match arms, got %d", len(matchExpr.Arms))
 		}
 
-		firstPattern, ok := matchExpr.Arms[0].Pattern.(*ast.IntegerLit)
-		if !ok || firstPattern.Text != "1" {
+		firstPattern, ok := matchExpr.Arms[0].Pattern.(*ast.PatternLiteral)
+		if !ok {
 			t.Fatalf("expected first arm integer literal pattern '1', got %#v", matchExpr.Arms[0].Pattern)
+		}
+		if lit, ok := firstPattern.Expr.(*ast.IntegerLit); !ok || lit.Text != "1" {
+			t.Fatalf("expected first arm literal expression '1', got %#v", firstPattern.Expr)
 		}
 
 		if matchExpr.Arms[0].Body.Tail == nil {
 			t.Fatalf("expected first arm body tail expression, got nil")
 		}
 
-		secondPattern, ok := matchExpr.Arms[1].Pattern.(*ast.Ident)
-		if !ok || secondPattern.Name != "other" {
+		secondPattern, ok := matchExpr.Arms[1].Pattern.(*ast.PatternIdent)
+		if !ok {
 			t.Fatalf("expected second arm identifier pattern 'other', got %#v", matchExpr.Arms[1].Pattern)
+		}
+		if secondPattern.Name == nil || secondPattern.Name.Name != "other" {
+			t.Fatalf("expected pattern identifier 'other', got %#v", secondPattern.Name)
 		}
 
 		if matchExpr.Arms[1].Body.Tail == nil {
@@ -3686,4 +3725,379 @@ fn main() {
 			}
 		})
 	}
+}
+
+func TestParseMatchPattern_Valid(t *testing.T) {
+	t.Helper()
+
+	cases := []struct {
+		name     string
+		pattern  string
+		wantType string
+	}{
+		{name: "wildcard", pattern: "_", wantType: "*ast.PatternWild"},
+		{name: "identifier", pattern: "value", wantType: "*ast.PatternIdent"},
+		{name: "mut identifier", pattern: "mut value", wantType: "*ast.PatternIdent"},
+		{name: "ref identifier", pattern: "ref value", wantType: "*ast.PatternIdent"},
+		{name: "ref mut identifier", pattern: "ref mut value", wantType: "*ast.PatternIdent"},
+		{name: "binding", pattern: "head @ Some(value)", wantType: "*ast.PatternBinding"},
+		{name: "integer literal", pattern: "42", wantType: "*ast.PatternLiteral"},
+		{name: "string literal", pattern: "\"ok\"", wantType: "*ast.PatternLiteral"},
+		{name: "bool literal", pattern: "true", wantType: "*ast.PatternLiteral"},
+		{name: "inclusive range", pattern: "1 ..= 5", wantType: "*ast.PatternRange"},
+		{name: "char range", pattern: "'a'..'z'", wantType: "*ast.PatternRange"},
+		{name: "tuple", pattern: "(x, _)", wantType: "*ast.PatternTuple"},
+		{name: "tuple with rest", pattern: "(head, .., tail)", wantType: "*ast.PatternTuple"},
+		{name: "tuple struct", pattern: "Point(x, y)", wantType: "*ast.PatternTupleStruct"},
+		{name: "tuple struct rest", pattern: "Color(.., g)", wantType: "*ast.PatternTupleStruct"},
+		{name: "struct", pattern: "Vec { len, .. }", wantType: "*ast.PatternStruct"},
+		{name: "enum tuple", pattern: "Option::Some(value)", wantType: "*ast.PatternEnum"},
+		{name: "enum struct", pattern: "Result::Err { code, .. }", wantType: "*ast.PatternEnum"},
+		{name: "slice", pattern: "[head, .., tail]", wantType: "*ast.PatternSlice"},
+		{name: "slice trailing rest", pattern: "[a, b, ..]", wantType: "*ast.PatternSlice"},
+		{name: "slice binding rest", pattern: "[middle @ ..]", wantType: "*ast.PatternSlice"},
+		{name: "slice rest only", pattern: "[..]", wantType: "*ast.PatternSlice"},
+		{name: "reference", pattern: "&value", wantType: "*ast.PatternReference"},
+		{name: "mut reference", pattern: "&mut value", wantType: "*ast.PatternReference"},
+		{name: "box", pattern: "box inner", wantType: "*ast.PatternBox"},
+		{name: "or", pattern: "Foo | Bar | Baz", wantType: "*ast.PatternOr"},
+		{name: "parenthesized", pattern: "(Foo)", wantType: "*ast.PatternParen"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := buildMatchPatternSource(tc.pattern)
+
+			file, errs := parseFile(t, src)
+			if len(errs) != 0 {
+				t.Fatalf("unexpected parse errors for pattern %q: %#v", tc.pattern, errs)
+			}
+
+			matchExpr := singleLetMatchExpr(t, file)
+			if len(matchExpr.Arms) == 0 {
+				t.Fatalf("expected at least one match arm")
+			}
+
+			arm := matchExpr.Arms[0]
+			if arm == nil {
+				t.Fatalf("expected first match arm to be non-nil")
+			}
+
+			if typ := fmt.Sprintf("%T", arm.Pattern); typ != tc.wantType {
+				t.Fatalf("expected match pattern type %s for %q, got %s", tc.wantType, tc.pattern, typ)
+			}
+
+			assertSpanText(t, src, arm.Pattern.Span(), tc.pattern)
+		})
+	}
+}
+
+func TestParseMatchPattern_InvalidExpr(t *testing.T) {
+	t.Helper()
+
+	cases := []struct {
+		name         string
+		pattern      string
+		wantContains string
+	}{
+		{name: "assignment", pattern: "x = 5", wantContains: "match patterns cannot contain assignments"},
+		{name: "block", pattern: "{ x }", wantContains: "match patterns cannot contain blocks"},
+		{name: "if expression", pattern: "if cond {}", wantContains: "match patterns cannot contain control flow"},
+		{name: "call", pattern: "foo()", wantContains: "match patterns cannot contain call expressions"},
+		{name: "closure", pattern: "|x| x + 1", wantContains: "match patterns cannot contain closures"},
+		{name: "while loop", pattern: "while true {}", wantContains: "match patterns cannot contain control flow"},
+		{name: "for loop", pattern: "for item in items {}", wantContains: "match patterns cannot contain control flow"},
+		{name: "method chain", pattern: "value.method()", wantContains: "match patterns cannot contain method calls"},
+		{name: "wildcard assignment", pattern: "_ = expr", wantContains: "match patterns cannot assign to '_'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := buildMatchPatternSource(tc.pattern)
+
+			_, errs := parseFile(t, src)
+			if len(errs) == 0 {
+				t.Fatalf("expected parse errors for pattern %q", tc.pattern)
+			}
+
+			if !strings.Contains(errs[0].Message, tc.wantContains) {
+				t.Fatalf("expected first diagnostic for pattern %q to contain %q, got %q", tc.pattern, tc.wantContains, errs[0].Message)
+			}
+		})
+	}
+}
+
+func TestParseMatchPattern_GuardSeparation(t *testing.T) {
+	t.Helper()
+
+	t.Run("guard parsed separately", func(t *testing.T) {
+		pattern := "Foo if cond"
+		src := buildMatchPatternSource(pattern)
+
+		file, errs := parseFile(t, src)
+		if len(errs) != 0 {
+			t.Fatalf("unexpected parse errors: %#v", errs)
+		}
+
+		matchExpr := singleLetMatchExpr(t, file)
+		if len(matchExpr.Arms) == 0 {
+			t.Fatalf("expected at least one match arm")
+		}
+
+		arm := matchExpr.Arms[0]
+		if typ := fmt.Sprintf("%T", arm.Pattern); typ != "*ast.PatternIdent" {
+			t.Fatalf("expected pattern type %s, got %s", "*ast.PatternIdent", typ)
+		}
+		assertSpanText(t, src, arm.Pattern.Span(), "Foo")
+
+		guard := requireMatchGuard(t, arm)
+		if fmt.Sprintf("%T", guard) != "*ast.Ident" {
+			t.Fatalf("expected guard expression to be identifier, got %T", guard)
+		}
+		assertSpanText(t, src, guard.Span(), "cond")
+	})
+
+	t.Run("alternation with guard requires parentheses", func(t *testing.T) {
+		pattern := "Foo | Bar if cond"
+		src := buildMatchPatternSource(pattern)
+
+		_, errs := parseFile(t, src)
+		if len(errs) == 0 {
+			t.Fatalf("expected diagnostic for alternation guard without parentheses")
+		}
+
+		if !strings.Contains(errs[0].Message, "pattern guard on alternation requires parentheses") {
+			t.Fatalf("expected diagnostic about guard parentheses, got %q", errs[0].Message)
+		}
+	})
+
+	t.Run("parenthesized alternation guard succeeds", func(t *testing.T) {
+		pattern := "(Foo | Bar) if cond"
+		src := buildMatchPatternSource(pattern)
+
+		file, errs := parseFile(t, src)
+		if len(errs) != 0 {
+			t.Fatalf("unexpected parse errors: %#v", errs)
+		}
+
+		matchExpr := singleLetMatchExpr(t, file)
+		arm := matchExpr.Arms[0]
+
+		if typ := fmt.Sprintf("%T", arm.Pattern); typ != "*ast.PatternParen" {
+			t.Fatalf("expected pattern type %s, got %s", "*ast.PatternParen", typ)
+		}
+		assertSpanText(t, src, arm.Pattern.Span(), "(Foo | Bar)")
+
+		guard := requireMatchGuard(t, arm)
+		assertSpanText(t, src, guard.Span(), "cond")
+	})
+}
+
+func TestParseMatchPattern_RangeFeatureGate(t *testing.T) {
+	t.Helper()
+
+	src := buildMatchPatternSource("1..5")
+
+	_, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatalf("expected diagnostic gating range patterns")
+	}
+
+	if !strings.Contains(errs[0].Message, "range patterns require feature flag") {
+		t.Fatalf("expected range pattern diagnostic to mention feature flag, got %q", errs[0].Message)
+	}
+}
+
+func TestParseMatchPattern_MacroDiagnostics(t *testing.T) {
+	t.Helper()
+
+	src := buildMatchPatternSource("some_macro!(value)")
+
+	_, errs := parseFile(t, src)
+	if len(errs) == 0 {
+		t.Fatalf("expected diagnostic for pattern macro invocation")
+	}
+
+	if !strings.Contains(errs[0].Message, "pattern macro expansion") {
+		t.Fatalf("expected macro diagnostic message, got %q", errs[0].Message)
+	}
+
+	// TODO MatchPattern: add macro hygiene validation once macro expansion is wired for patterns.
+}
+
+func TestPatternParser_PrattRemoval(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	match value {
+		1 => 0,
+		_ => 1,
+	};
+}
+`
+
+	p := parser.New(src)
+	scrubParserPatternTables(t, p)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("pattern parsing should not depend on Pratt tables; panic: %v", r)
+		}
+	}()
+
+	file := p.ParseFile()
+	if file == nil {
+		t.Fatalf("expected non-nil file AST")
+	}
+
+	if errs := p.Errors(); len(errs) > 0 {
+		t.Fatalf("expected no parse errors, got %#v", errs)
+	}
+}
+
+func TestParsePattern_DoesNotUseExprPrefix(t *testing.T) {
+	fields := []string{"patternPrefixFns", "patternInfixFns"}
+
+	for _, field := range fields {
+		field := field
+		t.Run(field, func(t *testing.T) {
+			const src = "package foo;"
+			p := parser.New(src)
+
+			state, ok := parserPatternMapState(p, field)
+			if !ok {
+				return
+			}
+
+			if !state.isNil && state.count > 0 {
+				t.Fatalf("expected %s to be empty after parser initialization, got len=%d", field, state.count)
+			}
+		})
+	}
+}
+
+func buildMatchPatternSource(pattern string) string {
+	return fmt.Sprintf(`
+package foo;
+
+fn main() {
+	let result = match value {
+		%s => 1,
+		_ => 0,
+	};
+}
+`, pattern)
+}
+
+func singleLetMatchExpr(t *testing.T, file *ast.File) *ast.MatchExpr {
+	t.Helper()
+
+	if file == nil {
+		t.Fatalf("expected non-nil file AST")
+	}
+
+	if len(file.Decls) != 1 {
+		t.Fatalf("expected single top-level declaration, got %d", len(file.Decls))
+	}
+
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected *ast.FnDecl, got %T", file.Decls[0])
+	}
+
+	if fn.Body == nil {
+		t.Fatalf("expected function body")
+	}
+
+	if len(fn.Body.Stmts) != 1 {
+		t.Fatalf("expected single let statement, got %d", len(fn.Body.Stmts))
+	}
+
+	letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+	}
+
+	matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+	if !ok {
+		t.Fatalf("expected match expression, got %T", letStmt.Value)
+	}
+
+	return matchExpr
+}
+
+func requireMatchGuard(t *testing.T, arm *ast.MatchArm) ast.Expr {
+	t.Helper()
+
+	val := reflect.ValueOf(arm)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		t.Fatalf("match arm must be a non-nil pointer, got %T", arm)
+	}
+
+	structVal := val.Elem()
+	guardField := structVal.FieldByName("Guard")
+	if !guardField.IsValid() {
+		t.Fatalf("match arm missing Guard field (TODO MatchPattern: add guard support)")
+	}
+
+	if guardField.Kind() != reflect.Interface {
+		t.Fatalf("match arm guard must be interface, got %s", guardField.Kind())
+	}
+
+	if guardField.IsNil() {
+		t.Fatalf("expected guard expression to be present")
+	}
+
+	guardExpr, ok := guardField.Interface().(ast.Expr)
+	if !ok {
+		t.Fatalf("match guard does not implement ast.Expr, got %T", guardField.Interface())
+	}
+
+	return guardExpr
+}
+
+type parserPatternTableState struct {
+	isNil bool
+	count int
+}
+
+func scrubParserPatternTables(t *testing.T, p *parser.Parser) {
+	t.Helper()
+
+	scrubParserMapField(t, p, "patternPrefixFns")
+	scrubParserMapField(t, p, "patternInfixFns")
+}
+
+func scrubParserMapField(t *testing.T, p *parser.Parser, name string) {
+	t.Helper()
+
+	val := reflect.ValueOf(p).Elem()
+	field := val.FieldByName(name)
+	if !field.IsValid() {
+		return
+	}
+
+	if !field.CanAddr() {
+		t.Fatalf("field %s cannot be addressed via reflection", name)
+	}
+
+	ptr := unsafe.Pointer(field.UnsafeAddr())
+	reflect.NewAt(field.Type(), ptr).Elem().Set(reflect.Zero(field.Type()))
+}
+
+func parserPatternMapState(p *parser.Parser, name string) (parserPatternTableState, bool) {
+	val := reflect.ValueOf(p).Elem()
+	field := val.FieldByName(name)
+	if !field.IsValid() {
+		return parserPatternTableState{}, false
+	}
+
+	field = reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+
+	if field.IsNil() {
+		return parserPatternTableState{isNil: true}, true
+	}
+
+	return parserPatternTableState{count: field.Len()}, true
 }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<refactorIndex tool="malphas-parser" focus="tdd">
+  <context>
+    <summary>Parser improvement initiatives are now tracked in dedicated TDD plans.</summary>
+    <guidingPrinciples>
+      <principle>Each plan documents red/green steps and validation commands.</principle>
+      <principle>Always land a failing test before applying production changes.</principle>
+      <principle>Run `go test ./internal/parser/...` after every milestone.</principle>
+    </guidingPrinciples>
+  </context>
+
+  <plans>
+    <plan file="assignment_target_validation.tdd.xml" summary="Validate assignable targets via negative fixtures." />
+    <plan file="block_tail_control_flow.tdd.xml" summary="Make block tail handling explicit and tested." />
+    <plan file="delimited_list_helper.tdd.xml" summary="Unify comma-delimited parsing logic behind a helper." />
+    <plan file="diagnostics_consistency_audit.tdd.xml" summary="Guarantee filenames and order in diagnostics." />
+  </plans>
+
+  <verification>
+    <command>go test ./internal/parser/...</command>
+    <notes>Update this index if new initiatives are added or existing ones close.</notes>
+  </verification>
+</refactorIndex>
