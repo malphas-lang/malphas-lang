@@ -1,0 +1,133 @@
+<ImplementationPlan name="MatchArmGuardCoverage">
+  <Context>
+    Add regression-proof parser tests covering match guards paired with both expression- and block-bodied arms, validating behavior with and without trailing commas and ensuring delimiter diagnostics stay stable.
+  </Context>
+
+  <Phase name="Red">
+    <Goal>
+      Introduce failing (or at least newly executable) tests capturing the desired guard scenarios before relying on parser behavior.
+    </Goal>
+    <Instructions>
+      <Step>Extend TestParseMatchExpr with a new subtest that mixes guarded arms using expression and block payloads while exercising both trailing-comma states.</Step>
+      <Step>Add a guard-specific delimiter regression case to TestParseMatchArmDelimiters that asserts the diagnostic emitted when a separator is missing after a guarded arm.</Step>
+    </Instructions>
+    <Code target="internal/parser/parser_test.go"><![CDATA[
+t.Run("guards tolerate mixed bodies and commas", func(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let result = match value {
+		even if value % 2 == 0 => value / 2,
+		odd if value % 2 != 0 => {
+			let doubled = value * 2;
+			doubled
+		},
+		_ => value
+	};
+}
+`
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+	matchExpr := letStmt.Value.(*ast.MatchExpr)
+
+	if got := len(matchExpr.Arms); got != 3 {
+		t.Fatalf("expected 3 match arms, got %d", got)
+	}
+
+	evenArm := matchExpr.Arms[0]
+	if guard := requireMatchGuard(t, evenArm); guard == nil {
+		t.Fatalf("expected guard expression on first arm")
+	}
+	if _, ok := evenArm.Body.Tail.(*ast.InfixExpr); !ok {
+		t.Fatalf("expected first arm expression body type *ast.InfixExpr, got %T", evenArm.Body.Tail)
+	}
+
+	oddArm := matchExpr.Arms[1]
+	if guard := requireMatchGuard(t, oddArm); guard == nil {
+		t.Fatalf("expected guard expression on second arm")
+	}
+	if want, got := 1, len(oddArm.Body.Stmts); got != want {
+		t.Fatalf("expected second arm block to contain %d statement, got %d", want, got)
+	}
+	if tail, ok := oddArm.Body.Tail.(*ast.Ident); !ok || tail.Name != "doubled" {
+		t.Fatalf("expected second arm block tail identifier 'doubled', got %#v", oddArm.Body.Tail)
+	}
+
+	finalArm := matchExpr.Arms[2]
+	if finalArm.Guard != nil {
+		t.Fatalf("expected fallback arm to have no guard, got %#v", finalArm.Guard)
+	}
+	if _, ok := finalArm.Body.Tail.(*ast.Ident); !ok {
+		t.Fatalf("expected fallback arm tail identifier, got %T", finalArm.Body.Tail)
+	}
+})
+    ]]></Code>
+    <Code target="internal/parser/parser_test.go"><![CDATA[
+{
+	name: "guarded arm missing comma emits delimiter diagnostic",
+	src: `
+package foo;
+
+fn main() {
+	match value {
+		even if value % 2 == 0 => value / 2
+		odd if value % 2 != 0 => value * 2,
+	}
+}
+`,
+	wantErr: true,
+	errMsg:  "expected ',' or '}' after match arm",
+},
+    ]]></Code>
+    <Verification>
+      <Command>go test ./internal/parser -run TestParseMatchExpr</Command>
+      <Command>go test ./internal/parser -run TestParseMatchArmDelimiters</Command>
+      <Expectation>Before parser adjustments, these additions should highlight missing functionality if regressions reappear; record the failure output if the guard paths are broken.</Expectation>
+    </Verification>
+  </Phase>
+
+  <Phase name="Green">
+    <Goal>
+      Ensure the parser logic (existing or newly adjusted) satisfies the new guard-focused scenarios.
+    </Goal>
+    <Instructions>
+      <Step>If any test from the Red phase fails, adjust parseMatchExpr guard handling or delimiter recovery until the tests pass.</Step>
+      <Step>Validate that span bookkeeping still works when guards precede both expression and block payloads; preserve existing helper usage (withBlockTail).</Step>
+    </Instructions>
+    <Verification>
+      <Command>go test ./internal/parser -run 'TestParseMatchExpr|TestParseMatchArmDelimiters'</Command>
+      <Command>go test ./...</Command>
+      <Expectation>All suites pass, confirming guard coverage across payload styles and delimiter diagnostics.</Expectation>
+    </Verification>
+  </Phase>
+
+  <Phase name="Refactor">
+    <Goal>
+      Clean up any incidental duplication and document intent where helpful without altering observable behavior.
+    </Goal>
+    <Instructions>
+      <Step>Review the new assertions for clarity and alignment with existing test idioms (requireMatchGuard, type checks, etc.).</Step>
+      <Step>Consider extracting shared guard sample source into helpers if additional guard cases are planned, but avoid premature abstraction.</Step>
+    </Instructions>
+    <Verification>
+      <Command>go test ./internal/parser</Command>
+    </Verification>
+  </Phase>
+
+  <PostConditions>
+    <Item>Guarded match arms now have targeted regression coverage spanning expression and block bodies, with and without trailing commas.</Item>
+    <Item>Delimiter diagnostics for guarded arms are pinned, preventing future regressions in lookahead or recovery logic.</Item>
+    <Item>TDD discipline maintained via Red/Green/Refactor sequencing and recorded test runs.</Item>
+  </PostConditions>
+
+  <Risks>
+    <Item>If future guard syntax evolves (e.g., allowing parentheses or additional keywords), revisit the literals in these tests to keep them representative.</Item>
+    <Item>Ensure helper requireMatchGuard remains compatible if AST guard storage changes; update the helper first to avoid brittle tests.</Item>
+  </Risks>
+</ImplementationPlan>
+
+

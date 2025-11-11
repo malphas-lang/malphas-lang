@@ -3183,6 +3183,61 @@ func TestParseBlockTailExpressions(t *testing.T) {
 			t.Fatalf("expected second match arm tail expression type *ast.Ident, got %T", secondArm.Body.Tail)
 		}
 	})
+
+	t.Run("guards tolerate mixed bodies and commas", func(t *testing.T) {
+		const src = `
+	package foo;
+
+	fn main() {
+		let result = match value {
+			even if value >= 0 => value / 2,
+			odd if value < 0 => {
+				let doubled = value * 2;
+				doubled
+			},
+			_ => value
+		};
+	}
+	`
+
+		file, errs := parseFile(t, src)
+		assertNoErrors(t, errs)
+
+		fn := file.Decls[0].(*ast.FnDecl)
+		letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+		matchExpr := letStmt.Value.(*ast.MatchExpr)
+
+		if got := len(matchExpr.Arms); got != 3 {
+			t.Fatalf("expected 3 match arms, got %d", got)
+		}
+
+		evenArm := matchExpr.Arms[0]
+		if guard := requireMatchGuard(t, evenArm); guard == nil {
+			t.Fatalf("expected guard expression on first arm")
+		}
+		if _, ok := evenArm.Body.Tail.(*ast.InfixExpr); !ok {
+			t.Fatalf("expected first arm expression body type *ast.InfixExpr, got %T", evenArm.Body.Tail)
+		}
+
+		oddArm := matchExpr.Arms[1]
+		if guard := requireMatchGuard(t, oddArm); guard == nil {
+			t.Fatalf("expected guard expression on second arm")
+		}
+		if want, got := 1, len(oddArm.Body.Stmts); got != want {
+			t.Fatalf("expected second arm block to contain %d statement, got %d", want, got)
+		}
+		if tail, ok := oddArm.Body.Tail.(*ast.Ident); !ok || tail.Name != "doubled" {
+			t.Fatalf("expected second arm block tail identifier 'doubled', got %#v", oddArm.Body.Tail)
+		}
+
+		finalArm := matchExpr.Arms[2]
+		if finalArm.Guard != nil {
+			t.Fatalf("expected fallback arm to have no guard, got %#v", finalArm.Guard)
+		}
+		if _, ok := finalArm.Body.Tail.(*ast.Ident); !ok {
+			t.Fatalf("expected fallback arm tail identifier, got %T", finalArm.Body.Tail)
+		}
+	})
 }
 
 func TestPendingTailInvariant(t *testing.T) {
@@ -4006,6 +4061,21 @@ fn main() {
 	match x {
 		1 => 10
 		2 => 20
+	}
+}
+`,
+			wantErr: true,
+			errMsg:  "expected ',' or '}' after match arm",
+		},
+		{
+			name: "guarded arm missing comma emits delimiter diagnostic",
+			src: `
+package foo;
+
+fn main() {
+	match value {
+		even if value >= 0 => value / 2
+		odd if value < 0 => value * 2,
 	}
 }
 `,
