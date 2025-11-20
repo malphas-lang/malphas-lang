@@ -1260,6 +1260,10 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseWhileStmt()
 	case lexer.FOR:
 		return p.parseForStmt()
+	case lexer.SPAWN:
+		return p.parseSpawnStmt()
+	case lexer.SELECT:
+		return p.parseSelectStmt()
 	default:
 		return p.parseExprStmt()
 	}
@@ -2018,4 +2022,152 @@ func mergeSpan(start, end lexer.Span) lexer.Span {
 	}
 
 	return span
+}
+
+func (p *Parser) parseSpawnStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.SPAWN {
+		p.reportError("expected 'spawn' keyword", p.curTok.Span)
+		return nil
+	}
+
+	p.nextToken()
+
+	expr := p.parseExpr()
+	if expr == nil {
+		return nil
+	}
+
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		p.reportError("expected function call after 'spawn'", expr.Span())
+		return nil
+	}
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+	p.nextToken()
+
+	return ast.NewSpawnStmt(call, span)
+}
+
+func (p *Parser) parseSelectStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.SELECT {
+		p.reportError("expected 'select' keyword", p.curTok.Span)
+		return nil
+	}
+
+	// Expect '{' immediately after 'select'
+	if !p.expect(lexer.LBRACE) {
+		return nil
+	}
+
+	// Consume '{'
+	p.nextToken()
+
+	cases := make([]*ast.SelectCase, 0)
+
+	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+		c := p.parseSelectCase()
+		if c != nil {
+			cases = append(cases, c)
+		} else {
+			// Recovery: skip until ',' or '}' or 'EOF'
+			for p.curTok.Type != lexer.COMMA && p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+				p.nextToken()
+			}
+			if p.curTok.Type == lexer.COMMA {
+				p.nextToken()
+			}
+		}
+	}
+
+	if p.curTok.Type != lexer.RBRACE {
+		p.reportError("expected '}' to close select statement", p.curTok.Span)
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+	p.nextToken()
+
+	return ast.NewSelectStmt(cases, span)
+}
+
+func (p *Parser) parseSelectCase() *ast.SelectCase {
+	start := p.curTok.Span
+	var comm ast.Stmt
+
+	if p.curTok.Type == lexer.LET {
+		// Parse let binding without semicolon
+		p.nextToken() // consume 'let'
+		mutable := false
+		if p.curTok.Type == lexer.MUT {
+			mutable = true
+			p.nextToken()
+		}
+
+		if p.curTok.Type != lexer.IDENT {
+			p.reportError("expected identifier", p.curTok.Span)
+			return nil
+		}
+		nameTok := p.curTok
+		name := ast.NewIdent(nameTok.Literal, nameTok.Span)
+
+		var typ ast.TypeExpr
+		if p.peekTok.Type == lexer.COLON {
+			p.nextToken()
+			p.nextToken()
+			if !isTypeStart(p.curTok.Type) {
+				p.reportError("expected type", p.curTok.Span)
+				return nil
+			}
+			typ = p.parseType()
+		}
+
+		if !p.expect(lexer.ASSIGN) {
+			return nil
+		}
+		p.nextToken()
+
+		val := p.parseExpr()
+		if val == nil {
+			return nil
+		}
+
+		// Note: No semicolon check here
+		comm = ast.NewLetStmt(mutable, name, typ, val, mergeSpan(start, val.Span()))
+	} else {
+		expr := p.parseExpr()
+		if expr == nil {
+			return nil
+		}
+		comm = ast.NewExprStmt(expr, expr.Span())
+	}
+
+	if !p.expect(lexer.FATARROW) {
+		return nil
+	}
+	p.nextToken()
+
+	body := p.parseBlockExpr()
+	if body == nil {
+		return nil
+	}
+
+	if p.curTok.Type == lexer.RBRACE {
+		p.nextToken()
+	}
+
+	// Optional comma
+	if p.curTok.Type == lexer.COMMA {
+		p.nextToken()
+	}
+
+	return ast.NewSelectCase(comm, body, mergeSpan(start, body.Span()))
 }

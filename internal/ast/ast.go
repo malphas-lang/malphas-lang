@@ -655,6 +655,74 @@ func NewForStmt(iterator *Ident, iterable Expr, body *BlockExpr, span lexer.Span
 // stmtNode marks ForStmt as a statement.
 func (*ForStmt) stmtNode() {}
 
+// SpawnStmt represents a spawn statement (goroutine).
+type SpawnStmt struct {
+	Call *CallExpr
+	span lexer.Span
+}
+
+// Span returns the statement span.
+func (s *SpawnStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *SpawnStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewSpawnStmt constructs a spawn statement node.
+func NewSpawnStmt(call *CallExpr, span lexer.Span) *SpawnStmt {
+	return &SpawnStmt{
+		Call: call,
+		span: span,
+	}
+}
+
+// stmtNode marks SpawnStmt as a statement.
+func (*SpawnStmt) stmtNode() {}
+
+// SelectCase represents a single case in a select statement.
+type SelectCase struct {
+	Comm Stmt // SendStmt or ExprStmt (recv)
+	Body *BlockExpr
+	span lexer.Span
+}
+
+// Span returns the case span.
+func (c *SelectCase) Span() lexer.Span { return c.span }
+
+// SetSpan updates the case span.
+func (c *SelectCase) SetSpan(span lexer.Span) { c.span = span }
+
+// NewSelectCase constructs a select case node.
+func NewSelectCase(comm Stmt, body *BlockExpr, span lexer.Span) *SelectCase {
+	return &SelectCase{
+		Comm: comm,
+		Body: body,
+		span: span,
+	}
+}
+
+// SelectStmt represents a select statement.
+type SelectStmt struct {
+	Cases []*SelectCase
+	span  lexer.Span
+}
+
+// Span returns the statement span.
+func (s *SelectStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *SelectStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewSelectStmt constructs a select statement node.
+func NewSelectStmt(cases []*SelectCase, span lexer.Span) *SelectStmt {
+	return &SelectStmt{
+		Cases: cases,
+		span:  span,
+	}
+}
+
+// stmtNode marks SelectStmt as a statement.
+func (*SelectStmt) stmtNode() {}
+
 // MatchArm represents a single match arm.
 type MatchArm struct {
 	Pattern Expr
