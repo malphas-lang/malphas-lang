@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/malphas-lang/malphas-lang/internal/parser"
+	"github.com/malphas-lang/malphas-lang/internal/types"
 )
 
 func main() {
@@ -46,7 +49,39 @@ func runBuild(args []string) {
 		fmt.Fprintf(os.Stderr, "Usage: malphas build <file>\n")
 		os.Exit(1)
 	}
-	fmt.Printf("Building %s... (not implemented)\n", args[0])
+	filename := args[0]
+	fmt.Printf("Building %s...\n", filename)
+
+	// Read file
+	src, err := os.ReadFile(filename)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse
+	p := parser.New(string(src))
+	file := p.ParseFile()
+
+	if len(p.Errors()) > 0 {
+		for _, err := range p.Errors() {
+			fmt.Fprintf(os.Stderr, "Parse Error: %s at %v\n", err.Message, err.Span)
+		}
+		os.Exit(1)
+	}
+
+	// Type Check
+	checker := types.NewChecker()
+	checker.Check(file)
+
+	if len(checker.Errors) > 0 {
+		for _, err := range checker.Errors {
+			fmt.Fprintf(os.Stderr, "Type Error: %s at %v\n", err.Message, err.Span)
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("Build successful (no code generated yet)")
 }
 
 func runRun(args []string) {
