@@ -1,0 +1,17 @@
+package main;
+
+fn worker(c: chan int) {
+    c <- 42;
+}
+
+fn main() {
+    // Test Channel::new with explicit type
+    let ch = Channel[int]::new(10);
+    
+    spawn worker(ch);
+    
+    let x = <-ch;
+    if x != 42 {
+        // panic("expected 42");
+    }
+}

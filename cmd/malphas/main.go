@@ -4,7 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
+	"go/printer"
+	"go/token"
+
+	"github.com/malphas-lang/malphas-lang/internal/codegen"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 	"github.com/malphas-lang/malphas-lang/internal/types"
 )
@@ -44,19 +51,11 @@ func main() {
 	}
 }
 
-func runBuild(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: malphas build <file>\n")
-		os.Exit(1)
-	}
-	filename := args[0]
-	fmt.Printf("Building %s...\n", filename)
-
+func compileToTemp(filename string) (string, error) {
 	// Read file
 	src, err := os.ReadFile(filename)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("error reading file: %v", err)
 	}
 
 	// Parse
@@ -67,7 +66,7 @@ func runBuild(args []string) {
 		for _, err := range p.Errors() {
 			fmt.Fprintf(os.Stderr, "Parse Error: %s at %v\n", err.Message, err.Span)
 		}
-		os.Exit(1)
+		return "", fmt.Errorf("parse failed")
 	}
 
 	// Type Check
@@ -78,10 +77,60 @@ func runBuild(args []string) {
 		for _, err := range checker.Errors {
 			fmt.Fprintf(os.Stderr, "Type Error: %s at %v\n", err.Message, err.Span)
 		}
+		return "", fmt.Errorf("type check failed")
+	}
+
+	// Code Generation
+	generator := codegen.NewGenerator()
+	goFile, err := generator.Generate(file)
+	if err != nil {
+		return "", fmt.Errorf("codegen error: %v", err)
+	}
+
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "malphas_*.go")
+	if err != nil {
+		return "", fmt.Errorf("error creating temp file: %v", err)
+	}
+	defer tmpFile.Close()
+
+	fset := token.NewFileSet()
+	if err := printer.Fprint(tmpFile, fset, goFile); err != nil {
+		return "", fmt.Errorf("error writing output file: %v", err)
+	}
+
+	return tmpFile.Name(), nil
+}
+
+func runBuild(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "Usage: malphas build <file>\n")
+		os.Exit(1)
+	}
+	filename := args[0]
+	fmt.Printf("Building %s...\n", filename)
+
+	tmpFile, err := compileToTemp(filename)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	defer os.Remove(tmpFile)
+
+	// Determine output binary name
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	outName := strings.TrimSuffix(base, ext)
+
+	cmd := exec.Command("go", "build", "-o", outName, tmpFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Build failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Build successful (no code generated yet)")
+	fmt.Printf("Build successful: %s\n", outName)
 }
 
 func runRun(args []string) {
@@ -89,7 +138,21 @@ func runRun(args []string) {
 		fmt.Fprintf(os.Stderr, "Usage: malphas run <file>\n")
 		os.Exit(1)
 	}
-	fmt.Printf("Running %s... (not implemented)\n", args[0])
+	filename := args[0]
+
+	tmpFile, err := compileToTemp(filename)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	defer os.Remove(tmpFile)
+
+	cmd := exec.Command("go", "run", tmpFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Exit(1)
+	}
 }
 
 func runFmt(args []string) {

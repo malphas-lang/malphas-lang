@@ -41,6 +41,7 @@ func TestChecker_BasicTypes(t *testing.T) {
 		nil, // type params
 		nil, // params
 		nil, // return type
+		nil, // where clause
 		fnBody,
 		lexer.Span{},
 	)
@@ -77,7 +78,7 @@ func TestChecker_UndefinedVariable(t *testing.T) {
 
 	fnDecl := ast.NewFnDecl(
 		ast.NewIdent("test", lexer.Span{}),
-		nil, nil, nil, fnBody, lexer.Span{},
+		nil, nil, nil, nil, fnBody, lexer.Span{},
 	)
 
 	file := &ast.File{

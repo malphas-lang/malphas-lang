@@ -52,10 +52,11 @@ const (
 	GE     TokenType = ">="
 
 	// Delimiters
-	COMMA     TokenType = ","
-	SEMICOLON TokenType = ";"
-	COLON     TokenType = ":"
-	DOT       TokenType = "."
+	COMMA        TokenType = ","
+	SEMICOLON    TokenType = ";"
+	COLON        TokenType = ":"
+	DOUBLE_COLON TokenType = "::"
+	DOT          TokenType = "."
 
 	LPAREN   TokenType = "("
 	RPAREN   TokenType = ")"
@@ -64,7 +65,8 @@ const (
 	LBRACKET TokenType = "["
 	RBRACKET TokenType = "]"
 
-	ARROW TokenType = "->"
+	ARROW  TokenType = "->"
+	LARROW TokenType = "<-"
 
 	// Keywords
 	LET      TokenType = "LET"
@@ -94,6 +96,7 @@ const (
 	SPAWN    TokenType = "SPAWN"
 	CHAN     TokenType = "CHAN"
 	SELECT   TokenType = "SELECT"
+	WHERE    TokenType = "WHERE"
 
 	// Trivia tokens (comments, whitespace, newlines)
 	LINE_COMMENT  TokenType = "LINE_COMMENT"  // //
@@ -130,6 +133,7 @@ var keywords = map[string]TokenType{
 	"spawn":    SPAWN,
 	"chan":     CHAN,
 	"select":   SELECT,
+	"where":    WHERE,
 }
 
 // LookupIdent checks if the identifier is a keyword

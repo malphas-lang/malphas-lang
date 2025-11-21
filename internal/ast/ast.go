@@ -90,6 +90,7 @@ type FnDecl struct {
 	TypeParams []GenericParam
 	Params     []*Param
 	ReturnType TypeExpr
+	Where      *WhereClause
 	Body       *BlockExpr
 	span       lexer.Span
 }
@@ -98,12 +99,14 @@ type FnDecl struct {
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
 // NewFnDecl constructs a function declaration node.
-func NewFnDecl(name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, body *BlockExpr, span lexer.Span) *FnDecl {
+// NewFnDecl constructs a function declaration node.
+func NewFnDecl(name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
 	return &FnDecl{
 		Name:       name,
 		TypeParams: typeParams,
 		Params:     params,
 		ReturnType: returnType,
+		Where:      where,
 		Body:       body,
 		span:       span,
 	}
@@ -197,8 +200,51 @@ func NewParam(name *Ident, typ TypeExpr, span lexer.Span) *Param {
 }
 
 // SetSpan updates the parameter span.
+// SetSpan updates the parameter span.
 func (p *Param) SetSpan(span lexer.Span) {
 	p.span = span
+}
+
+// WherePredicate represents a single constraint in a where clause (e.g. T: Show).
+type WherePredicate struct {
+	Target TypeExpr
+	Bounds []TypeExpr
+	span   lexer.Span
+}
+
+// Span returns the where predicate span.
+func (p *WherePredicate) Span() lexer.Span { return p.span }
+
+// SetSpan updates the where predicate span.
+func (p *WherePredicate) SetSpan(span lexer.Span) { p.span = span }
+
+// NewWherePredicate constructs a where predicate node.
+func NewWherePredicate(target TypeExpr, bounds []TypeExpr, span lexer.Span) *WherePredicate {
+	return &WherePredicate{
+		Target: target,
+		Bounds: bounds,
+		span:   span,
+	}
+}
+
+// WhereClause represents a where clause with constraints.
+type WhereClause struct {
+	Predicates []*WherePredicate
+	span       lexer.Span
+}
+
+// Span returns the where clause span.
+func (w *WhereClause) Span() lexer.Span { return w.span }
+
+// SetSpan updates the where clause span.
+func (w *WhereClause) SetSpan(span lexer.Span) { w.span = span }
+
+// NewWhereClause constructs a where clause node.
+func NewWhereClause(predicates []*WherePredicate, span lexer.Span) *WhereClause {
+	return &WhereClause{
+		Predicates: predicates,
+		span:       span,
+	}
 }
 
 // BlockExpr represents a block of statements with an optional tail expression.
@@ -263,6 +309,7 @@ func (*LetStmt) stmtNode() {}
 type StructDecl struct {
 	Name       *Ident
 	TypeParams []GenericParam
+	Where      *WhereClause
 	Fields     []*StructField
 	span       lexer.Span
 }
@@ -271,10 +318,12 @@ type StructDecl struct {
 func (d *StructDecl) Span() lexer.Span { return d.span }
 
 // NewStructDecl constructs a struct declaration node.
-func NewStructDecl(name *Ident, typeParams []GenericParam, fields []*StructField, span lexer.Span) *StructDecl {
+// NewStructDecl constructs a struct declaration node.
+func NewStructDecl(name *Ident, typeParams []GenericParam, where *WhereClause, fields []*StructField, span lexer.Span) *StructDecl {
 	return &StructDecl{
 		Name:       name,
 		TypeParams: typeParams,
+		Where:      where,
 		Fields:     fields,
 		span:       span,
 	}
@@ -316,6 +365,7 @@ func (f *StructField) SetSpan(span lexer.Span) {
 type EnumDecl struct {
 	Name       *Ident
 	TypeParams []GenericParam
+	Where      *WhereClause
 	Variants   []*EnumVariant
 	span       lexer.Span
 }
@@ -324,10 +374,12 @@ type EnumDecl struct {
 func (d *EnumDecl) Span() lexer.Span { return d.span }
 
 // NewEnumDecl constructs an enum declaration node.
-func NewEnumDecl(name *Ident, typeParams []GenericParam, variants []*EnumVariant, span lexer.Span) *EnumDecl {
+// NewEnumDecl constructs an enum declaration node.
+func NewEnumDecl(name *Ident, typeParams []GenericParam, where *WhereClause, variants []*EnumVariant, span lexer.Span) *EnumDecl {
 	return &EnumDecl{
 		Name:       name,
 		TypeParams: typeParams,
+		Where:      where,
 		Variants:   variants,
 		span:       span,
 	}
@@ -369,6 +421,7 @@ func (v *EnumVariant) SetSpan(span lexer.Span) {
 type TypeAliasDecl struct {
 	Name       *Ident
 	TypeParams []GenericParam
+	Where      *WhereClause
 	Target     TypeExpr
 	span       lexer.Span
 }
@@ -377,10 +430,12 @@ type TypeAliasDecl struct {
 func (d *TypeAliasDecl) Span() lexer.Span { return d.span }
 
 // NewTypeAliasDecl constructs a type alias node.
-func NewTypeAliasDecl(name *Ident, typeParams []GenericParam, target TypeExpr, span lexer.Span) *TypeAliasDecl {
+// NewTypeAliasDecl constructs a type alias node.
+func NewTypeAliasDecl(name *Ident, typeParams []GenericParam, where *WhereClause, target TypeExpr, span lexer.Span) *TypeAliasDecl {
 	return &TypeAliasDecl{
 		Name:       name,
 		TypeParams: typeParams,
+		Where:      where,
 		Target:     target,
 		span:       span,
 	}
@@ -427,6 +482,7 @@ func (*ConstDecl) declNode() {}
 type TraitDecl struct {
 	Name       *Ident
 	TypeParams []GenericParam
+	Where      *WhereClause
 	Methods    []*FnDecl
 	span       lexer.Span
 }
@@ -435,10 +491,12 @@ type TraitDecl struct {
 func (d *TraitDecl) Span() lexer.Span { return d.span }
 
 // NewTraitDecl constructs a trait declaration node.
-func NewTraitDecl(name *Ident, typeParams []GenericParam, methods []*FnDecl, span lexer.Span) *TraitDecl {
+// NewTraitDecl constructs a trait declaration node.
+func NewTraitDecl(name *Ident, typeParams []GenericParam, where *WhereClause, methods []*FnDecl, span lexer.Span) *TraitDecl {
 	return &TraitDecl{
 		Name:       name,
 		TypeParams: typeParams,
+		Where:      where,
 		Methods:    methods,
 		span:       span,
 	}
@@ -454,22 +512,27 @@ func (*TraitDecl) declNode() {}
 
 // ImplDecl represents an impl block.
 type ImplDecl struct {
-	Trait   TypeExpr
-	Target  TypeExpr
-	Methods []*FnDecl
-	span    lexer.Span
+	TypeParams []GenericParam
+	Trait      TypeExpr
+	Target     TypeExpr
+	Where      *WhereClause
+	Methods    []*FnDecl
+	span       lexer.Span
 }
 
 // Span returns the impl declaration span.
 func (d *ImplDecl) Span() lexer.Span { return d.span }
 
 // NewImplDecl constructs an impl declaration node.
-func NewImplDecl(trait TypeExpr, target TypeExpr, methods []*FnDecl, span lexer.Span) *ImplDecl {
+// NewImplDecl constructs an impl declaration node.
+func NewImplDecl(typeParams []GenericParam, trait TypeExpr, target TypeExpr, where *WhereClause, methods []*FnDecl, span lexer.Span) *ImplDecl {
 	return &ImplDecl{
-		Trait:   trait,
-		Target:  target,
-		Methods: methods,
-		span:    span,
+		TypeParams: typeParams,
+		Trait:      trait,
+		Target:     target,
+		Where:      where,
+		Methods:    methods,
+		span:       span,
 	}
 }
 
@@ -1133,3 +1196,54 @@ func NewFunctionType(params []TypeExpr, ret TypeExpr, span lexer.Span) *Function
 		span:   span,
 	}
 }
+
+// StructLiteralField represents a field assignment in a struct literal.
+type StructLiteralField struct {
+	Name  *Ident
+	Value Expr
+	span  lexer.Span
+}
+
+// Span returns the field span.
+func (f *StructLiteralField) Span() lexer.Span { return f.span }
+
+// NewStructLiteralField constructs a struct literal field node.
+func NewStructLiteralField(name *Ident, value Expr, span lexer.Span) *StructLiteralField {
+	return &StructLiteralField{
+		Name:  name,
+		Value: value,
+		span:  span,
+	}
+}
+
+// SetSpan updates the field span.
+func (f *StructLiteralField) SetSpan(span lexer.Span) {
+	f.span = span
+}
+
+// StructLiteral represents a struct instantiation.
+type StructLiteral struct {
+	Name   *Ident
+	Fields []*StructLiteralField
+	span   lexer.Span
+}
+
+// Span returns the literal span.
+func (l *StructLiteral) Span() lexer.Span { return l.span }
+
+// NewStructLiteral constructs a struct literal node.
+func NewStructLiteral(name *Ident, fields []*StructLiteralField, span lexer.Span) *StructLiteral {
+	return &StructLiteral{
+		Name:   name,
+		Fields: fields,
+		span:   span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (l *StructLiteral) SetSpan(span lexer.Span) {
+	l.span = span
+}
+
+// exprNode marks StructLiteral as an expression.
+func (*StructLiteral) exprNode() {}

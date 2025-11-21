@@ -1,0 +1,19 @@
+package main;
+
+type IntChan = chan int;
+
+fn worker(c: IntChan) {
+    c <- 42;
+}
+
+fn main() {
+    let c = make(IntChan);
+    spawn worker(c);
+
+    select {
+        let _ = <-c => {
+            // print("Received: " + x); // String concatenation with int might fail if not handled
+            // For now just receive
+        }
+    }
+}

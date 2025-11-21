@@ -1,0 +1,23 @@
+package main;
+
+struct Point {
+    x: int,
+    y: int
+}
+
+enum Shape {
+    Circle(int),
+    Rect(int, int)
+}
+
+const PI: int = 3;
+
+fn consume(x: int) {}
+fn consumePoint(p: Point) {}
+
+fn main() {
+    let x = PI;
+    consume(x);
+    let p = Point { x: 10, y: 20 };
+    consumePoint(p);
+}

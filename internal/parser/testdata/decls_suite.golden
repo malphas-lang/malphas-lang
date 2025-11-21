@@ -41,6 +41,7 @@
           "Name": "U"
         }
       },
+      "Where": null,
       "Body": {
         "Stmts": [
           {
@@ -64,6 +65,7 @@
           "Bounds": null
         }
       ],
+      "Where": null,
       "Fields": [
         {
           "Name": {
@@ -99,6 +101,7 @@
           "Bounds": null
         }
       ],
+      "Where": null,
       "Variants": [
         {
           "Name": {
@@ -132,6 +135,7 @@
           "Bounds": null
         }
       ],
+      "Where": null,
       "Target": {
         "Base": {
           "Name": {
@@ -172,6 +176,7 @@
           "Bounds": null
         }
       ],
+      "Where": null,
       "Methods": [
         {
           "Name": {
@@ -191,6 +196,7 @@
             }
           ],
           "ReturnType": null,
+          "Where": null,
           "Body": {
             "Stmts": [
               {
@@ -203,6 +209,7 @@
       ]
     },
     {
+      "TypeParams": null,
       "Trait": {
         "Name": {
           "Name": "Printer"
@@ -222,6 +229,7 @@
           }
         ]
       },
+      "Where": null,
       "Methods": [
         {
           "Name": {
@@ -250,6 +258,7 @@
             }
           ],
           "ReturnType": null,
+          "Where": null,
           "Body": {
             "Stmts": [
               {

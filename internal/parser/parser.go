@@ -34,26 +34,29 @@ const (
 	precedenceSum
 	precedenceProduct
 	precedencePrefix
-	precedencePostfix
+	precedencePostfix // . ( ) [ ]
+	precedencePath    // ::
 )
 
 var precedences = map[lexer.TokenType]int{
-	lexer.ASSIGN:   precedenceAssign,
-	lexer.OR:       precedenceOr,
-	lexer.AND:      precedenceAnd,
-	lexer.EQ:       precedenceEquality,
-	lexer.NOT_EQ:   precedenceEquality,
-	lexer.LT:       precedenceComparison,
-	lexer.LE:       precedenceComparison,
-	lexer.GT:       precedenceComparison,
-	lexer.GE:       precedenceComparison,
-	lexer.PLUS:     precedenceSum,
-	lexer.MINUS:    precedenceSum,
-	lexer.ASTERISK: precedenceProduct,
-	lexer.SLASH:    precedenceProduct,
-	lexer.LPAREN:   precedencePostfix,
-	lexer.LBRACKET: precedencePostfix,
-	lexer.DOT:      precedencePostfix,
+	lexer.ASSIGN:       precedenceAssign,
+	lexer.LARROW:       precedenceAssign, // treat send as assignment-level precedence
+	lexer.OR:           precedenceOr,
+	lexer.AND:          precedenceAnd,
+	lexer.EQ:           precedenceEquality,
+	lexer.NOT_EQ:       precedenceEquality,
+	lexer.LT:           precedenceComparison,
+	lexer.LE:           precedenceComparison,
+	lexer.GT:           precedenceComparison,
+	lexer.GE:           precedenceComparison,
+	lexer.PLUS:         precedenceSum,
+	lexer.MINUS:        precedenceSum,
+	lexer.ASTERISK:     precedenceProduct,
+	lexer.SLASH:        precedenceProduct,
+	lexer.DOUBLE_COLON: precedencePath,
+	lexer.LPAREN:       precedencePostfix,
+	lexer.LBRACKET:     precedencePostfix,
+	lexer.DOT:          precedencePostfix,
 }
 
 // ParseError captures a recoverable parsing error with location context.
@@ -93,6 +96,8 @@ type Parser struct {
 
 	pendingTail    ast.Expr
 	allowBlockTail bool
+
+	tokenBuffer []lexer.Token
 }
 
 // New returns a parser initialised with the provided source input.
@@ -103,10 +108,11 @@ func New(input string, opts ...Option) *Parser {
 	}
 
 	p := &Parser{
-		lx:        lexer.New(input),
-		prefixFns: make(map[lexer.TokenType]prefixParseFn),
-		infixFns:  make(map[lexer.TokenType]infixParseFn),
-		filename:  cfg.filename,
+		lx:          lexer.New(input),
+		prefixFns:   make(map[lexer.TokenType]prefixParseFn),
+		infixFns:    make(map[lexer.TokenType]infixParseFn),
+		filename:    cfg.filename,
+		tokenBuffer: make([]lexer.Token, 0),
 	}
 
 	if cfg.filename != "" {
@@ -121,6 +127,7 @@ func New(input string, opts ...Option) *Parser {
 	p.registerPrefix(lexer.NIL, p.parseNilLiteral)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpr)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpr)
+	p.registerPrefix(lexer.LARROW, p.parsePrefixExpr) // receive <-ch
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpr)
 	p.registerPrefix(lexer.IF, p.parseIfExpr)
 	p.registerPrefix(lexer.LBRACE, p.parseBlockLiteral)
@@ -142,6 +149,8 @@ func New(input string, opts ...Option) *Parser {
 	p.registerInfix(lexer.LPAREN, p.parseCallExpr)
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpr)
 	p.registerInfix(lexer.DOT, p.parseFieldExpr)
+	p.registerInfix(lexer.DOUBLE_COLON, p.parseInfixExpr) // ::
+	p.registerInfix(lexer.LARROW, p.parseInfixExpr)       // send ch <- val
 
 	// Seed curTok/peekTok.
 	p.nextToken()
@@ -200,14 +209,37 @@ func (p *Parser) ParseFile() *ast.File {
 // prefix expression tests depend on this guarantee to keep Pratt precedence
 // calculation stable across nested constructs.
 func (p *Parser) nextToken() {
-	if p.lx == nil {
-		p.curTok = p.peekTok
-		p.peekTok = lexer.Token{}
-		return
-	}
-
 	p.curTok = p.peekTok
-	p.peekTok = p.lx.NextToken()
+	if len(p.tokenBuffer) > 0 {
+		p.peekTok = p.tokenBuffer[0]
+		p.tokenBuffer = p.tokenBuffer[1:]
+	} else {
+		if p.lx != nil {
+			p.peekTok = p.lx.NextToken()
+		} else {
+			p.peekTok = lexer.Token{}
+		}
+	}
+}
+
+func (p *Parser) peekTokenAt(n int) lexer.Token {
+	if n == 0 {
+		return p.peekTok
+	}
+	// We need to fill buffer up to n
+	// n=1 means first token in buffer
+	needed := n
+	for len(p.tokenBuffer) < needed {
+		if p.lx != nil {
+			p.tokenBuffer = append(p.tokenBuffer, p.lx.NextToken())
+		} else {
+			break
+		}
+	}
+	if len(p.tokenBuffer) >= needed {
+		return p.tokenBuffer[needed-1]
+	}
+	return lexer.Token{Type: lexer.EOF}
 }
 
 // expect asserts that the peek token matches the provided type.
@@ -306,16 +338,16 @@ func (p *Parser) parsePackageDecl() *ast.PackageDecl {
 	return decl
 }
 
-func (p *Parser) parseFnHeader() (*ast.Ident, []ast.GenericParam, []*ast.Param, ast.TypeExpr, lexer.Span) {
+func (p *Parser) parseFnHeader() (*ast.Ident, []ast.GenericParam, []*ast.Param, ast.TypeExpr, *ast.WhereClause, lexer.Span) {
 	start := p.curTok.Span
 
 	if p.curTok.Type != lexer.FN {
 		p.reportError("expected 'fn' keyword", p.curTok.Span)
-		return nil, nil, nil, nil, start
+		return nil, nil, nil, nil, nil, start
 	}
 
 	if !p.expect(lexer.IDENT) {
-		return nil, nil, nil, nil, start
+		return nil, nil, nil, nil, nil, start
 	}
 
 	nameTok := p.curTok
@@ -323,16 +355,16 @@ func (p *Parser) parseFnHeader() (*ast.Ident, []ast.GenericParam, []*ast.Param, 
 
 	typeParams, ok := p.parseOptionalTypeParams()
 	if !ok {
-		return nil, nil, nil, nil, start
+		return nil, nil, nil, nil, nil, start
 	}
 
 	if !p.expect(lexer.LPAREN) {
-		return nil, nil, nil, nil, start
+		return nil, nil, nil, nil, nil, start
 	}
 
 	params, ok := p.parseParamList()
 	if !ok {
-		return nil, nil, nil, nil, start
+		return nil, nil, nil, nil, nil, start
 	}
 
 	var returnType ast.TypeExpr
@@ -341,17 +373,22 @@ func (p *Parser) parseFnHeader() (*ast.Ident, []ast.GenericParam, []*ast.Param, 
 		p.nextToken() // move to first return type token
 		returnType = p.parseType()
 		if returnType == nil {
-			return nil, nil, nil, nil, start
+			return nil, nil, nil, nil, nil, start
 		}
 	}
 
-	headerSpan := mergeSpan(start, p.curTok.Span)
+	whereClause := p.parseWhereClause()
 
-	return name, typeParams, params, returnType, headerSpan
+	headerSpan := mergeSpan(start, p.curTok.Span)
+	if whereClause != nil {
+		headerSpan = mergeSpan(headerSpan, whereClause.Span())
+	}
+
+	return name, typeParams, params, returnType, whereClause, headerSpan
 }
 
 func (p *Parser) parseFnDecl() ast.Decl {
-	name, typeParams, params, returnType, headerSpan := p.parseFnHeader()
+	name, typeParams, params, returnType, whereClause, headerSpan := p.parseFnHeader()
 	if name == nil {
 		return nil
 	}
@@ -377,11 +414,11 @@ func (p *Parser) parseFnDecl() ast.Decl {
 
 	span := mergeSpan(headerSpan, body.Span())
 
-	return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
+	return ast.NewFnDecl(name, typeParams, params, returnType, whereClause, body, span)
 }
 
 func (p *Parser) parseTraitMethod() *ast.FnDecl {
-	name, typeParams, params, returnType, headerSpan := p.parseFnHeader()
+	name, typeParams, params, returnType, whereClause, headerSpan := p.parseFnHeader()
 	if name == nil {
 		return nil
 	}
@@ -393,7 +430,7 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 		}
 		span := mergeSpan(headerSpan, p.curTok.Span)
 		p.nextToken()
-		return ast.NewFnDecl(name, typeParams, params, returnType, nil, span)
+		return ast.NewFnDecl(name, typeParams, params, returnType, whereClause, nil, span)
 	case lexer.LBRACE:
 		if !p.expect(lexer.LBRACE) {
 			return nil
@@ -412,7 +449,7 @@ func (p *Parser) parseTraitMethod() *ast.FnDecl {
 			p.nextToken()
 		}
 		span := mergeSpan(headerSpan, body.Span())
-		return ast.NewFnDecl(name, typeParams, params, returnType, body, span)
+		return ast.NewFnDecl(name, typeParams, params, returnType, whereClause, body, span)
 	default:
 		p.reportError("expected ';' or '{' after trait method signature", p.peekTok.Span)
 		return nil
@@ -475,6 +512,57 @@ func (p *Parser) parseOptionalTypeParams() ([]ast.GenericParam, bool) {
 	}
 
 	return params, true
+}
+
+func (p *Parser) parseWhereClause() *ast.WhereClause {
+	if p.peekTok.Type != lexer.WHERE {
+		return nil
+	}
+	p.nextToken() // consume 'where'
+	whereSpan := p.curTok.Span
+
+	predicates := make([]*ast.WherePredicate, 0)
+
+	for {
+		target := p.parseType()
+		if target == nil {
+			p.reportError("expected type in where clause", p.peekTok.Span)
+			return nil
+		}
+
+		if !p.expect(lexer.COLON) {
+			return nil
+		}
+
+		var bounds []ast.TypeExpr
+		bound := p.parseType()
+		if bound != nil {
+			bounds = append(bounds, bound)
+		}
+
+		for p.peekTok.Type == lexer.PLUS {
+			p.nextToken() // consume '+'
+			nextBound := p.parseType()
+			if nextBound != nil {
+				bounds = append(bounds, nextBound)
+			}
+		}
+
+		span := mergeSpan(target.Span(), p.curTok.Span)
+		predicates = append(predicates, ast.NewWherePredicate(target, bounds, span))
+
+		if p.peekTok.Type == lexer.COMMA {
+			p.nextToken()
+			continue
+		}
+		break
+	}
+
+	if len(predicates) > 0 {
+		whereSpan = mergeSpan(whereSpan, predicates[len(predicates)-1].Span())
+	}
+
+	return ast.NewWhereClause(predicates, whereSpan)
 }
 
 func (p *Parser) parseTypeParam() *ast.TypeParam {
@@ -644,6 +732,8 @@ func (p *Parser) parseStructDecl() ast.Decl {
 		return nil
 	}
 
+	whereClause := p.parseWhereClause()
+
 	if !p.expect(lexer.LBRACE) {
 		return nil
 	}
@@ -708,7 +798,7 @@ doneStruct:
 
 	p.nextToken()
 
-	return ast.NewStructDecl(name, typeParams, fields, span)
+	return ast.NewStructDecl(name, typeParams, whereClause, fields, span)
 }
 
 func (p *Parser) parseEnumDecl() ast.Decl {
@@ -730,6 +820,8 @@ func (p *Parser) parseEnumDecl() ast.Decl {
 	if !ok {
 		return nil
 	}
+
+	whereClause := p.parseWhereClause()
 
 	if !p.expect(lexer.LBRACE) {
 		return nil
@@ -820,7 +912,7 @@ doneEnum:
 
 	p.nextToken()
 
-	return ast.NewEnumDecl(name, typeParams, variants, span)
+	return ast.NewEnumDecl(name, typeParams, whereClause, variants, span)
 }
 
 func (p *Parser) parseTypeAliasDecl() ast.Decl {
@@ -842,6 +934,8 @@ func (p *Parser) parseTypeAliasDecl() ast.Decl {
 	if !ok {
 		return nil
 	}
+
+	whereClause := p.parseWhereClause()
 
 	if !p.expect(lexer.ASSIGN) {
 		return nil
@@ -867,7 +961,7 @@ func (p *Parser) parseTypeAliasDecl() ast.Decl {
 
 	p.nextToken()
 
-	return ast.NewTypeAliasDecl(name, typeParams, target, span)
+	return ast.NewTypeAliasDecl(name, typeParams, whereClause, target, span)
 }
 
 func (p *Parser) parseConstDecl() ast.Decl {
@@ -945,6 +1039,8 @@ func (p *Parser) parseTraitDecl() ast.Decl {
 		return nil
 	}
 
+	whereClause := p.parseWhereClause()
+
 	if !p.expect(lexer.LBRACE) {
 		return nil
 	}
@@ -977,7 +1073,7 @@ func (p *Parser) parseTraitDecl() ast.Decl {
 
 	p.nextToken()
 
-	return ast.NewTraitDecl(name, typeParams, methods, span)
+	return ast.NewTraitDecl(name, typeParams, whereClause, methods, span)
 }
 
 func (p *Parser) parseImplDecl() ast.Decl {
@@ -989,6 +1085,11 @@ func (p *Parser) parseImplDecl() ast.Decl {
 	}
 
 	p.nextToken()
+
+	typeParams, ok := p.parseOptionalTypeParams()
+	if !ok {
+		return nil
+	}
 
 	if !isTypeStart(p.curTok.Type) {
 		p.reportError("expected type expression after 'impl'", p.curTok.Span)
@@ -1020,6 +1121,8 @@ func (p *Parser) parseImplDecl() ast.Decl {
 	} else {
 		target = firstType
 	}
+
+	whereClause := p.parseWhereClause()
 
 	if !p.expect(lexer.LBRACE) {
 		return nil
@@ -1056,7 +1159,7 @@ func (p *Parser) parseImplDecl() ast.Decl {
 
 	p.nextToken()
 
-	return ast.NewImplDecl(trait, target, methods, span)
+	return ast.NewImplDecl(typeParams, trait, target, whereClause, methods, span)
 }
 
 func (p *Parser) parseType() ast.TypeExpr {
@@ -1065,6 +1168,8 @@ func (p *Parser) parseType() ast.TypeExpr {
 		return p.parseNamedOrGenericType()
 	case lexer.FN:
 		return p.parseFunctionType()
+	case lexer.CHAN:
+		return p.parseChanType()
 	default:
 		p.reportError("expected type expression", p.curTok.Span)
 		return nil
@@ -1073,7 +1178,7 @@ func (p *Parser) parseType() ast.TypeExpr {
 
 func isTypeStart(tt lexer.TokenType) bool {
 	switch tt {
-	case lexer.IDENT, lexer.FN:
+	case lexer.IDENT, lexer.FN, lexer.CHAN:
 		return true
 	default:
 		return false
@@ -1177,6 +1282,27 @@ func (p *Parser) parseFunctionType() ast.TypeExpr {
 	span := mergeSpan(start, p.curTok.Span)
 
 	return ast.NewFunctionType(params, ret, span)
+}
+
+func (p *Parser) parseChanType() ast.TypeExpr {
+	start := p.curTok.Span
+
+	if p.curTok.Type != lexer.CHAN {
+		p.reportError("expected 'chan' keyword", p.curTok.Span)
+		return nil
+	}
+
+	p.nextToken() // consume 'chan'
+
+	// Parse element type
+	elem := p.parseType()
+	if elem == nil {
+		return nil
+	}
+
+	span := mergeSpan(start, elem.Span())
+
+	return ast.NewChanType(elem, span)
 }
 
 func (p *Parser) parseBlockExpr() *ast.BlockExpr {
@@ -1752,7 +1878,81 @@ func (p *Parser) parseNilLiteral() ast.Expr {
 }
 
 func (p *Parser) parseIdentifier() ast.Expr {
-	return ast.NewIdent(p.curTok.Literal, p.curTok.Span)
+	ident := ast.NewIdent(p.curTok.Literal, p.curTok.Span)
+
+	// Check for struct literal: Ident { ... }
+	if p.peekTok.Type == lexer.LBRACE {
+		// Disambiguate from block:
+		// 1. Empty struct: Ident {} -> peekTokenAt(1) == RBRACE
+		// 2. Non-empty: Ident { field: ... } -> peekTokenAt(1) == IDENT && peekTokenAt(2) == COLON
+
+		isStruct := false
+		if p.peekTokenAt(1).Type == lexer.RBRACE {
+			isStruct = true
+		} else if p.peekTokenAt(1).Type == lexer.IDENT && p.peekTokenAt(2).Type == lexer.COLON {
+			isStruct = true
+		}
+
+		if isStruct {
+			return p.parseStructLiteral(ident)
+		}
+	}
+
+	return ident
+}
+
+func (p *Parser) parseStructLiteral(name *ast.Ident) ast.Expr {
+	p.nextToken() // move to '{'
+
+	fields := make([]*ast.StructLiteralField, 0)
+
+	if p.peekTok.Type == lexer.RBRACE {
+		p.nextToken() // move to '}'
+		return ast.NewStructLiteral(name, fields, mergeSpan(name.Span(), p.curTok.Span))
+	}
+
+	p.nextToken() // move to first field name
+
+	for {
+		if p.curTok.Type != lexer.IDENT {
+			p.reportError("expected field name", p.curTok.Span)
+			return nil
+		}
+
+		fieldName := ast.NewIdent(p.curTok.Literal, p.curTok.Span)
+
+		if !p.expect(lexer.COLON) {
+			return nil
+		}
+
+		p.nextToken() // move to value start
+
+		val := p.parseExpr()
+		if val == nil {
+			return nil
+		}
+
+		fields = append(fields, ast.NewStructLiteralField(fieldName, val, mergeSpan(fieldName.Span(), val.Span())))
+
+		if p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to ','
+			p.nextToken() // move to next field name or '}'
+			if p.curTok.Type == lexer.RBRACE {
+				break
+			}
+			continue
+		}
+
+		if p.peekTok.Type == lexer.RBRACE {
+			p.nextToken() // move to '}'
+			break
+		}
+
+		p.reportError("expected ',' or '}'", p.peekTok.Span)
+		return nil
+	}
+
+	return ast.NewStructLiteral(name, fields, mergeSpan(name.Span(), p.curTok.Span))
 }
 
 // parsePrefixExpr handles prefix operators registered via registerPrefix. It

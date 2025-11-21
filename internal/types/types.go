@@ -41,8 +41,9 @@ var (
 
 // Struct represents a struct type.
 type Struct struct {
-	Name   string
-	Fields []Field
+	Name       string
+	TypeParams []TypeParam
+	Fields     []Field
 }
 
 type Field struct {
@@ -55,13 +56,14 @@ func (s *Struct) IsType()        {}
 
 // Enum represents an enum type.
 type Enum struct {
-	Name     string
-	Variants []Variant
+	Name       string
+	TypeParams []TypeParam
+	Variants   []Variant
 }
 
 type Variant struct {
-	Name string
-	Type Type // Can be nil for unit variants
+	Name    string
+	Payload []Type // Can be empty for unit variants
 }
 
 func (e *Enum) String() string { return e.Name }
@@ -69,8 +71,9 @@ func (e *Enum) IsType()        {}
 
 // Function represents a function type.
 type Function struct {
-	Params []Type
-	Return Type
+	TypeParams []TypeParam
+	Params     []Type
+	Return     Type
 }
 
 func (f *Function) String() string {
@@ -89,10 +92,28 @@ func (f *Function) IsType() {}
 // Channel represents a channel type.
 type Channel struct {
 	Elem Type
+	Dir  ChanDir
 }
 
-func (c *Channel) String() string { return "chan " + c.Elem.String() }
-func (c *Channel) IsType()        {}
+type ChanDir int
+
+const (
+	SendRecv ChanDir = iota
+	SendOnly
+	RecvOnly
+)
+
+func (c *Channel) String() string {
+	switch c.Dir {
+	case SendOnly:
+		return "chan<- " + c.Elem.String()
+	case RecvOnly:
+		return "<-chan " + c.Elem.String()
+	default:
+		return "chan " + c.Elem.String()
+	}
+}
+func (c *Channel) IsType() {}
 
 // Named represents a reference to a named type (like a struct or enum)
 // that hasn't been fully resolved or is just a reference.

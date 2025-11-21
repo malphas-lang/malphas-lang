@@ -531,6 +531,12 @@ func (l *Lexer) NextToken() Token {
 				raw := string(ch) + string(l.ch)
 				l.read()
 				return l.makeToken(LE, startLine, startColumn, startPos, l.pos, raw, raw)
+			} else if l.peek() == '-' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(LARROW, startLine, startColumn, startPos, l.pos, raw, raw)
 			} else {
 				raw := string(l.ch)
 				l.read()
@@ -565,6 +571,13 @@ func (l *Lexer) NextToken() Token {
 
 		case ':':
 			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == ':' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(DOUBLE_COLON, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
 			raw := string(l.ch)
 			l.read()
 			return l.makeToken(COLON, startLine, startColumn, startPos, l.pos, raw, raw)
