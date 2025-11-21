@@ -1,0 +1,31 @@
+package main;
+
+struct Point {
+    x: int,
+    y: int
+}
+
+impl Point {
+    fn len(self: &Point) -> int {
+        self.x + self.y
+    }
+}
+
+fn main() {
+    let p = Point { x: 10, y: 20 };
+    
+    // Test auto-deref for field access
+    let r = &p;
+    let x_val = r.x;         // Auto-deref: r.x -> (*r).x
+    println(x_val);
+    
+    // Test auto-deref for method calls (already working)
+    let len = r.len();       // Auto-deref for method receiver
+    println(len);
+    
+    // Test mutable reference field access
+    let mut p2 = Point { x: 5, y: 15 };
+    let r_mut = &mut p2;
+    let y_val = r_mut.y;
+    println(y_val);
+}

@@ -7,6 +7,7 @@
   "Uses": null,
   "Decls": [
     {
+      "Unsafe": false,
       "Name": {
         "Name": "compute"
       },

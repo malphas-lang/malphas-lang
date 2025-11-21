@@ -19,7 +19,7 @@ func TestNullSafety(t *testing.T) {
 			input: `
 			package main;
 			fn main() {
-				let x: int? = nil;
+				let x: int? = null;
 			}
 			`,
 			hasError: false,
@@ -29,11 +29,11 @@ func TestNullSafety(t *testing.T) {
 			input: `
 			package main;
 			fn main() {
-				let x: int = nil;
+				let x: int = null;
 			}
 			`,
 			hasError: true,
-			errorMsg: "cannot assign type nil to int",
+			errorMsg: "cannot assign type null to int",
 		},
 		{
 			name: "access field on optional",
@@ -41,7 +41,7 @@ func TestNullSafety(t *testing.T) {
 			package main;
 			struct User { name: string }
 			fn main() {
-				let u: User? = nil;
+				let u: User? = null;
 				let n = u.name;
 			}
 			`,
@@ -54,7 +54,7 @@ func TestNullSafety(t *testing.T) {
 			package main;
 			struct User { name: string }
 			fn main() {
-				let u: User? = nil;
+				let u: User? = null;
 				let n = u.unwrap().name;
 			}
 			`,
@@ -68,14 +68,14 @@ func TestNullSafety(t *testing.T) {
 				let x: int? = 42;
 				match x {
 					42 => {},
-					nil => {},
+					null => {},
 					_ => {}
 				}
 			}
 			`,
 			hasError: false,
 		},
-		// NOTE: Flow sensitive analysis is a stretch goal for now, 
+		// NOTE: Flow sensitive analysis is a stretch goal for now,
 		// let's focus on match and explicit unwrap.
 	}
 

@@ -17,7 +17,7 @@ const (
 	Float  PrimitiveKind = "float"
 	Bool   PrimitiveKind = "bool"
 	String PrimitiveKind = "string"
-	Nil    PrimitiveKind = "nil"
+	Nil    PrimitiveKind = "null"
 	Void   PrimitiveKind = "void"
 )
 
@@ -75,6 +75,13 @@ type Function struct {
 	TypeParams []TypeParam
 	Params     []Type
 	Return     Type
+	Receiver   *ReceiverType // nil for free functions, non-nil for methods
+}
+
+// ReceiverType represents a method receiver.
+type ReceiverType struct {
+	IsMutable bool // true for &mut self, false for &self
+	Type      Type // the type being implemented on
 }
 
 func (f *Function) String() string {

@@ -8,11 +8,13 @@ import (
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
 )
 
-// Checker performs type checking on the AST.
+// Checker performs semantic analysis on the AST.
 type Checker struct {
 	GlobalScope *Scope
 	Env         *Environment // Tracks trait implementations
 	Errors      []diag.Diagnostic
+	// MethodTable maps type names to their methods
+	MethodTable map[string]map[string]*Function // typename -> methodname -> function
 }
 
 // NewChecker creates a new type checker.
@@ -21,6 +23,7 @@ func NewChecker() *Checker {
 		GlobalScope: NewScope(nil),
 		Env:         NewEnvironment(),
 		Errors:      []diag.Diagnostic{},
+		MethodTable: make(map[string]map[string]*Function),
 	}
 
 	// Add built-in types
@@ -358,6 +361,83 @@ func (c *Checker) collectDecls(file *ast.File) {
 					c.Env.RegisterImpl(named.Name, targetType)
 				}
 			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						for i := 1; i < len(method.Params); i++ {
+							params = append(params, c.resolveType(method.Params[i].Type))
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							params = append(params, c.resolveType(p.Type))
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveType(method.ReturnType)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
 		}
 	}
 }
@@ -383,13 +463,15 @@ func (c *Checker) checkBodies(file *ast.File) {
 	}
 }
 
-func (c *Checker) checkBlock(block *ast.BlockExpr, scope *Scope, inUnsafe bool) Type {
-	blockScope := NewScope(scope)
+func (c *Checker) checkBlock(block *ast.BlockExpr, parent *Scope, inUnsafe bool) Type {
+	scope := NewScope(parent)
+	defer scope.Close() // Clean up borrows when scope ends
+
 	for _, stmt := range block.Stmts {
-		c.checkStmt(stmt, blockScope, inUnsafe)
+		c.checkStmt(stmt, scope, inUnsafe)
 	}
 	if block.Tail != nil {
-		return c.checkExpr(block.Tail, blockScope, inUnsafe)
+		return c.checkExpr(block.Tail, scope, inUnsafe)
 	}
 	return TypeVoid
 }
@@ -608,7 +690,42 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			return TypeVoid
 		} else if e.Op == lexer.AMPERSAND {
 			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
+
+			// Borrow check: &x
+			if sym := c.getSymbol(e.Expr, scope); sym != nil {
+				for _, b := range sym.Borrows {
+					if b.Kind == BorrowExclusive {
+						c.reportError(fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name), e.Span())
+					}
+				}
+				scope.AddBorrow(sym, BorrowShared, e.Span())
+			}
+
 			return &Reference{Mutable: false, Elem: elemType}
+		} else if e.Op == lexer.REF_MUT {
+			// Mutable reference: &mut x
+			// 1. Check operand type
+			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
+
+			// 2. Verify l-value (addressable)
+			if !c.isLValue(e.Expr) {
+				c.reportError("cannot take mutable reference of non-lvalue", e.Expr.Span())
+			}
+
+			// 3. Verify mutability
+			if !c.isMutable(e.Expr, scope) {
+				c.reportError("cannot take mutable reference of immutable variable", e.Expr.Span())
+			}
+
+			// 4. Borrow check: &mut x
+			if sym := c.getSymbol(e.Expr, scope); sym != nil {
+				if len(sym.Borrows) > 0 {
+					c.reportError(fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name), e.Span())
+				}
+				scope.AddBorrow(sym, BorrowExclusive, e.Span())
+			}
+
+			return &Reference{Mutable: true, Elem: elemType}
 		} else if e.Op == lexer.ASTERISK {
 			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
 			if ptr, ok := elemType.(*Pointer); ok {
@@ -635,6 +752,7 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				targetType = named.Ref
 			}
 
+			// Check for methods on Optional types first (special case)
 			if opt, ok := targetType.(*Optional); ok {
 				// Allow specific methods
 				switch fieldExpr.Field.Name {
@@ -657,6 +775,57 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 					c.reportError(fmt.Sprintf("type %s has no method %s", targetType, fieldExpr.Field.Name), fieldExpr.Span())
 					return TypeVoid
 				}
+			}
+
+			// AUTO-BORROWING: Check if this is a method call on a regular type
+			method := c.lookupMethod(targetType, fieldExpr.Field.Name)
+			if method != nil && method.Receiver != nil {
+				// This is a method call - perform auto-borrowing
+				if method.Receiver.IsMutable {
+					// Method needs &mut receiver - check borrow rules
+					if sym := c.getSymbol(fieldExpr.Target, scope); sym != nil {
+						// Check if already borrowed
+						if len(sym.Borrows) > 0 {
+							c.reportError(fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name), fieldExpr.Target.Span())
+						}
+						// Check mutability
+						if !c.isMutable(fieldExpr.Target, scope) {
+							c.reportError("cannot call method requiring &mut on immutable value", fieldExpr.Target.Span())
+						}
+						// NOTE: Don't register borrow for method calls - they're temporary
+						// Method call borrows last only for the duration of the call
+					}
+				} else {
+					// Method needs &self - check borrow rules
+					if sym := c.getSymbol(fieldExpr.Target, scope); sym != nil {
+						// Check if already mutably borrowed
+						for _, b := range sym.Borrows {
+							if b.Kind == BorrowExclusive {
+								c.reportError(fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name), fieldExpr.Target.Span())
+							}
+						}
+						// NOTE: Don't register borrow for method calls - they're temporary
+					}
+				}
+
+				// Check argument types against method parameters
+				var argTypes []Type
+				for _, arg := range e.Args {
+					argType := c.checkExpr(arg, scope, inUnsafe)
+					argTypes = append(argTypes, argType)
+				}
+
+				// Verify argument count and types
+				if len(argTypes) != len(method.Params) {
+					c.reportError(fmt.Sprintf("method %s expects %d arguments, got %d", fieldExpr.Field.Name, len(method.Params), len(argTypes)), e.Span())
+				}
+				for i := 0; i < len(argTypes) && i < len(method.Params); i++ {
+					if !c.assignableTo(argTypes[i], method.Params[i]) {
+						c.reportError(fmt.Sprintf("argument %d has type %s, expected %s", i+1, argTypes[i], method.Params[i]), e.Args[i].Span())
+					}
+				}
+
+				return method.Return
 			}
 		}
 
@@ -715,24 +884,32 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 	case *ast.FieldExpr:
 		targetType := c.checkExpr(e.Target, scope, inUnsafe)
 
+		// AUTO-DEREF: Unwrap references and pointers
+		// Keep dereferencing until we reach a concrete type
+		for {
+			if ref, ok := targetType.(*Reference); ok {
+				targetType = ref.Elem
+				continue
+			}
+			if ptr, ok := targetType.(*Pointer); ok {
+				targetType = ptr.Elem
+				continue
+			}
+			break
+		}
+
 		// Unwrap named types
 		if named, ok := targetType.(*Named); ok && named.Ref != nil {
 			targetType = named.Ref
 		}
 
-		if _, ok := targetType.(*Optional); ok {
-			c.reportError(fmt.Sprintf("cannot access field %s on nullable type %s", e.Field.Name, targetType), e.Span())
-			return TypeVoid
-		}
-
-		structType := c.resolveStruct(targetType)
-		if structType != nil {
-			for _, f := range structType.Fields {
+		// Check for field on the unwrapped type
+		if s, ok := targetType.(*Struct); ok {
+			for _, f := range s.Fields {
 				if f.Name == e.Field.Name {
 					return f.Type
 				}
 			}
-			c.reportError(fmt.Sprintf("struct %s has no field %s", structType.Name, e.Field.Name), e.Span())
 			return TypeVoid
 		}
 
@@ -820,27 +997,54 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		}
 		return resultType
 	case *ast.IndexExpr:
-		// Check target
-		targetType := c.checkExpr(e.Target, scope, inUnsafe)
+		// If this is a type instantiation (generic), handle separately
+		if ident, ok := e.Target.(*ast.Ident); ok {
+			if sym := scope.Lookup(ident.Name); sym != nil {
+				if fnType, ok := sym.Type.(*Function); ok && len(fnType.TypeParams) > 0 {
+					// This is generic function instantiation
+					// Type argument is in e.Index
+					typeArg := c.resolveType(e.Index.(ast.TypeExpr))
 
-		// Check if target is a generic function/struct/etc
-		if fn, ok := targetType.(*Function); ok && len(fn.TypeParams) > 0 {
-			// Instantiate generic function
-			argType := c.resolveTypeFromExpr(e.Index)
+					// Create substitution map
+					if len(fnType.TypeParams) != 1 {
+						c.reportError("type argument count mismatch", e.Span())
+						return TypeVoid
+					}
 
-			// Helper to substitute T -> argType
-			// For now, assume single type param
-			subst := map[string]Type{
-				fn.TypeParams[0].Name: argType,
+					subst := make(map[string]Type)
+					subst[fnType.TypeParams[0].Name] = typeArg
+
+					// Substitute in params and return type
+					var newParams []Type
+					for _, p := range fnType.Params {
+						newParams = append(newParams, Substitute(p, subst))
+					}
+
+					return &Function{
+						Unsafe:     fnType.Unsafe,
+						TypeParams: nil, // Instantiated
+						Params:     newParams,
+						Return:     Substitute(fnType.Return, subst),
+					}
+				}
 			}
-
-			// Substitute in function type, remove type params
-			newFn := Substitute(fn, subst).(*Function)
-			newFn.TypeParams = nil // Remove generic params as they are bound
-			return newFn
 		}
 
-		// Default array indexing behavior
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
+
+		// AUTO-DEREF: Unwrap references and pointers
+		for {
+			if ref, ok := targetType.(*Reference); ok {
+				targetType = ref.Elem
+				continue
+			}
+			if ptr, ok := targetType.(*Pointer); ok {
+				targetType = ptr.Elem
+				continue
+			}
+			break
+		}
+
 		indexType := c.checkExpr(e.Index, scope, inUnsafe)
 
 		// Index must be int
@@ -869,11 +1073,33 @@ func (c *Checker) assignableTo(src, dst Type) bool {
 		return c.assignableTo(src, named.Ref)
 	}
 
-	// Handle nil assignment
-	if src == TypeNil {
-		if _, ok := dst.(*Optional); ok {
+	// Handle Optional assignment
+	if dstOpt, ok := dst.(*Optional); ok {
+		if src == TypeNil {
 			return true
 		}
+		// Allow &T -> T? (Reference to Optional)
+		// Since T? is implemented as *T, passing a reference &T is valid
+		if srcRef, ok := src.(*Reference); ok {
+			if c.assignableTo(srcRef.Elem, dstOpt.Elem) {
+				return true
+			}
+		}
+		// Allow T -> T? (Implicit wrapping)
+		if c.assignableTo(src, dstOpt.Elem) {
+			return true
+		}
+	}
+
+	// Handle Pointer assignment (unsafe pointers)
+	if _, ok := dst.(*Pointer); ok {
+		if src == TypeNil {
+			return true
+		}
+	}
+
+	// Handle nil assignment (fallback if dst is not Optional, though TypeNil is only assignable to Optional currently)
+	if src == TypeNil {
 		return false
 	}
 
@@ -910,14 +1136,20 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 		}
 	}
 
-	// Check if subject is Enum or Primitive
+	// Check if subject is Enum or Primitive or Optional
 	var enumType *Enum
+	var optionalType *Optional
 	isEnum := false
+	isOptional := false
+
 	if e, ok := resolvedType.(*Enum); ok {
 		enumType = e
 		isEnum = true
+	} else if o, ok := resolvedType.(*Optional); ok {
+		optionalType = o
+		isOptional = true
 	} else if resolvedType != TypeInt && resolvedType != TypeString && resolvedType != TypeBool {
-		c.reportError(fmt.Sprintf("match subject must be an enum or primitive, got %s", subjectType), expr.Subject.Span())
+		c.reportError(fmt.Sprintf("match subject must be an enum, optional, or primitive, got %s", subjectType), expr.Subject.Span())
 		return TypeVoid
 	}
 
@@ -1009,6 +1241,30 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 					c.reportError("pattern arguments must be identifiers", arg.Span())
 				}
 			}
+
+		} else if isOptional {
+			// Check pattern for Optional
+			switch p := arm.Pattern.(type) {
+			case *ast.NilLit:
+				// Matches null
+			case *ast.IntegerLit:
+				if optionalType.Elem != TypeInt {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			case *ast.StringLit:
+				if optionalType.Elem != TypeString {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			case *ast.BoolLit:
+				if optionalType.Elem != TypeBool {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			default:
+				// TODO: Support matching on structs/enums inside optional?
+				// For now only primitives and null
+				c.reportError(fmt.Sprintf("invalid pattern for optional match: %T", p), arm.Pattern.Span())
+				continue
+			}
 		} else {
 			// Check pattern for Primitive
 			switch p := arm.Pattern.(type) {
@@ -1050,6 +1306,14 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 				c.reportError(fmt.Sprintf("match is not exhaustive, missing variant: %s", v.Name), expr.Span())
 			}
 		}
+	} else if isOptional {
+		if !hasDefault {
+			// Optionals must handle null and value.
+			// If we have explicit null check, we still need value check (which is infinite for primitives).
+			// So default is required unless we cover all cases (bool?).
+			// For simplicity, require default for now.
+			c.reportError("match on optional must have a default case (_)", expr.Span())
+		}
 	} else {
 		if !hasDefault {
 			// Primitives must have default case for exhaustiveness
@@ -1070,6 +1334,123 @@ func (c *Checker) resolveStruct(t Type) *Struct {
 	}
 	if n, ok := t.(*Named); ok && n.Ref != nil {
 		return c.resolveStruct(n.Ref)
+	}
+	return nil
+}
+
+func (c *Checker) isLValue(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return true
+	case *ast.FieldExpr:
+		return c.isLValue(e.Target) // Recursively check target? Or just field access is l-value?
+		// Actually, field access is l-value if target is l-value (or pointer).
+		// For now, let's say yes if target is l-value.
+	case *ast.IndexExpr:
+		return c.isLValue(e.Target)
+	case *ast.PrefixExpr:
+		// Dereference (*ptr) is an l-value
+		if e.Op == lexer.ASTERISK {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) isMutable(expr ast.Expr, scope *Scope) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		sym := scope.Lookup(e.Name)
+		if sym == nil {
+			return false
+		}
+		// Check if symbol is defined as mutable
+		if decl, ok := sym.DefNode.(*ast.LetStmt); ok {
+			return decl.Mutable
+		}
+		// Function params? For now assume params are immutable unless marked mut (not supported yet)
+		// TODO: Support 'mut' params or 'var' params
+		return false
+	case *ast.FieldExpr:
+		// Field is mutable if target is mutable
+		return c.isMutable(e.Target, scope)
+	case *ast.IndexExpr:
+		return c.isMutable(e.Target, scope)
+	case *ast.PrefixExpr:
+		// Dereference: *ptr is mutable if ptr is &mut T or *T (unsafe)
+		// We need type info here, which is hard without re-checking.
+		// But we can check the expression structure?
+		// No, we need the type of the operand.
+		// This helper might need to return (bool, error) or use cached types if we had them.
+		// For now, let's assume *ptr is always mutable if it's a valid dereference of a pointer?
+		// No, *(&T) is immutable. *(&mut T) is mutable.
+		// We need to check the type of e.Expr.
+		// Since we don't have the type map here, we might need to re-resolve or pass it.
+		// Re-checking e.Expr is expensive but safe for now.
+		typ := c.checkExpr(e.Expr, scope, true) // unsafe true to avoid errors during check
+		if _, ok := typ.(*Pointer); ok {
+			return true // Raw pointers are mutable
+		}
+		if ref, ok := typ.(*Reference); ok {
+			return ref.Mutable
+		}
+		return false
+	}
+	return false
+}
+
+func (c *Checker) getSymbol(expr ast.Expr, scope *Scope) *Symbol {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return scope.Lookup(e.Name)
+	case *ast.FieldExpr:
+		return c.getSymbol(e.Target, scope) // Borrowing field borrows struct? Yes.
+	case *ast.IndexExpr:
+		return c.getSymbol(e.Target, scope) // Borrowing element borrows array? Yes.
+	case *ast.PrefixExpr:
+		if e.Op == lexer.ASTERISK {
+			// Dereference *ptr.
+			// If ptr is a Reference, we are borrowing the referent?
+			// No, *ptr accesses the value pointed to.
+			// If we do &(*ptr), we are re-borrowing the original value?
+			// Or creating a new reference to it.
+			// Malphas references are non-owning, so re-borrowing is just aliasing.
+			// But we need to track the original symbol if possible.
+			// For now, let's just handle direct variable borrows.
+			return nil
+		}
+	}
+	return nil
+}
+
+// getTypeName extracts a name from a Type for method lookup
+func (c *Checker) getTypeName(typ Type) string {
+	switch t := typ.(type) {
+	case *Named:
+		return t.Name
+	case *Struct:
+		return t.Name
+	case *Enum:
+		return t.Name
+	default:
+		return ""
+	}
+}
+
+// lookupMethod finds a method on a given type
+func (c *Checker) lookupMethod(typ Type, methodName string) *Function {
+	// Unwrap named types
+	if named, ok := typ.(*Named); ok && named.Ref != nil {
+		typ = named.Ref
+	}
+
+	typeName := c.getTypeName(typ)
+	if typeName == "" {
+		return nil
+	}
+
+	if methods, ok := c.MethodTable[typeName]; ok {
+		return methods[methodName]
 	}
 	return nil
 }

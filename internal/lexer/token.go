@@ -34,17 +34,18 @@ const (
 	STRING TokenType = "STRING" // "hello"
 
 	// Operators
-	ASSIGN   TokenType = "="
-	FATARROW TokenType = "=>"
-	PLUS     TokenType = "+"
-	MINUS    TokenType = "-"
-	BANG     TokenType = "!"
+	ASSIGN    TokenType = "="
+	FATARROW  TokenType = "=>"
+	PLUS      TokenType = "+"
+	MINUS     TokenType = "-"
+	BANG      TokenType = "!"
 	AMPERSAND TokenType = "&"
-	ASTERISK TokenType = "*"
-	SLASH    TokenType = "/"
-	AND      TokenType = "&&"
-	OR       TokenType = "||"
-	QUESTION TokenType = "?"
+	REF_MUT   TokenType = "&mut" // Synthetic token for mutable reference
+	ASTERISK  TokenType = "*"
+	SLASH     TokenType = "/"
+	AND       TokenType = "&&"
+	OR        TokenType = "||"
+	QUESTION  TokenType = "?"
 
 	LT     TokenType = "<"
 	GT     TokenType = ">"
@@ -133,7 +134,7 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"true":     TRUE,
 	"false":    FALSE,
-	"nil":      NIL,
+	"null":     NIL,
 	"spawn":    SPAWN,
 	"chan":     CHAN,
 	"select":   SELECT,

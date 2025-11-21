@@ -1,0 +1,9 @@
+package main;
+
+fn test() {
+    break;
+}
+
+fn main() {
+    println(42);
+}

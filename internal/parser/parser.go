@@ -2164,7 +2164,14 @@ func (p *Parser) parseStructLiteral(name *ast.Ident) ast.Expr {
 func (p *Parser) parsePrefixExpr() ast.Expr {
 	operatorTok := p.curTok
 
-	p.nextToken()
+	// Check for mutable reference: &mut
+	if operatorTok.Type == lexer.AMPERSAND && p.peekTok.Type == lexer.MUT {
+		p.nextToken() // consume '&'
+		p.nextToken() // consume 'mut'
+		operatorTok.Type = lexer.REF_MUT
+	} else {
+		p.nextToken()
+	}
 
 	right := p.parseExprPrecedence(precedencePrefix)
 	if right == nil {

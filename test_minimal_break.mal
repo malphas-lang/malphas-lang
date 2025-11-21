@@ -1,0 +1,7 @@
+package main;
+
+fn main() {
+   while true {
+        break;
+    }
+}

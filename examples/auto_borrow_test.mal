@@ -1,0 +1,23 @@
+package main;
+
+struct Point {
+    x: int,
+    y: int
+}
+
+impl Point {
+    fn len(self: &Point) -> int {
+        self.x + self.y
+    }
+    
+    fn translate(self: &mut Point, dx: int) {
+        self.x = self.x + dx;
+    }
+}
+
+fn main() {
+    let mut p = Point { x: 1, y: 2 };
+    let l = p.len();        // Should auto-borrow as &p
+    p.translate(5);         // Should auto-borrow as &mut p
+    println(l);
+}

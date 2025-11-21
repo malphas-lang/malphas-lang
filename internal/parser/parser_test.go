@@ -330,6 +330,36 @@ fn main() {
 	}
 }
 
+func TestParseMutableReferenceExpr(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = &mut y;
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	prefixExpr, ok := letStmt.Value.(*ast.PrefixExpr)
+	if !ok {
+		t.Fatalf("expected prefix expression, got %T", letStmt.Value)
+	}
+
+	if prefixExpr.Op != lexer.REF_MUT {
+		t.Fatalf("expected '&mut' operator, got %q", prefixExpr.Op)
+	}
+
+	ident, ok := prefixExpr.Expr.(*ast.Ident)
+	if !ok || ident.Name != "y" {
+		t.Fatalf("expected operand 'y', got %#v", prefixExpr.Expr)
+	}
+}
+
 func TestSpan_IncludesClosingDelimiters(t *testing.T) {
 	const src = `
 package foo;
@@ -2139,12 +2169,11 @@ fn main() {
 
 func TestParseLetStmtWithBooleanAndNilLiterals(t *testing.T) {
 	const src = `
-package foo;
-
+package main;
 fn main() {
-	let truthy = true;
-	let falsy = false;
-	let nothing = nil;
+	let is_valid = true;
+	let is_done = false;
+	let nothing = null;
 }
 `
 
@@ -2165,7 +2194,7 @@ fn main() {
 
 	nothing := fn.Body.Stmts[2].(*ast.LetStmt)
 	if _, ok := nothing.Value.(*ast.NilLit); !ok {
-		t.Fatalf("expected nil literal, got %T", nothing.Value)
+		t.Fatalf("expected null literal, got %T", nothing.Value)
 	}
 }
 

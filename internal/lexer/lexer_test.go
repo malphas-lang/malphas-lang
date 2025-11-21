@@ -100,7 +100,7 @@ func TestNextToken_Operators(t *testing.T) {
 }
 
 func TestNextToken_Keywords(t *testing.T) {
-	input := `let mut const fn struct enum trait impl type package use as if else match while for in break continue return true false nil spawn chan select`
+	input := `let mut const fn struct enum trait impl type package use as if else match while for in break continue return true false null spawn chan select`
 
 	tests := []struct {
 		expectedType    TokenType
@@ -129,7 +129,7 @@ func TestNextToken_Keywords(t *testing.T) {
 		{RETURN, "return"},
 		{TRUE, "true"},
 		{FALSE, "false"},
-		{NIL, "nil"},
+		{NIL, "null"},
 		{SPAWN, "spawn"},
 		{CHAN, "chan"},
 		{SELECT, "select"},

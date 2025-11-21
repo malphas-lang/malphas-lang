@@ -1,0 +1,31 @@
+package main;
+
+fn main() {
+    // Test if expression
+    let x = if true { 1 } else { 2 };
+    println(x);
+    
+    // Test while loop with break
+    let mut i = 0;
+    while i < 5 {
+        println(i);
+        i = i + 1;
+        if i == 3 {
+            println(999);
+            break;
+        };
+    };
+    
+    // Test while loop with continue
+    let mut j = 0;
+    while j < 5 {
+        j = j + 1;
+        if j == 3 {
+            println(888);
+            continue;
+        };
+        println(j);
+    };
+    
+    println(42);
+}

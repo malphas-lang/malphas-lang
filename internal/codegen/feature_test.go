@@ -129,6 +129,46 @@ fn main() {
 `,
 			checks: []string{"range arr", "println(x)"},
 		},
+		{
+			name: "nullable_types",
+			src: `
+package main;
+
+fn main() {
+	let x: int? = null;
+	let y: int? = &5;
+	let z = y.unwrap();
+	let w = y.expect("should not panic");
+	println(z);
+}
+`,
+			checks: []string{"*int", "nil", "func[T any](t *T, msg string) T", "panic(msg)"},
+		},
+		{
+			name: "mutable_reference",
+			src: `
+package main;
+
+fn main() {
+	let mut x = 1;
+	let y = &mut x;
+	println(y);
+}
+`,
+			checks: []string{"&x"},
+		},
+		{
+			name: "raw_pointers",
+			src: `
+package main;
+
+unsafe fn use_raw_ptr(ptr: *int) -> int {
+	let x = *ptr;
+	x
+}
+`,
+			checks: []string{"*int", "*ptr"},
+		},
 	}
 
 	for _, tt := range tests {

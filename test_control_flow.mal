@@ -1,0 +1,45 @@
+package main;
+
+fn main() {
+    // Test if expression
+    let x = if true { 1 } else { 2 };
+    println(x);
+    
+    // Test while loop
+    let mut i = 0;
+    while i < 5 {
+        println(i);
+        i = i + 1;
+    }
+    
+    // Test for loop
+    let arr = [10, 20, 30];
+    for item in arr {
+        println(item);
+    }
+    
+    // Test break
+    let mut j = 0;
+    while true {
+        if j >= 3 {
+            break;
+        }
+        println(j);
+        j = j + 1;
+    }
+    
+    // Test continue
+    let mut k = 0;
+    while k < 5 {
+        k = k + 1;
+        if k == 3 {
+            continue;
+        }
+        println(k);
+    }
+    
+    // Test index expression
+    let nums = [100, 200, 300];
+    let first = nums[0];
+    println(first);
+}

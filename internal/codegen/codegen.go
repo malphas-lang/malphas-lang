@@ -172,6 +172,43 @@ func (g *Generator) genFnDecl(fn *mast.FnDecl) (*goast.FuncDecl, error) {
 	}, nil
 }
 
+// genMethodDecl generates a Go method declaration with custom params
+func (g *Generator) genMethodDecl(fn *mast.FnDecl, params []*mast.Param) (*goast.FuncDecl, error) {
+	name := goast.NewIdent(fn.Name.Name)
+
+	// Generate type parameters
+	typeParams, err := g.genTypeParams(fn.TypeParams)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use provided params instead of fn.Params
+	goParams, err := g.genParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	results, err := g.genResults(fn.ReturnType)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := g.genBlock(fn.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &goast.FuncDecl{
+		Name: name,
+		Type: &goast.FuncType{
+			TypeParams: typeParams,
+			Params:     goParams,
+			Results:    results,
+		},
+		Body: body,
+	}, nil
+}
+
 func (g *Generator) genParams(params []*mast.Param) (*goast.FieldList, error) {
 	fields := []*goast.Field{}
 	for _, p := range params {
@@ -517,6 +554,8 @@ func (g *Generator) genForStmt(stmt *mast.ForStmt) (goast.Stmt, error) {
 
 func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 	switch e := expr.(type) {
+	case *mast.NilLit:
+		return &goast.BasicLit{Kind: token.IDENT, Value: "nil"}, nil
 	case *mast.IntegerLit:
 		return &goast.BasicLit{Kind: token.INT, Value: e.Text}, nil
 	case *mast.StringLit:
@@ -728,7 +767,7 @@ func (g *Generator) genPrefixExpr(expr *mast.PrefixExpr) (goast.Expr, error) {
 	case mlexer.LARROW:
 		// Receive operation: <-ch
 		return &goast.UnaryExpr{Op: token.ARROW, X: right}, nil
-	case mlexer.AMPERSAND:
+	case mlexer.AMPERSAND, mlexer.REF_MUT:
 		return &goast.UnaryExpr{Op: token.AND, X: right}, nil
 	case mlexer.ASTERISK:
 		return &goast.UnaryExpr{Op: token.MUL, X: right}, nil
@@ -739,6 +778,142 @@ func (g *Generator) genPrefixExpr(expr *mast.PrefixExpr) (goast.Expr, error) {
 
 func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 	var callee mast.Expr = expr.Callee
+
+	// Check for method calls on Optional types (unwrap, expect)
+	if fieldExpr, ok := callee.(*mast.FieldExpr); ok {
+		switch fieldExpr.Field.Name {
+		case "unwrap":
+			// Generate *target
+			target, err := g.genExpr(fieldExpr.Target)
+			if err != nil {
+				return nil, err
+			}
+			return &goast.StarExpr{X: target}, nil
+		case "expect":
+			// Generate func() T { if target == nil { panic(msg) }; return *target }()
+			target, err := g.genExpr(fieldExpr.Target)
+			if err != nil {
+				return nil, err
+			}
+			msg, err := g.genExpr(expr.Args[0])
+			if err != nil {
+				return nil, err
+			}
+
+			// We need to know the return type T to generate the function signature.
+			// Since we don't have easy access to types here, we can use 'any' and type assertion?
+			// Or just rely on Go's type inference if we inline it?
+			// Inline block is hard in expression context without IIFE.
+			// Let's use IIFE with inferred return type if possible, or just 'any' for now?
+			// Actually, if we use a helper function it would be easier, but we don't have a runtime.
+			// Let's try to generate:
+			// func() <inferred> { if target == nil { panic(msg) }; return *target }()
+			// But we can't easily infer the type name here without type info.
+			// However, *target has a type.
+			// Maybe we can just generate:
+			// *func() *T { if target == nil { panic(msg) }; return target }()
+			// No, that's getting complicated.
+			// Simplest valid Go for expression context panic check:
+			// (func() *T { if target == nil { panic(msg) }; return target })()
+			// We still need T.
+			//
+			// Alternative: use a built-in generic helper if we could inject one.
+			//
+			// Let's look at what mapType returns. It returns goast.Expr.
+			// If we could get the type of target, we could map it.
+			// But we don't have the type of target here easily.
+			//
+			// HACK: For now, let's assume we can use a generic IIFE if Go supports it?
+			// func[T any](t *T, msg string) T { if t == nil { panic(msg) }; return *t }(target, msg)
+			// This requires Go 1.18+ which we probably have.
+			// Let's try to generate that.
+
+			return &goast.CallExpr{
+				Fun: &goast.FuncLit{
+					Type: &goast.FuncType{
+						TypeParams: &goast.FieldList{
+							List: []*goast.Field{
+								{
+									Names: []*goast.Ident{goast.NewIdent("T")},
+									Type:  goast.NewIdent("any"),
+								},
+							},
+						},
+						Params: &goast.FieldList{
+							List: []*goast.Field{
+								{
+									Names: []*goast.Ident{goast.NewIdent("t")},
+									Type:  &goast.StarExpr{X: goast.NewIdent("T")},
+								},
+								{
+									Names: []*goast.Ident{goast.NewIdent("msg")},
+									Type:  goast.NewIdent("string"),
+								},
+							},
+						},
+						Results: &goast.FieldList{
+							List: []*goast.Field{
+								{Type: goast.NewIdent("T")},
+							},
+						},
+					},
+					Body: &goast.BlockStmt{
+						List: []goast.Stmt{
+							&goast.IfStmt{
+								Cond: &goast.BinaryExpr{
+									X:  goast.NewIdent("t"),
+									Op: token.EQL,
+									Y:  goast.NewIdent("nil"),
+								},
+								Body: &goast.BlockStmt{
+									List: []goast.Stmt{
+										&goast.ExprStmt{
+											X: &goast.CallExpr{
+												Fun:  goast.NewIdent("panic"),
+												Args: []goast.Expr{goast.NewIdent("msg")},
+											},
+										},
+									},
+								},
+							},
+							&goast.ReturnStmt{
+								Results: []goast.Expr{
+									&goast.StarExpr{X: goast.NewIdent("t")},
+								},
+							},
+						},
+					},
+				},
+				Args: []goast.Expr{target, msg},
+			}, nil
+		}
+
+		// Handle regular method calls (anything not unwrap/expect)
+		// Generate method call: target.method(args)
+		target, err := g.genExpr(fieldExpr.Target)
+		if err != nil {
+			return nil, err
+		}
+
+		// Generate arguments
+		var args []goast.Expr
+		for _, arg := range expr.Args {
+			genArg, err := g.genExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, genArg)
+		}
+
+		// Generate as Go method call: target.method(args)
+		return &goast.CallExpr{
+			Fun: &goast.SelectorExpr{
+				X:   target,
+				Sel: goast.NewIdent(fieldExpr.Field.Name),
+			},
+			Args: args,
+		}, nil
+	}
 
 	// Unwrap IndexExpr if present (generic instantiation)
 	if idxExpr, ok := callee.(*mast.IndexExpr); ok {
@@ -1259,28 +1434,45 @@ func (g *Generator) genImplDecl(decl *mast.ImplDecl) ([]goast.Decl, error) {
 		return nil, err
 	}
 
-	// If target is a pointer (which it likely should be for methods modifying state),
-	// we might need to handle that. For now, let's assume value receiver or simple type.
-	// But usually in Go we want (r Type) or (r *Type).
-	// Let's just use the type as is.
-
 	for _, m := range decl.Methods {
-		// Generate function with receiver
-		fnDecl, err := g.genFnDecl(m)
+		// Check if first parameter is "self" (receiver)
+		var receiverType goast.Expr = targetType
+		var params []*mast.Param
+
+		if len(m.Params) > 0 && m.Params[0].Name.Name == "self" {
+			// First parameter is receiver
+			if m.Params[0].Type != nil {
+				// Use specified receiver type from parameter annotation
+				recvType, err := g.mapType(m.Params[0].Type)
+				if err != nil {
+					return nil, err
+				}
+				receiverType = recvType
+			} else {
+				// No type annotation - use target type as pointer
+				receiverType = &goast.StarExpr{X: targetType}
+			}
+			// Exclude receiver from params
+			params = m.Params[1:]
+		} else {
+			// No receiver parameter, use all params
+			params = m.Params
+			// Default to pointer receiver
+			receiverType = &goast.StarExpr{X: targetType}
+		}
+
+		// Generate method with modified params
+		fnDecl, err := g.genMethodDecl(m, params)
 		if err != nil {
 			return nil, err
 		}
 
 		// Add receiver
-		// Create a receiver name, e.g., "self" or "this" or just "r"
-		// Malphas doesn't seem to have explicit "self" in impl blocks yet?
-		// Assuming "self" is implicit or we just pick a name.
-		// Let's use "self".
 		fnDecl.Recv = &goast.FieldList{
 			List: []*goast.Field{
 				{
 					Names: []*goast.Ident{goast.NewIdent("self")},
-					Type:  targetType,
+					Type:  receiverType,
 				},
 			},
 		}

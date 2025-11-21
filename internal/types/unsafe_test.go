@@ -19,7 +19,7 @@ func TestUnsafeChecks(t *testing.T) {
 			input: `
 			package main;
 			fn main() {
-				let ptr: *int = nil;
+				let ptr: *int = null;
 				unsafe {
 					let x = *ptr;
 				}
@@ -32,7 +32,7 @@ func TestUnsafeChecks(t *testing.T) {
 			input: `
 			package main;
 			fn main() {
-				let ptr: *int = nil;
+				let ptr: *int = null;
 				let x = *ptr;
 			}
 			`,
