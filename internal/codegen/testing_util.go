@@ -1,7 +1,6 @@
 package codegen
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -22,9 +21,5 @@ func RunCodegenTest(t *testing.T, src string, checks []string) {
 		if !strings.Contains(out, chk) {
 			t.Errorf("expected generated code to contain %q, but it was missing.\nGenerated output:\n%s", chk, out)
 		}
-	}
-	// Optionally, ensure the output is valid Go syntax by formatting it again.
-	if _, err := fmt.Sprintf("%s", out); err != nil {
-		// fmt.Sprintf never errors, placeholder for future go/format validation.
 	}
 }

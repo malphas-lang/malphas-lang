@@ -17,11 +17,29 @@ type Checker struct {
 
 // NewChecker creates a new type checker.
 func NewChecker() *Checker {
-	return &Checker{
+	c := &Checker{
 		GlobalScope: NewScope(nil),
 		Env:         NewEnvironment(),
 		Errors:      []diag.Diagnostic{},
 	}
+
+	// Add built-in types
+	c.GlobalScope.Insert("int", &Symbol{Name: "int", Type: TypeInt})
+	c.GlobalScope.Insert("float", &Symbol{Name: "float", Type: TypeFloat})
+	c.GlobalScope.Insert("bool", &Symbol{Name: "bool", Type: TypeBool})
+	c.GlobalScope.Insert("string", &Symbol{Name: "string", Type: TypeString})
+
+	// Add built-in functions
+	// println: fn(any) -> void
+	c.GlobalScope.Insert("println", &Symbol{
+		Name: "println",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}}, // Placeholder for any type
+			Return: TypeVoid,
+		},
+	})
+
+	return c
 }
 
 // Check validates the types in the given file.
@@ -70,16 +88,20 @@ func (c *Checker) resolveType(typ ast.TypeExpr) Type {
 		switch t.Name.Name {
 		case "int":
 			return TypeInt
-		case "string":
-			return TypeString
+		case "float":
+			return TypeFloat
 		case "bool":
 			return TypeBool
+		case "string":
+			return TypeString
 		case "void":
 			return TypeVoid
 		default:
 			// Look up in scope
 			sym := c.GlobalScope.Lookup(t.Name.Name)
 			if sym != nil {
+				// Check if the symbol is a type
+				// For now, assume yes if it's a struct/enum/typedef
 				return sym.Type
 			}
 			return &Named{Name: t.Name.Name}
@@ -137,7 +159,33 @@ func (c *Checker) resolveType(typ ast.TypeExpr) Type {
 			ret = c.resolveType(t.Return)
 		}
 		return &Function{Params: params, Return: ret}
+	case *ast.PointerType:
+		elem := c.resolveType(t.Elem)
+		return &Pointer{Elem: elem}
+	case *ast.ReferenceType:
+		elem := c.resolveType(t.Elem)
+		return &Reference{Mutable: t.Mutable, Elem: elem}
+	case *ast.OptionalType:
+		elem := c.resolveType(t.Elem)
+		return &Optional{Elem: elem}
 	default:
+		return TypeVoid
+	}
+}
+
+// resolveTypeFromExpr resolves a type from an expression AST node.
+// This is used when types appear in expression contexts, like Channel::new[int].
+func (c *Checker) resolveTypeFromExpr(expr ast.Expr) Type {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return c.resolveType(ast.NewNamedType(e, e.Span()))
+	case *ast.IndexExpr:
+		// Handle generic type instantiation in expression context: List[int]
+		base := c.resolveTypeFromExpr(e.Target)
+		arg := c.resolveTypeFromExpr(e.Index)
+		return &GenericInstance{Base: base, Args: []Type{arg}}
+	default:
+		c.reportError(fmt.Sprintf("expected type, got %T", expr), expr.Span())
 		return TypeVoid
 	}
 }
@@ -204,6 +252,7 @@ func (c *Checker) collectDecls(file *ast.File) {
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
 				Name: d.Name.Name,
 				Type: &Function{
+					Unsafe:     d.Unsafe,
 					TypeParams: typeParams,
 					Params:     params,
 					Return:     returnType,
@@ -329,27 +378,27 @@ func (c *Checker) checkBodies(file *ast.File) {
 					fnScope.Lookup(param.Name.Name).Type = c.resolveType(param.Type)
 				}
 			}
-			c.checkBlock(fn.Body, fnScope)
+			c.checkBlock(fn.Body, fnScope, fn.Unsafe)
 		}
 	}
 }
 
-func (c *Checker) checkBlock(block *ast.BlockExpr, scope *Scope) Type {
+func (c *Checker) checkBlock(block *ast.BlockExpr, scope *Scope, inUnsafe bool) Type {
 	blockScope := NewScope(scope)
 	for _, stmt := range block.Stmts {
-		c.checkStmt(stmt, blockScope)
+		c.checkStmt(stmt, blockScope, inUnsafe)
 	}
 	if block.Tail != nil {
-		return c.checkExpr(block.Tail, blockScope)
+		return c.checkExpr(block.Tail, blockScope, inUnsafe)
 	}
 	return TypeVoid
 }
 
-func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope) {
+func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
 		// Check initializer
-		initType := c.checkExpr(s.Value, scope)
+		initType := c.checkExpr(s.Value, scope, inUnsafe)
 		if s.Type != nil {
 			declType := c.resolveType(s.Type)
 			if !c.assignableTo(initType, declType) {
@@ -365,42 +414,42 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 			DefNode: s,
 		})
 	case *ast.ExprStmt:
-		c.checkExpr(s.Expr, scope)
+		c.checkExpr(s.Expr, scope, inUnsafe)
 	case *ast.ReturnStmt:
 		if s.Value != nil {
-			c.checkExpr(s.Value, scope)
+			c.checkExpr(s.Value, scope, inUnsafe)
 		}
 	case *ast.SpawnStmt:
-		c.checkExpr(s.Call, scope)
+		c.checkExpr(s.Call, scope, inUnsafe)
 	case *ast.SelectStmt:
 		for _, case_ := range s.Cases {
-			c.checkStmt(case_.Comm, scope)
-			c.checkBlock(case_.Body, scope)
+			c.checkStmt(case_.Comm, scope, inUnsafe)
+			c.checkBlock(case_.Body, scope, inUnsafe)
 		}
 	case *ast.IfStmt:
 		// Check all if clauses
 		for _, clause := range s.Clauses {
-			condType := c.checkExpr(clause.Condition, scope)
+			condType := c.checkExpr(clause.Condition, scope, inUnsafe)
 			if condType != TypeBool {
 				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
 			}
-			c.checkBlock(clause.Body, scope)
+			c.checkBlock(clause.Body, scope, inUnsafe)
 		}
 		if s.Else != nil {
-			c.checkBlock(s.Else, scope)
+			c.checkBlock(s.Else, scope, inUnsafe)
 		}
 	case *ast.WhileStmt:
 		// Condition must be boolean
-		condType := c.checkExpr(s.Condition, scope)
+		condType := c.checkExpr(s.Condition, scope, inUnsafe)
 		if condType != TypeBool {
 			c.reportError(fmt.Sprintf("while condition must be boolean, got %s", condType), s.Condition.Span())
 		}
-		c.checkBlock(s.Body, scope)
+		c.checkBlock(s.Body, scope, inUnsafe)
 	case *ast.ForStmt:
 		// For now, we support range-based for loops: for item in iterable { }
 		// The iterable type checking would depend on what types are iterable
 		// For MVP, let's just check the body
-		iterableType := c.checkExpr(s.Iterable, scope)
+		iterableType := c.checkExpr(s.Iterable, scope, inUnsafe)
 		_ = iterableType // TODO: validate iterable type (arrays, slices)
 
 		// Create a new scope for the loop body with the iterator variable
@@ -410,7 +459,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 			Type:    TypeInt, // TODO: infer from iterable element type
 			DefNode: s.Iterator,
 		})
-		c.checkBlock(s.Body, loopScope)
+		c.checkBlock(s.Body, loopScope, inUnsafe)
 	case *ast.BreakStmt:
 		// Break is valid (no type checking needed)
 	case *ast.ContinueStmt:
@@ -418,14 +467,18 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 	}
 }
 
-func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
+func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 	switch e := expr.(type) {
+	case *ast.UnsafeBlock:
+		return c.checkBlock(e.Block, scope, true)
 	case *ast.IntegerLit:
 		return TypeInt
 	case *ast.StringLit:
 		return TypeString
 	case *ast.BoolLit:
 		return TypeBool
+	case *ast.NilLit:
+		return TypeNil
 	case *ast.Ident:
 		sym := scope.Lookup(e.Name)
 		if sym == nil {
@@ -443,23 +496,27 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 
 			if ident, ok := e.Left.(*ast.Ident); ok && ident.Name == "Channel" {
 				isChannel = true
-				// Generic Channel used without type args?
-				// For now, let's assume int or require type args.
-				// Or maybe we can infer? For simplicity, let's default to int or error if strict.
-				// But wait, Channel::new(10) -> what is T?
-				// If we want inference, we need more complex logic.
-				// Let's assume Channel[T]::new for now.
+				// Channel::new (uninstantiated)
+				if rightIdent, ok := e.Right.(*ast.Ident); ok && rightIdent.Name == "new" {
+					// Return generic function
+					return &Function{
+						TypeParams: []TypeParam{{Name: "T"}}, // Generic param T
+						Params:     []Type{TypeInt},
+						Return: &Channel{
+							Elem: &TypeParam{Name: "T"},
+							Dir:  SendRecv,
+						},
+					}
+				}
 			} else if indexExpr, ok := e.Left.(*ast.IndexExpr); ok {
 				if ident, ok := indexExpr.Target.(*ast.Ident); ok && ident.Name == "Channel" {
 					isChannel = true
 					// Resolve the type argument
-					// Note: IndexExpr index is Expr, but here it represents a type.
 					if typeIdent, ok := indexExpr.Index.(*ast.Ident); ok {
 						sym := scope.Lookup(typeIdent.Name)
 						if sym != nil {
 							elemType = sym.Type
 						} else {
-							// Try to resolve primitive types by name
 							switch typeIdent.Name {
 							case "int":
 								elemType = TypeInt
@@ -487,8 +544,8 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 			return TypeVoid
 		}
 
-		left := c.checkExpr(e.Left, scope)
-		right := c.checkExpr(e.Right, scope)
+		left := c.checkExpr(e.Left, scope, inUnsafe)
+		right := c.checkExpr(e.Right, scope, inUnsafe)
 		if left != right {
 			// Special case for channel send: ch <- val
 			if e.Op == lexer.LARROW {
@@ -504,16 +561,43 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 				c.reportError("cannot send to non-channel type", e.Left.Span())
 				return TypeVoid
 			}
-			c.reportError("type mismatch in binary expression", e.Span())
+
+			// Check if it's a comparison operation (returns bool)
+			isComparison := false
+			switch e.Op {
+			case lexer.EQ, lexer.NOT_EQ, lexer.LT, lexer.LE, lexer.GT, lexer.GE:
+				isComparison = true
+			}
+
+			// Check for arithmetic on int/float
+			isArithmetic := false
+			switch e.Op {
+			case lexer.PLUS, lexer.MINUS, lexer.ASTERISK, lexer.SLASH:
+				isArithmetic = true
+			}
+
+			if isComparison || isArithmetic {
+				if !c.assignableTo(left, right) && !c.assignableTo(right, left) {
+					c.reportError(fmt.Sprintf("type mismatch in binary expression: %s vs %s", left, right), e.Span())
+				}
+			} else {
+				c.reportError("type mismatch in binary expression", e.Span())
+			}
 		}
-		if e.Op == lexer.LARROW {
+
+		// Determine return type
+		switch e.Op {
+		case lexer.EQ, lexer.NOT_EQ, lexer.LT, lexer.LE, lexer.GT, lexer.GE:
+			return TypeBool
+		case lexer.LARROW:
 			return TypeVoid
+		default:
+			return left // Simplified (assumes result type same as operand type for arithmetic)
 		}
-		return left // Simplified
 	case *ast.PrefixExpr:
 		if e.Op == lexer.LARROW {
 			// Receive operation: <-ch
-			operand := c.checkExpr(e.Expr, scope)
+			operand := c.checkExpr(e.Expr, scope, inUnsafe)
 			if ch, ok := operand.(*Channel); ok {
 				if ch.Dir == SendOnly {
 					c.reportError("cannot receive from send-only channel", e.Span())
@@ -522,22 +606,81 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 			}
 			c.reportError("cannot receive from non-channel type", e.Span())
 			return TypeVoid
+		} else if e.Op == lexer.AMPERSAND {
+			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
+			return &Reference{Mutable: false, Elem: elemType}
+		} else if e.Op == lexer.ASTERISK {
+			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
+			if ptr, ok := elemType.(*Pointer); ok {
+				if !inUnsafe {
+					c.reportError("dereference of raw pointer requires unsafe block", e.Span())
+				}
+				return ptr.Elem
+			}
+			if ref, ok := elemType.(*Reference); ok {
+				return ref.Elem
+			}
+			c.reportError(fmt.Sprintf("cannot dereference non-pointer type %s", elemType), e.Span())
+			return TypeVoid
 		}
-		return c.checkExpr(e.Expr, scope)
+		return c.checkExpr(e.Expr, scope, inUnsafe)
 	case *ast.CallExpr:
 		// Check callee
-		calleeType := c.checkExpr(e.Callee, scope)
+		// Special handling for methods on Optional types (e.g. unwrap, expect)
+		// We peek into Callee to see if it's a FieldExpr on an Optional
+		if fieldExpr, ok := e.Callee.(*ast.FieldExpr); ok {
+			targetType := c.checkExpr(fieldExpr.Target, scope, inUnsafe)
+			// Unwrap named types
+			if named, ok := targetType.(*Named); ok && named.Ref != nil {
+				targetType = named.Ref
+			}
+
+			if opt, ok := targetType.(*Optional); ok {
+				// Allow specific methods
+				switch fieldExpr.Field.Name {
+				case "unwrap":
+					if len(e.Args) != 0 {
+						c.reportError("unwrap takes no arguments", e.Span())
+					}
+					return opt.Elem
+				case "expect":
+					if len(e.Args) != 1 {
+						c.reportError("expect takes 1 argument", e.Span())
+					} else {
+						argType := c.checkExpr(e.Args[0], scope, inUnsafe)
+						if argType != TypeString {
+							c.reportError(fmt.Sprintf("expect message must be string, got %s", argType), e.Args[0].Span())
+						}
+					}
+					return opt.Elem
+				default:
+					c.reportError(fmt.Sprintf("type %s has no method %s", targetType, fieldExpr.Field.Name), fieldExpr.Span())
+					return TypeVoid
+				}
+			}
+		}
+
+		calleeType := c.checkExpr(e.Callee, scope, inUnsafe)
 
 		// Check args and collect argument types
 		var argTypes []Type
 		for _, arg := range e.Args {
-			argType := c.checkExpr(arg, scope)
+			argType := c.checkExpr(arg, scope, inUnsafe)
 			argTypes = append(argTypes, argType)
 		}
 
 		if fn, ok := calleeType.(*Function); ok {
+			if fn.Unsafe && !inUnsafe {
+				c.reportError("call to unsafe function requires unsafe block", e.Span())
+			}
+
 			// Check if function is generic and needs type inference
 			if len(fn.TypeParams) > 0 {
+				// If no explicit type args provided (handled via IndexExpr on Callee?),
+				// then try inference.
+				// But wait, if callee was IndexExpr, it would have been instantiated already.
+				// So here we only see TypeParams if it wasn't instantiated.
+
 				// Build param types with type parameters
 				paramTypes := fn.Params
 
@@ -569,9 +712,42 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 			return fn.Return
 		}
 		return TypeVoid // Simplified
+	case *ast.FieldExpr:
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
+
+		// Unwrap named types
+		if named, ok := targetType.(*Named); ok && named.Ref != nil {
+			targetType = named.Ref
+		}
+
+		if _, ok := targetType.(*Optional); ok {
+			c.reportError(fmt.Sprintf("cannot access field %s on nullable type %s", e.Field.Name, targetType), e.Span())
+			return TypeVoid
+		}
+
+		structType := c.resolveStruct(targetType)
+		if structType != nil {
+			for _, f := range structType.Fields {
+				if f.Name == e.Field.Name {
+					return f.Type
+				}
+			}
+			c.reportError(fmt.Sprintf("struct %s has no field %s", structType.Name, e.Field.Name), e.Span())
+			return TypeVoid
+		}
+
+		c.reportError(fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name), e.Span())
+		return TypeVoid
 	case *ast.BlockExpr:
-		c.checkBlock(e, scope)
+		c.checkBlock(e, scope, inUnsafe)
 		return TypeVoid // Simplified
+	case *ast.ArrayLiteral:
+		// Check all elements
+		for _, elem := range e.Elements {
+			c.checkExpr(elem, scope, inUnsafe)
+		}
+		// Return TypeInt as placeholder for array type, consistent with IndexExpr logic
+		return TypeInt
 	case *ast.StructLiteral:
 		sym := scope.Lookup(e.Name.Name)
 		if sym == nil {
@@ -598,7 +774,7 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 				continue
 			}
 
-			valType := c.checkExpr(f.Value, scope)
+			valType := c.checkExpr(f.Value, scope, inUnsafe)
 			if !c.assignableTo(valType, expectedType) {
 				c.reportError(fmt.Sprintf("cannot assign type %s to field %s of type %s", valType, f.Name.Name, expectedType), f.Value.Span())
 			}
@@ -615,11 +791,11 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		// Check all if clauses - all branches must return the same type
 		var resultType Type
 		for i, clause := range e.Clauses {
-			condType := c.checkExpr(clause.Condition, scope)
+			condType := c.checkExpr(clause.Condition, scope, inUnsafe)
 			if condType != TypeBool {
 				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
 			}
-			branchType := c.checkBlock(clause.Body, scope)
+			branchType := c.checkBlock(clause.Body, scope, inUnsafe)
 			if i == 0 {
 				resultType = branchType
 			} else {
@@ -630,7 +806,7 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		}
 		// Check else branch if present
 		if e.Else != nil {
-			elseType := c.checkBlock(e.Else, scope)
+			elseType := c.checkBlock(e.Else, scope, inUnsafe)
 			if resultType != nil {
 				if !c.assignableTo(elseType, resultType) && !c.assignableTo(resultType, elseType) {
 					c.reportError(fmt.Sprintf("else branch returns %s, but if branches returned %s", elseType, resultType), e.Else.Span())
@@ -644,9 +820,28 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		}
 		return resultType
 	case *ast.IndexExpr:
-		// Check target and index
-		targetType := c.checkExpr(e.Target, scope)
-		indexType := c.checkExpr(e.Index, scope)
+		// Check target
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
+
+		// Check if target is a generic function/struct/etc
+		if fn, ok := targetType.(*Function); ok && len(fn.TypeParams) > 0 {
+			// Instantiate generic function
+			argType := c.resolveTypeFromExpr(e.Index)
+
+			// Helper to substitute T -> argType
+			// For now, assume single type param
+			subst := map[string]Type{
+				fn.TypeParams[0].Name: argType,
+			}
+
+			// Substitute in function type, remove type params
+			newFn := Substitute(fn, subst).(*Function)
+			newFn.TypeParams = nil // Remove generic params as they are bound
+			return newFn
+		}
+
+		// Default array indexing behavior
+		indexType := c.checkExpr(e.Index, scope, inUnsafe)
 
 		// Index must be int
 		if indexType != TypeInt {
@@ -659,7 +854,7 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		_ = targetType
 		return TypeInt // TODO: return element type when arrays are added
 	case *ast.MatchExpr:
-		return c.checkMatchExpr(e, scope)
+		return c.checkMatchExpr(e, scope, inUnsafe)
 	default:
 		return TypeVoid
 	}
@@ -672,6 +867,14 @@ func (c *Checker) assignableTo(src, dst Type) bool {
 	}
 	if named, ok := dst.(*Named); ok && named.Ref != nil {
 		return c.assignableTo(src, named.Ref)
+	}
+
+	// Handle nil assignment
+	if src == TypeNil {
+		if _, ok := dst.(*Optional); ok {
+			return true
+		}
+		return false
 	}
 
 	// Handle Channel types
@@ -696,8 +899,8 @@ func (c *Checker) assignableTo(src, dst Type) bool {
 	return src == dst
 }
 
-func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope) Type {
-	subjectType := c.checkExpr(expr.Subject, scope)
+func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe bool) Type {
+	subjectType := c.checkExpr(expr.Subject, scope, inUnsafe)
 
 	// Resolve named type if necessary
 	resolvedType := subjectType
@@ -707,86 +910,128 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope) Type {
 		}
 	}
 
-	enumType, ok := resolvedType.(*Enum)
-	if !ok {
-		c.reportError(fmt.Sprintf("match subject must be an enum, got %s", subjectType), expr.Subject.Span())
+	// Check if subject is Enum or Primitive
+	var enumType *Enum
+	isEnum := false
+	if e, ok := resolvedType.(*Enum); ok {
+		enumType = e
+		isEnum = true
+	} else if resolvedType != TypeInt && resolvedType != TypeString && resolvedType != TypeBool {
+		c.reportError(fmt.Sprintf("match subject must be an enum or primitive, got %s", subjectType), expr.Subject.Span())
 		return TypeVoid
 	}
 
-	// Track covered variants for exhaustiveness check
+	// Track covered variants for exhaustiveness check (only for enums)
 	coveredVariants := make(map[string]bool)
+	hasDefault := false
 	var returnType Type
 
 	for _, arm := range expr.Arms {
 		// Create scope for the arm
 		armScope := NewScope(scope)
 
-		// Check pattern
-		// Pattern is likely a CallExpr (Variant(args)) or Ident/FieldExpr (Variant)
-		var variantName string
-		var args []ast.Expr
-
-		switch p := arm.Pattern.(type) {
-		case *ast.CallExpr:
-			// Variant with payload: Shape.Circle(r) or Circle(r)
-			if field, ok := p.Callee.(*ast.FieldExpr); ok {
-				variantName = field.Field.Name
-			} else if ident, ok := p.Callee.(*ast.Ident); ok {
-				variantName = ident.Name
+		// Check for default pattern "_"
+		if ident, ok := arm.Pattern.(*ast.Ident); ok && ident.Name == "_" {
+			hasDefault = true
+			// Check body
+			bodyType := c.checkBlock(arm.Body, armScope, inUnsafe)
+			if returnType == nil {
+				returnType = bodyType
 			} else {
-				c.reportError("invalid pattern syntax", p.Span())
+				if !c.assignableTo(bodyType, returnType) && !c.assignableTo(returnType, bodyType) {
+					c.reportError(fmt.Sprintf("match arm returns %s, expected %s", bodyType, returnType), arm.Body.Span())
+				}
+			}
+			continue
+		}
+
+		if isEnum {
+			// Check pattern for Enum
+			// Pattern is likely a CallExpr (Variant(args)) or Ident/FieldExpr (Variant)
+			var variantName string
+			var args []ast.Expr
+
+			switch p := arm.Pattern.(type) {
+			case *ast.CallExpr:
+				// Variant with payload: Shape.Circle(r) or Circle(r)
+				if field, ok := p.Callee.(*ast.FieldExpr); ok {
+					variantName = field.Field.Name
+				} else if ident, ok := p.Callee.(*ast.Ident); ok {
+					variantName = ident.Name
+				} else {
+					c.reportError("invalid pattern syntax", p.Span())
+					continue
+				}
+				args = p.Args
+			case *ast.FieldExpr:
+				// Variant without payload: Shape.Circle
+				variantName = p.Field.Name
+			case *ast.Ident:
+				// Variant without payload: Circle
+				variantName = p.Name
+			default:
+				c.reportError("invalid pattern syntax for enum match", p.Span())
 				continue
 			}
-			args = p.Args
-		case *ast.FieldExpr:
-			// Variant without payload: Shape.Circle
-			variantName = p.Field.Name
-		case *ast.Ident:
-			// Variant without payload: Circle
-			variantName = p.Name
-		default:
-			c.reportError("invalid pattern syntax", p.Span())
-			continue
-		}
 
-		// Verify variant exists in enum
-		var variant *Variant
-		for i := range enumType.Variants {
-			if enumType.Variants[i].Name == variantName {
-				variant = &enumType.Variants[i]
-				break
+			// Verify variant exists in enum
+			var variant *Variant
+			for i := range enumType.Variants {
+				if enumType.Variants[i].Name == variantName {
+					variant = &enumType.Variants[i]
+					break
+				}
 			}
-		}
 
-		if variant == nil {
-			c.reportError(fmt.Sprintf("unknown variant %s for enum %s", variantName, enumType.Name), arm.Pattern.Span())
-			continue
-		}
+			if variant == nil {
+				c.reportError(fmt.Sprintf("unknown variant %s for enum %s", variantName, enumType.Name), arm.Pattern.Span())
+				continue
+			}
 
-		coveredVariants[variantName] = true
+			coveredVariants[variantName] = true
 
-		// Verify payload count
-		if len(args) != len(variant.Payload) {
-			c.reportError(fmt.Sprintf("variant %s expects %d arguments, got %d", variantName, len(variant.Payload), len(args)), arm.Pattern.Span())
-			continue
-		}
+			// Verify payload count
+			if len(args) != len(variant.Payload) {
+				c.reportError(fmt.Sprintf("variant %s expects %d arguments, got %d", variantName, len(variant.Payload), len(args)), arm.Pattern.Span())
+				continue
+			}
 
-		// Bind payload variables
-		for i, arg := range args {
-			if ident, ok := arg.(*ast.Ident); ok {
-				// Bind variable to payload type
-				armScope.Insert(ident.Name, &Symbol{
-					Name:    ident.Name,
-					Type:    variant.Payload[i],
-					DefNode: ident,
-				})
-			} else {
-				c.reportError("pattern arguments must be identifiers", arg.Span())
+			// Bind payload variables
+			for i, arg := range args {
+				if ident, ok := arg.(*ast.Ident); ok {
+					// Bind variable to payload type
+					armScope.Insert(ident.Name, &Symbol{
+						Name:    ident.Name,
+						Type:    variant.Payload[i],
+						DefNode: ident,
+					})
+				} else {
+					c.reportError("pattern arguments must be identifiers", arg.Span())
+				}
+			}
+		} else {
+			// Check pattern for Primitive
+			switch p := arm.Pattern.(type) {
+			case *ast.IntegerLit:
+				if resolvedType != TypeInt {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			case *ast.StringLit:
+				if resolvedType != TypeString {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			case *ast.BoolLit:
+				if resolvedType != TypeBool {
+					c.reportError("type mismatch in match pattern", p.Span())
+				}
+			default:
+				c.reportError(fmt.Sprintf("invalid pattern for primitive match: %T", p), arm.Pattern.Span())
+				continue
 			}
 		}
 
 		// Check body
-		bodyType := c.checkBlock(arm.Body, armScope)
+		bodyType := c.checkBlock(arm.Body, armScope, inUnsafe)
 
 		// Unify return types
 		if returnType == nil {
@@ -799,9 +1044,17 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope) Type {
 	}
 
 	// Check exhaustiveness
-	for _, v := range enumType.Variants {
-		if !coveredVariants[v.Name] {
-			c.reportError(fmt.Sprintf("match is not exhaustive, missing variant: %s", v.Name), expr.Span())
+	if isEnum {
+		for _, v := range enumType.Variants {
+			if !coveredVariants[v.Name] && !hasDefault {
+				c.reportError(fmt.Sprintf("match is not exhaustive, missing variant: %s", v.Name), expr.Span())
+			}
+		}
+	} else {
+		if !hasDefault {
+			// Primitives must have default case for exhaustiveness
+			// (Unless we check all bools, but simpler to require default)
+			c.reportError("match on primitives must have a default case (_)", expr.Span())
 		}
 	}
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"go/format"
 
-	"github.com/malphas-lang/malphas-lang/internal/codegen"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 	"github.com/malphas-lang/malphas-lang/internal/types"
 )
@@ -16,26 +15,27 @@ func GenerateGo(src string) (string, error) {
 	// Parse the source.
 	p := parser.New(src)
 	file := p.ParseFile()
-	if file == nil {
+	if file == nil || len(p.Errors()) > 0 {
 		return "", fmt.Errorf("parsing failed: %v", p.Errors())
 	}
 
 	// Type‑check.
 	chk := types.NewChecker()
-	if err := chk.CheckFile(file); err != nil {
-		return "", fmt.Errorf("type checking failed: %w", err)
+	chk.Check(file)
+	if len(chk.Errors) > 0 {
+		return "", fmt.Errorf("type checking failed: %v", chk.Errors)
 	}
 
 	// Generate Go AST.
-	gen := codegen.NewGenerator()
-	goFile, err := gen.GenFile(file)
+	gen := NewGenerator()
+	goFile, err := gen.Generate(file)
 	if err != nil {
 		return "", fmt.Errorf("code generation failed: %w", err)
 	}
 
 	// Render the AST to source.
 	var buf bytes.Buffer
-	if err := format.Node(&buf, gen.Fset, goFile); err != nil {
+	if err := format.Node(&buf, gen.fset, goFile); err != nil {
 		return "", fmt.Errorf("formatting failed: %w", err)
 	}
 	return buf.String(), nil

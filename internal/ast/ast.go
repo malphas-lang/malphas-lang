@@ -86,6 +86,7 @@ func (d *UseDecl) Span() lexer.Span { return d.span }
 
 // FnDecl represents a function declaration.
 type FnDecl struct {
+	Unsafe     bool
 	Name       *Ident
 	TypeParams []GenericParam
 	Params     []*Param
@@ -99,9 +100,9 @@ type FnDecl struct {
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
 // NewFnDecl constructs a function declaration node.
-// NewFnDecl constructs a function declaration node.
-func NewFnDecl(name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
+func NewFnDecl(isUnsafe bool, name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
 	return &FnDecl{
+		Unsafe:     isUnsafe,
 		Name:       name,
 		TypeParams: typeParams,
 		Params:     params,
@@ -273,6 +274,31 @@ func (b *BlockExpr) SetSpan(span lexer.Span) {
 
 // exprNode marks BlockExpr as an expression.
 func (*BlockExpr) exprNode() {}
+
+// UnsafeBlock represents an unsafe block (unsafe { ... }).
+type UnsafeBlock struct {
+	Block *BlockExpr
+	span  lexer.Span
+}
+
+// Span returns the unsafe block span.
+func (b *UnsafeBlock) Span() lexer.Span { return b.span }
+
+// SetSpan updates the unsafe block span.
+func (b *UnsafeBlock) SetSpan(span lexer.Span) {
+	b.span = span
+}
+
+// exprNode marks UnsafeBlock as an expression.
+func (*UnsafeBlock) exprNode() {}
+
+// NewUnsafeBlock constructs an unsafe block node.
+func NewUnsafeBlock(block *BlockExpr, span lexer.Span) *UnsafeBlock {
+	return &UnsafeBlock{
+		Block: block,
+		span:  span,
+	}
+}
 
 // LetStmt represents a let binding statement.
 type LetStmt struct {
@@ -996,6 +1022,31 @@ func (l *NilLit) SetSpan(span lexer.Span) {
 // exprNode marks NilLit as an expression.
 func (*NilLit) exprNode() {}
 
+// ArrayLiteral represents an array literal ([1, 2, 3]).
+type ArrayLiteral struct {
+	Elements []Expr
+	span     lexer.Span
+}
+
+// Span returns the literal span.
+func (a *ArrayLiteral) Span() lexer.Span { return a.span }
+
+// NewArrayLiteral constructs an array literal node.
+func NewArrayLiteral(elements []Expr, span lexer.Span) *ArrayLiteral {
+	return &ArrayLiteral{
+		Elements: elements,
+		span:     span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (a *ArrayLiteral) SetSpan(span lexer.Span) {
+	a.span = span
+}
+
+// exprNode marks ArrayLiteral as an expression.
+func (*ArrayLiteral) exprNode() {}
+
 // PrefixExpr represents a prefix expression.
 type PrefixExpr struct {
 	Op   lexer.TokenType
@@ -1314,3 +1365,4 @@ func (l *StructLiteral) SetSpan(span lexer.Span) {
 
 // exprNode marks StructLiteral as an expression.
 func (*StructLiteral) exprNode() {}
+

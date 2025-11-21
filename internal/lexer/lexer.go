@@ -495,13 +495,13 @@ func (l *Lexer) NextToken() Token {
 
 			raw := string(l.ch)
 			l.read()
-			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
-			l.addError(
-				ErrIllegalRune,
-				"illegal character "+strconv.Quote(raw),
-				tok.Span,
-			)
-			return tok
+			return l.makeToken(AMPERSAND, startLine, startColumn, startPos, l.pos, raw, raw)
+
+		case '?':
+			startLine, startColumn, startPos := l.currentSpanStart()
+			raw := string(l.ch)
+			l.read()
+			return l.makeToken(QUESTION, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '|':
 			startLine, startColumn, startPos := l.currentSpanStart()

@@ -37,6 +37,7 @@ func TestChecker_BasicTypes(t *testing.T) {
 	}
 
 	fnDecl := ast.NewFnDecl(
+		false,
 		ast.NewIdent("main", lexer.Span{}),
 		nil, // type params
 		nil, // params
@@ -77,6 +78,7 @@ func TestChecker_UndefinedVariable(t *testing.T) {
 	}
 
 	fnDecl := ast.NewFnDecl(
+		false,
 		ast.NewIdent("test", lexer.Span{}),
 		nil, nil, nil, nil, fnBody, lexer.Span{},
 	)

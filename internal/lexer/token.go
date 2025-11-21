@@ -39,10 +39,12 @@ const (
 	PLUS     TokenType = "+"
 	MINUS    TokenType = "-"
 	BANG     TokenType = "!"
+	AMPERSAND TokenType = "&"
 	ASTERISK TokenType = "*"
 	SLASH    TokenType = "/"
 	AND      TokenType = "&&"
 	OR       TokenType = "||"
+	QUESTION TokenType = "?"
 
 	LT     TokenType = "<"
 	GT     TokenType = ">"
@@ -96,7 +98,9 @@ const (
 	SPAWN    TokenType = "SPAWN"
 	CHAN     TokenType = "CHAN"
 	SELECT   TokenType = "SELECT"
+	CASE     TokenType = "CASE"
 	WHERE    TokenType = "WHERE"
+	UNSAFE   TokenType = "UNSAFE"
 
 	// Trivia tokens (comments, whitespace, newlines)
 	LINE_COMMENT  TokenType = "LINE_COMMENT"  // //
@@ -133,7 +137,9 @@ var keywords = map[string]TokenType{
 	"spawn":    SPAWN,
 	"chan":     CHAN,
 	"select":   SELECT,
+	"case":     CASE,
 	"where":    WHERE,
+	"unsafe":   UNSAFE,
 }
 
 // LookupIdent checks if the identifier is a keyword

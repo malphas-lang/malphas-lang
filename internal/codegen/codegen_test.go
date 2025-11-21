@@ -7,13 +7,13 @@ import (
 
 func TestGenerateGo_ControlFlow(t *testing.T) {
 	src := `
-package main
+package main;
 
 fn main() {
     if true {
-        println("yes")
+        println("yes");
     } else {
-        println("no")
+        println("no");
     }
 
     while false {

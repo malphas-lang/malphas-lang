@@ -71,6 +71,7 @@ func (e *Enum) IsType()        {}
 
 // Function represents a function type.
 type Function struct {
+	Unsafe     bool
 	TypeParams []TypeParam
 	Params     []Type
 	Return     Type
@@ -85,7 +86,11 @@ func (f *Function) String() string {
 	if f.Return != nil {
 		ret = f.Return.String()
 	}
-	return "fn(" + strings.Join(params, ", ") + ") -> " + ret
+	prefix := "fn"
+	if f.Unsafe {
+		prefix = "unsafe fn"
+	}
+	return prefix + "(" + strings.Join(params, ", ") + ") -> " + ret
 }
 func (f *Function) IsType() {}
 
@@ -124,3 +129,33 @@ type Named struct {
 
 func (n *Named) String() string { return n.Name }
 func (n *Named) IsType()        {}
+
+// Pointer represents a raw pointer type (*T).
+type Pointer struct {
+	Elem Type
+}
+
+func (p *Pointer) String() string { return "*" + p.Elem.String() }
+func (p *Pointer) IsType()        {}
+
+// Reference represents a reference type (&T or &mut T).
+type Reference struct {
+	Mutable bool
+	Elem    Type
+}
+
+func (r *Reference) String() string {
+	if r.Mutable {
+		return "&mut " + r.Elem.String()
+	}
+	return "&" + r.Elem.String()
+}
+func (r *Reference) IsType() {}
+
+// Optional represents an optional type (T?).
+type Optional struct {
+	Elem Type
+}
+
+func (o *Optional) String() string { return o.Elem.String() + "?" }
+func (o *Optional) IsType()        {}

@@ -401,6 +401,33 @@ func (g *Generator) genExprStmt(stmt *mast.ExprStmt) (goast.Stmt, error) {
 		return &goast.SendStmt{Chan: ch, Value: val}, nil
 	}
 
+	// Check for assignment: lhs = rhs
+	if assign, ok := stmt.Expr.(*mast.AssignExpr); ok {
+		lhs, err := g.genExpr(assign.Target)
+		if err != nil {
+			return nil, err
+		}
+		rhs, err := g.genExpr(assign.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &goast.AssignStmt{
+			Lhs: []goast.Expr{lhs},
+			Tok: token.ASSIGN,
+			Rhs: []goast.Expr{rhs},
+		}, nil
+	}
+
+	// Check for UnsafeBlock used as statement
+	if unsafeBlock, ok := stmt.Expr.(*mast.UnsafeBlock); ok {
+		return g.genBlock(unsafeBlock.Block)
+	}
+
+	// Check for BlockExpr used as statement
+	if blockExpr, ok := stmt.Expr.(*mast.BlockExpr); ok {
+		return g.genBlock(blockExpr)
+	}
+
 	expr, err := g.genExpr(stmt.Expr)
 	if err != nil {
 		return nil, err
@@ -478,12 +505,13 @@ func (g *Generator) genForStmt(stmt *mast.ForStmt) (goast.Stmt, error) {
 		return nil, err
 	}
 
-	// Generate range-based for loop: for iterator := range iterable { body }
+	// Generate range-based for loop: for _, iterator := range iterable { body }
 	return &goast.RangeStmt{
-		Key:  goast.NewIdent(stmt.Iterator.Name),
-		Tok:  token.DEFINE,
-		X:    iterable,
-		Body: body,
+		Key:   goast.NewIdent("_"),
+		Value: goast.NewIdent(stmt.Iterator.Name),
+		Tok:   token.DEFINE,
+		X:     iterable,
+		Body:  body,
 	}, nil
 }
 
@@ -525,15 +553,96 @@ func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 			Type: goast.NewIdent(e.Name.Name),
 			Elts: elts,
 		}, nil
+	case *mast.ArrayLiteral:
+		return g.genArrayLiteral(e)
 	case *mast.IfExpr:
 		return g.genIfExpr(e)
 	case *mast.IndexExpr:
 		return g.genIndexExpr(e)
 	case *mast.MatchExpr:
 		return g.genMatchExpr(e)
+	case *mast.AssignExpr:
+		return g.genAssignExpr(e)
+	case *mast.BlockExpr:
+		return g.genBlockExpr(e)
+	case *mast.UnsafeBlock:
+		return g.genBlockExpr(e.Block)
 	default:
 		return nil, fmt.Errorf("unsupported expression: %T", expr)
 	}
+}
+
+func (g *Generator) genBlockExpr(block *mast.BlockExpr) (goast.Expr, error) {
+	body, err := g.genBlock(block)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap block in IIFE: func() any { ... }()
+	return &goast.CallExpr{
+		Fun: &goast.FuncLit{
+			Type: &goast.FuncType{
+				Params: &goast.FieldList{},
+				Results: &goast.FieldList{
+					List: []*goast.Field{
+						{Type: goast.NewIdent("any")},
+					},
+				},
+			},
+			Body: body,
+		},
+		Args: []goast.Expr{},
+	}, nil
+}
+
+func (g *Generator) genAssignExpr(expr *mast.AssignExpr) (goast.Expr, error) {
+	// Assignments are statements in Go, but expressions in Malphas.
+	// This mismatch is tricky. If it's used in a statement context (ExprStmt), it's fine.
+	// If it's used as a value, we have a problem.
+	// For now, we can try to return an assignment statement if the caller handles it,
+	// but genExpr returns goast.Expr.
+	//
+	// However, looking at genExprStmt, it calls genExpr directly.
+	// We need to refactor genExprStmt to handle assignments specifically, OR
+	// we return a special error or dummy expression if it's used in expression context.
+	//
+	// Actually, for loops often use assignments in the body: x = x + 1;
+	// This appears as an ExprStmt containing an AssignExpr.
+	// So we should handle AssignExpr here by returning a dummy, and handle it properly in genExprStmt?
+	// No, genExprStmt expects an Expr.
+	//
+	// Wait, Go's AssignStmt IS a Stmt. So we can't return it from genExpr.
+	// We must handle AssignExpr in genExprStmt.
+
+	return nil, fmt.Errorf("assignments are statements in Go and should be handled in genExprStmt")
+}
+
+func (g *Generator) genArrayLiteral(expr *mast.ArrayLiteral) (goast.Expr, error) {
+	elts := []goast.Expr{}
+	// Try to infer type from first element if possible
+	eltType := "int" // Default
+
+	for i, elem := range expr.Elements {
+		e, err := g.genExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, e)
+
+		if i == 0 {
+			// Infer type from first element (simplified)
+			if _, ok := elem.(*mast.StringLit); ok {
+				eltType = "string"
+			} else if _, ok := elem.(*mast.BoolLit); ok {
+				eltType = "bool"
+			}
+		}
+	}
+
+	return &goast.CompositeLit{
+		Type: &goast.ArrayType{Elt: goast.NewIdent(eltType)},
+		Elts: elts,
+	}, nil
 }
 
 func (g *Generator) genInfixExpr(expr *mast.InfixExpr) (goast.Expr, error) {
@@ -619,32 +728,35 @@ func (g *Generator) genPrefixExpr(expr *mast.PrefixExpr) (goast.Expr, error) {
 	case mlexer.LARROW:
 		// Receive operation: <-ch
 		return &goast.UnaryExpr{Op: token.ARROW, X: right}, nil
+	case mlexer.AMPERSAND:
+		return &goast.UnaryExpr{Op: token.AND, X: right}, nil
+	case mlexer.ASTERISK:
+		return &goast.UnaryExpr{Op: token.MUL, X: right}, nil
 	default:
 		return nil, fmt.Errorf("unknown prefix operator: %s", expr.Op)
 	}
 }
 
 func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
+	var callee mast.Expr = expr.Callee
+
+	// Unwrap IndexExpr if present (generic instantiation)
+	if idxExpr, ok := callee.(*mast.IndexExpr); ok {
+		callee = idxExpr.Target
+	}
+
 	// Handle static method calls like Channel::new
-	if infix, ok := expr.Callee.(*mast.InfixExpr); ok && infix.Op == mlexer.DOUBLE_COLON {
+	if infix, ok := callee.(*mast.InfixExpr); ok && infix.Op == mlexer.DOUBLE_COLON {
 		// Check for Channel::new
 		isChannel := false
 		var elemType goast.Expr
 
-		if ident, ok := infix.Left.(*mast.Ident); ok && ident.Name == "Channel" {
-			isChannel = true
-			// Default to int if no type arg provided (or maybe error?)
-			// For now, let's default to int to match previous behavior/assumptions
-			elemType = goast.NewIdent("int")
-		} else if indexExpr, ok := infix.Left.(*mast.IndexExpr); ok {
-			if ident, ok := indexExpr.Target.(*mast.Ident); ok && ident.Name == "Channel" {
+		// Check if this is wrapped in IndexExpr (generic instantiation Channel::new[T])
+		if idxExpr, ok := expr.Callee.(*mast.IndexExpr); ok {
+			if ident, ok := infix.Left.(*mast.Ident); ok && ident.Name == "Channel" {
 				isChannel = true
-				// Resolve type arg
-				// We need to map the expression to a type.
-				// Since we don't have full type resolution here, we do a best effort mapping
-				// assuming the index expression is a type identifier.
-				if typeIdent, ok := indexExpr.Index.(*mast.Ident); ok {
-					// Map primitive types
+				// Extract type from IndexExpr.Index
+				if typeIdent, ok := idxExpr.Index.(*mast.Ident); ok {
 					switch typeIdent.Name {
 					case "int":
 						elemType = goast.NewIdent("int")
@@ -656,7 +768,34 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 						elemType = goast.NewIdent(typeIdent.Name)
 					}
 				} else {
-					return nil, fmt.Errorf("unsupported type argument in Channel[...]::new")
+					return nil, fmt.Errorf("complex type arguments in Channel::new[...] not supported in codegen")
+				}
+			}
+		} else {
+			// Existing logic for Channel::new (implicit int) or Channel[T]::new
+			if ident, ok := infix.Left.(*mast.Ident); ok && ident.Name == "Channel" {
+				isChannel = true
+				// Default to int if no type arg provided
+				elemType = goast.NewIdent("int")
+			} else if indexExpr, ok := infix.Left.(*mast.IndexExpr); ok {
+				if ident, ok := indexExpr.Target.(*mast.Ident); ok && ident.Name == "Channel" {
+					isChannel = true
+					// Resolve type arg
+					if typeIdent, ok := indexExpr.Index.(*mast.Ident); ok {
+						// Map primitive types
+						switch typeIdent.Name {
+						case "int":
+							elemType = goast.NewIdent("int")
+						case "string":
+							elemType = goast.NewIdent("string")
+						case "bool":
+							elemType = goast.NewIdent("bool")
+						default:
+							elemType = goast.NewIdent(typeIdent.Name)
+						}
+					} else {
+						return nil, fmt.Errorf("unsupported type argument in Channel[...]::new")
+					}
 				}
 			}
 		}
@@ -826,6 +965,24 @@ func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 			Dir:   goast.SEND | goast.RECV,
 			Value: elemType,
 		}, nil
+	case *mast.PointerType:
+		elem, err := g.mapType(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		return &goast.StarExpr{X: elem}, nil
+	case *mast.ReferenceType:
+		elem, err := g.mapType(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		return &goast.StarExpr{X: elem}, nil
+	case *mast.OptionalType:
+		elem, err := g.mapType(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		return &goast.StarExpr{X: elem}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type expression: %T", t)
 	}
@@ -1032,8 +1189,66 @@ func (g *Generator) genTraitDecl(decl *mast.TraitDecl) ([]goast.Decl, error) {
 }
 
 func (g *Generator) genMatchExpr(expr *mast.MatchExpr) (goast.Expr, error) {
-	// Stub for match expression
-	return nil, fmt.Errorf("match expression codegen not implemented yet")
+	subject, err := g.genExpr(expr.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	cases := []goast.Stmt{}
+	for _, arm := range expr.Arms {
+		body, err := g.genBlock(arm.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		var clause goast.Stmt
+
+		// Check if pattern is wildcard "_"
+		isDefault := false
+		if ident, ok := arm.Pattern.(*mast.Ident); ok && ident.Name == "_" {
+			isDefault = true
+		}
+
+		if isDefault {
+			clause = &goast.CaseClause{
+				List: nil, // nil List means default
+				Body: body.List,
+			}
+		} else {
+			pattern, err := g.genExpr(arm.Pattern)
+			if err != nil {
+				return nil, err
+			}
+			clause = &goast.CaseClause{
+				List: []goast.Expr{pattern},
+				Body: body.List,
+			}
+		}
+		cases = append(cases, clause)
+	}
+
+	switchStmt := &goast.SwitchStmt{
+		Tag:  subject,
+		Body: &goast.BlockStmt{List: cases},
+	}
+
+	// Wrap in IIFE: func() any { switch ... }()
+	return &goast.CallExpr{
+		Fun: &goast.FuncLit{
+			Type: &goast.FuncType{
+				Params: &goast.FieldList{},
+				Results: &goast.FieldList{
+					List: []*goast.Field{
+						{Type: goast.NewIdent("any")},
+					},
+				},
+			},
+			Body: &goast.BlockStmt{
+				List: []goast.Stmt{switchStmt},
+			},
+		},
+		Args: []goast.Expr{},
+	}, nil
 }
 func (g *Generator) genImplDecl(decl *mast.ImplDecl) ([]goast.Decl, error) {
 	decls := []goast.Decl{}
