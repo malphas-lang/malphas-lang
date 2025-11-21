@@ -13,7 +13,8 @@ import (
 // Generator converts Malphas AST to Go AST.
 type Generator struct {
 	fset         *token.FileSet
-	enumVariants map[string]bool // Track enum variant names to detect constructors
+	enumVariants map[string]bool       // Track enum variant names to detect constructors
+	modules      map[string]*mast.File // Loaded modules (name -> file)
 }
 
 // NewGenerator creates a new generator.
@@ -21,12 +22,49 @@ func NewGenerator() *Generator {
 	return &Generator{
 		fset:         token.NewFileSet(),
 		enumVariants: make(map[string]bool),
+		modules:      make(map[string]*mast.File),
 	}
+}
+
+// SetModules sets the loaded modules for code generation.
+func (g *Generator) SetModules(modules map[string]*mast.File) {
+	g.modules = modules
 }
 
 // Generate converts a Malphas file to a Go file.
 func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 	decls := []goast.Decl{}
+
+	// Generate code for all loaded module files first (so their symbols are available)
+	for moduleName, moduleFile := range g.modules {
+		_ = moduleName // May be useful for future module path handling
+		// Generate code for all PUBLIC declarations in the module
+		for _, decl := range moduleFile.Decls {
+			// Only generate public symbols
+			isPublic := false
+			switch d := decl.(type) {
+			case *mast.FnDecl:
+				isPublic = d.Pub
+			case *mast.StructDecl:
+				isPublic = d.Pub
+			case *mast.EnumDecl:
+				isPublic = d.Pub
+			case *mast.TraitDecl:
+				isPublic = d.Pub
+			case *mast.TypeAliasDecl:
+				isPublic = d.Pub
+			case *mast.ConstDecl:
+				isPublic = d.Pub
+			}
+			if isPublic {
+				generated, err := g.genDecl(decl)
+				if err != nil {
+					return nil, err
+				}
+				decls = append(decls, generated...)
+			}
+		}
+	}
 
 	// Generate imports from use declarations
 	imports := g.generateImports(file.Uses)

@@ -420,8 +420,9 @@ func (p *Parser) parseDecl() ast.Decl {
 	switch p.curTok.Type {
 	case lexer.PUB:
 		// pub can be followed by fn, struct, enum, type, const, trait
-		p.nextToken()
-		switch p.curTok.Type {
+		// Don't consume PUB here - let the parse functions consume it
+		// They will check for PUB and set isPub accordingly
+		switch p.peekTok.Type {
 		case lexer.FN, lexer.UNSAFE:
 			return p.parseFnDecl()
 		case lexer.STRUCT:
@@ -435,7 +436,7 @@ func (p *Parser) parseDecl() ast.Decl {
 		case lexer.TRAIT:
 			return p.parseTraitDecl()
 		default:
-			p.reportError("expected declaration after 'pub'", p.curTok.Span)
+			p.reportError("expected declaration after 'pub'", p.peekTok.Span)
 			return nil
 		}
 	case lexer.FN:

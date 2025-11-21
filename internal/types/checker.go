@@ -2,11 +2,22 @@ package types
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
 	"github.com/malphas-lang/malphas-lang/internal/lexer"
+	"github.com/malphas-lang/malphas-lang/internal/parser"
 )
+
+// ModuleInfo represents information about a loaded module.
+type ModuleInfo struct {
+	Name     string    // Module name (e.g., "utils")
+	File     *ast.File // Parsed AST of the module file
+	FilePath string    // Full path to the module file
+	Scope    *Scope    // Scope containing ONLY public symbols
+}
 
 // Checker performs semantic analysis on the AST.
 type Checker struct {
@@ -15,15 +26,23 @@ type Checker struct {
 	Errors      []diag.Diagnostic
 	// MethodTable maps type names to their methods
 	MethodTable map[string]map[string]*Function // typename -> methodname -> function
+	// Modules tracks loaded modules by their name
+	Modules map[string]*ModuleInfo
+	// CurrentFile tracks the current file being checked (for relative path resolution)
+	CurrentFile string
+	// LoadingModules tracks modules currently being loaded (for cycle detection)
+	LoadingModules map[string]bool
 }
 
 // NewChecker creates a new type checker.
 func NewChecker() *Checker {
 	c := &Checker{
-		GlobalScope: NewScope(nil),
-		Env:         NewEnvironment(),
-		Errors:      []diag.Diagnostic{},
-		MethodTable: make(map[string]map[string]*Function),
+		GlobalScope:    NewScope(nil),
+		Env:            NewEnvironment(),
+		Errors:         []diag.Diagnostic{},
+		MethodTable:    make(map[string]map[string]*Function),
+		Modules:        make(map[string]*ModuleInfo),
+		LoadingModules: make(map[string]bool),
 	}
 
 	// Add built-in types
@@ -47,7 +66,13 @@ func NewChecker() *Checker {
 
 // Check validates the types in the given file.
 func (c *Checker) Check(file *ast.File) {
-	// Pass 1: Collect declarations
+	c.CheckWithFilename(file, "")
+}
+
+// CheckWithFilename validates the types in the given file with a filename for module resolution.
+func (c *Checker) CheckWithFilename(file *ast.File, filename string) {
+	c.CurrentFile = filename
+	// Pass 1: Collect declarations (this will load modules)
 	c.collectDecls(file)
 
 	// Pass 2: Check bodies
@@ -208,6 +233,17 @@ func (c *Checker) reportError(msg string, span lexer.Span) {
 }
 
 func (c *Checker) collectDecls(file *ast.File) {
+	// First, process all mod declarations (modules must be loaded before use)
+	for _, modDecl := range file.Mods {
+		c.processModDecl(modDecl, file)
+	}
+
+	// Then, process all use declarations (imports)
+	for _, useDecl := range file.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Finally, process regular declarations
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FnDecl:
@@ -1453,4 +1489,461 @@ func (c *Checker) lookupMethod(typ Type, methodName string) *Function {
 		return methods[methodName]
 	}
 	return nil
+}
+
+// processModDecl processes a module declaration and loads the module file.
+func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
+	moduleName := modDecl.Name.Name
+
+	// Check for circular dependencies
+	if c.LoadingModules[moduleName] {
+		c.reportError(fmt.Sprintf("circular module dependency detected: %s", moduleName), modDecl.Span())
+		return
+	}
+
+	// If module already loaded, skip
+	if _, exists := c.Modules[moduleName]; exists {
+		return
+	}
+
+	// Mark as loading
+	c.LoadingModules[moduleName] = true
+	defer delete(c.LoadingModules, moduleName)
+
+	// Resolve module file path
+	modulePath, err := c.resolveModuleFilePath(moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("cannot find module file for '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Read and parse the module file
+	moduleFile, err := c.loadModuleFile(modulePath, moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("failed to load module '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Create module info
+	moduleInfo := &ModuleInfo{
+		Name:     moduleName,
+		File:     moduleFile,
+		FilePath: modulePath,
+		Scope:    NewScope(nil),
+	}
+
+	// Store module info BEFORE processing (so sub-modules can reference it if needed)
+	// But mark as loading to prevent circular dependencies
+	c.Modules[moduleName] = moduleInfo
+
+	// Save current state
+	oldCurrentFile := c.CurrentFile
+	oldGlobalScope := c.GlobalScope
+	c.CurrentFile = modulePath
+
+	// Create a temporary scope for the module (child of global scope for built-ins)
+	moduleScope := NewScope(c.GlobalScope)
+	c.GlobalScope = moduleScope
+
+	// Process mod declarations in the module file (recursive)
+	for _, subModDecl := range moduleFile.Mods {
+		c.processModDecl(subModDecl, moduleFile)
+	}
+
+	// Process use declarations in the module file
+	for _, useDecl := range moduleFile.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Collect all declarations from the module file and extract public symbols immediately
+	for _, decl := range moduleFile.Decls {
+		var symbol *Symbol
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.StructDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: c.resolveType(f.Type),
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.EnumDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TraitDecl:
+			// Add trait to scope
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name}, // Placeholder
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		}
+	}
+
+	// Restore checker state
+	c.GlobalScope = oldGlobalScope
+	c.CurrentFile = oldCurrentFile
+
+	// Module info is already stored (we stored it before processing)
+	// Just make sure it's still there (it should be)
+	c.Modules[moduleName] = moduleInfo
+}
+
+// resolveModuleFilePath resolves a module name to a file path.
+// It looks for moduleName.mal or moduleName/mod.mal relative to the current file.
+func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
+	var baseDir string
+	if c.CurrentFile != "" {
+		baseDir = filepath.Dir(c.CurrentFile)
+	} else {
+		// If no current file, use current working directory
+		var err error
+		baseDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine base directory: %v", err)
+		}
+	}
+
+	// Try moduleName.mal
+	moduleFile := filepath.Join(baseDir, moduleName+".mal")
+	if _, err := os.Stat(moduleFile); err == nil {
+		return moduleFile, nil
+	}
+
+	// Try moduleName/mod.mal
+	moduleDirFile := filepath.Join(baseDir, moduleName, "mod.mal")
+	if _, err := os.Stat(moduleDirFile); err == nil {
+		return moduleDirFile, nil
+	}
+
+	return "", fmt.Errorf("module file not found: tried %s and %s", moduleFile, moduleDirFile)
+}
+
+// loadModuleFile reads and parses a module file.
+func (c *Checker) loadModuleFile(filePath string, moduleName string) (*ast.File, error) {
+	// Read file
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	// Parse file
+	p := parser.New(string(src), parser.WithFilename(filePath))
+	file := p.ParseFile()
+
+	if len(p.Errors()) > 0 {
+		var errMsgs []string
+		for _, parseErr := range p.Errors() {
+			errMsgs = append(errMsgs, parseErr.Message)
+		}
+		return nil, fmt.Errorf("parse errors: %v", errMsgs)
+	}
+
+	if file == nil {
+		return nil, fmt.Errorf("failed to parse file")
+	}
+
+	return file, nil
+}
+
+// processUseDecl processes a use declaration and brings the imported item into scope.
+func (c *Checker) processUseDecl(useDecl *ast.UseDecl) {
+	if len(useDecl.Path) == 0 {
+		c.reportError("use path cannot be empty", useDecl.Span())
+		return
+	}
+
+	// Build the module path string
+	pathParts := make([]string, len(useDecl.Path))
+	for i, ident := range useDecl.Path {
+		pathParts[i] = ident.Name
+	}
+
+	// Resolve the module path
+	resolvedType := c.resolveModulePath(pathParts, useDecl.Span())
+	if resolvedType == nil {
+		return // Error already reported
+	}
+
+	// Determine the name to use in scope
+	var name string
+	if useDecl.Alias != nil {
+		name = useDecl.Alias.Name
+	} else {
+		// Use the last component of the path
+		name = pathParts[len(pathParts)-1]
+	}
+
+	// Insert into global scope
+	c.GlobalScope.Insert(name, &Symbol{
+		Name:    name,
+		Type:    resolvedType,
+		DefNode: useDecl,
+	})
+}
+
+// resolveModulePath resolves a module path like ["std", "collections", "HashMap"] to a Type.
+// This handles both built-in standard library paths and user-defined modules.
+func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
+	if len(path) == 0 {
+		c.reportError("module path cannot be empty", span)
+		return nil
+	}
+
+	// Handle standard library paths
+	if path[0] == "std" {
+		return c.resolveStdPath(path[1:], span)
+	}
+
+	// Handle user-defined modules
+	if moduleInfo, exists := c.Modules[path[0]]; exists {
+		return c.resolveUserModulePath(path[1:], moduleInfo, span)
+	}
+
+	c.reportError(fmt.Sprintf("unknown module: %s", path[0]), span)
+	return nil
+}
+
+// resolveUserModulePath resolves a path within a user-defined module.
+func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, span lexer.Span) Type {
+	if len(path) == 0 {
+		// Importing the module itself - return a placeholder namespace type
+		return &Named{Name: moduleInfo.Name}
+	}
+
+	// Look up the symbol in the module's scope (direct lookup, no parent search)
+	symbol, exists := moduleInfo.Scope.Symbols[path[0]]
+	if !exists || symbol == nil {
+		c.reportError(fmt.Sprintf("symbol '%s' not found in module '%s'", path[0], moduleInfo.Name), span)
+		return nil
+	}
+
+	// If there are more path components, it's not supported yet
+	// (e.g., utils::MyStruct::field - would need to resolve nested paths)
+	if len(path) > 1 {
+		c.reportError(fmt.Sprintf("nested paths in user modules not yet supported: %v", path), span)
+		return nil
+	}
+
+	return symbol.Type
+}
+
+// resolveStdPath resolves paths within the std module.
+func (c *Checker) resolveStdPath(path []string, span lexer.Span) Type {
+	if len(path) == 0 {
+		c.reportError("std module path cannot be empty", span)
+		return nil
+	}
+
+	// Handle std::collections
+	if path[0] == "collections" {
+		if len(path) == 1 {
+			// Importing the module itself - create a placeholder namespace type
+			return &Named{Name: "collections"}
+		}
+		return c.resolveStdCollectionsPath(path[1:], span)
+	}
+
+	// Handle std::io
+	if path[0] == "io" {
+		if len(path) == 1 {
+			// Importing the module itself - create a placeholder namespace type
+			return &Named{Name: "io"}
+		}
+		return c.resolveStdIoPath(path[1:], span)
+	}
+
+	c.reportError(fmt.Sprintf("unknown std module: %s", path[0]), span)
+	return nil
+}
+
+// resolveStdCollectionsPath resolves paths within std::collections.
+func (c *Checker) resolveStdCollectionsPath(path []string, span lexer.Span) Type {
+	if len(path) != 1 {
+		c.reportError(fmt.Sprintf("invalid path in std::collections: %v", path), span)
+		return nil
+	}
+
+	// For now, we'll create placeholder types for standard library types
+	// In a full implementation, these would be loaded from actual module files
+	switch path[0] {
+	case "HashMap":
+		// HashMap is a generic type, but for now return a placeholder
+		// TODO: Return proper generic HashMap type
+		return &Named{Name: "HashMap"}
+	case "Vec":
+		return &Named{Name: "Vec"}
+	default:
+		c.reportError(fmt.Sprintf("unknown type in std::collections: %s", path[0]), span)
+		return nil
+	}
+}
+
+// resolveStdIoPath resolves paths within std::io.
+func (c *Checker) resolveStdIoPath(path []string, span lexer.Span) Type {
+	if len(path) != 1 {
+		c.reportError(fmt.Sprintf("invalid path in std::io: %v", path), span)
+		return nil
+	}
+
+	switch path[0] {
+	case "Reader":
+		return &Named{Name: "Reader"}
+	case "Writer":
+		return &Named{Name: "Writer"}
+	default:
+		c.reportError(fmt.Sprintf("unknown type in std::io: %s", path[0]), span)
+		return nil
+	}
 }

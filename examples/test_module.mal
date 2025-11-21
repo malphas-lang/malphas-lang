@@ -7,7 +7,12 @@ use utils::Point;
 
 pub fn main() -> void {
     let result = add(5, 3);
-    println("Result: " + result);
     let p = Point { x: 1, y: 2 };
+    // Use variables to avoid unused variable errors
+    if result > 0 {
+        if p.x > 0 {
+            println("Module system working!");
+        }
+    }
 }
 

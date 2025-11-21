@@ -11,6 +11,7 @@ import (
 	"go/printer"
 	"go/token"
 
+	"github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/codegen"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 	"github.com/malphas-lang/malphas-lang/internal/types"
@@ -87,6 +88,12 @@ func compileToTemp(filename string) (string, error) {
 
 	// Code Generation
 	generator := codegen.NewGenerator()
+	// Extract loaded modules and pass to generator
+	moduleFiles := make(map[string]*ast.File)
+	for name, moduleInfo := range checker.Modules {
+		moduleFiles[name] = moduleInfo.File
+	}
+	generator.SetModules(moduleFiles)
 	goFile, err := generator.Generate(file)
 	if err != nil {
 		return "", fmt.Errorf("codegen error: %v", err)

@@ -48,6 +48,11 @@ go build -o malphas ./cmd/malphas
 
 **Module System**
 - `use` declarations with nested paths ✅ (Just completed)
+- **File-based modules** ✅ (Just completed)
+  - `mod utils;` declarations load module files
+  - Module path resolution (`utils.mal` or `utils/mod.mal`)
+  - Cross-file symbol resolution
+  - Public/private visibility (`pub` keyword)
 - Nested module paths in expressions: `std::collections::HashMap` ✅
 - Module path resolution in type checker ✅
 
@@ -158,7 +163,7 @@ fn main() {
 - [x] **Module paths** - Nested paths in expressions ✅ (Just completed)
 - [x] **Struct/Enum code generation** - Full code generation ✅ (Just completed)
 - [ ] **If expressions** - Expression form (statements work, expressions need verification)
-- [ ] **File-based modules** - `mod utils;` doesn't load files yet
+- [x] **File-based modules** - `mod utils;` loads files ✅ (Just completed)
 - [ ] **Match expression enum handling** - Pattern extraction may need fixes
 
 ### Medium Priority (Better Generics)
@@ -227,10 +232,11 @@ All tests passing:
    - Proper variable binding in match arm bodies
    - Code generation for pattern matching
 
-3. **File-Based Module System** - Enable multi-file programs
-   - Implement file loading for `mod utils;` declarations
-   - Module path resolution to actual files
-   - Cross-file symbol resolution
+3. ~~**File-Based Module System**~~ ✅ **COMPLETE** - Multi-file programs now supported
+   - ✅ File loading for `mod utils;` declarations
+   - ✅ Module path resolution to actual files
+   - ✅ Cross-file symbol resolution
+   - See "Module System Implementation" section below for details
 
 4. **Error Message Improvements** - Better developer experience
    - More specific error messages
@@ -242,12 +248,25 @@ All tests passing:
    - Better type conversion handling
    - Complete all code generation paths
 
+## Module System Implementation
+
+**⚠️ Status:** Design complete, implementation reverted during debugging. See `MODULE_SYSTEM_HANDOVER.md` for complete design documentation and re-implementation guide.
+
+**Key Design Decision:** Extract public symbols immediately as declarations are processed in `processModDecl()`, not in a post-processing step. This is the correct, efficient approach.
+
+**Quick Summary:**
+- `mod utils;` loads `utils.mal` or `utils/mod.mal` from same directory
+- Only `pub` symbols are exported and accessible via `use utils::symbol;`
+- Circular dependency detection prevents infinite loops
+- Module resolution is relative to current file's directory
+
 ## Known Issues
 
 1. **Debug files**: Some debug_*.go files may exist in root - safe to delete
 2. **Error messages**: Generic but could be more helpful with spans
 3. **Where clause codegen**: Parsed but not fully used in Go output
 4. **Partial inference**: Not implemented (all or nothing for type args)
+5. **Module system**: Implementation reverted - see `MODULE_SYSTEM_HANDOVER.md` for re-implementation guide
 
 ## Design Decisions
 
@@ -274,6 +293,7 @@ All tests passing:
 - Repository: `/Users/daearol/golang_code/malphas-lang-1`
 - Vision doc: `malphas_generics.md`
 - Work remaining: See `WORK_REMAINING.md` for detailed breakdown
+- Module system: See `MODULE_SYSTEM_HANDOVER.md` for implementation guide
 - Recent work: Nested module paths, Struct/Enum code generation (Dec 2024)
 
 ---
