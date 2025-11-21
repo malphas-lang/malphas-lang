@@ -1386,6 +1386,10 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseWhileStmt()
 	case lexer.FOR:
 		return p.parseForStmt()
+	case lexer.BREAK:
+		return p.parseBreakStmt()
+	case lexer.CONTINUE:
+		return p.parseContinueStmt()
 	case lexer.SPAWN:
 		return p.parseSpawnStmt()
 	case lexer.SELECT:
@@ -1705,6 +1709,32 @@ func (p *Parser) parseForStmt() ast.Stmt {
 	span = mergeSpan(span, body.Span())
 
 	return ast.NewForStmt(iterator, iterable, body, span)
+}
+
+func (p *Parser) parseBreakStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+	p.nextToken()
+
+	return ast.NewBreakStmt(span)
+}
+
+func (p *Parser) parseContinueStmt() ast.Stmt {
+	start := p.curTok.Span
+
+	if !p.expect(lexer.SEMICOLON) {
+		return nil
+	}
+
+	span := mergeSpan(start, p.curTok.Span)
+	p.nextToken()
+
+	return ast.NewContinueStmt(span)
 }
 
 func (p *Parser) parseMatchExpr() ast.Expr {

@@ -25,26 +25,70 @@ func NewGenerator() *Generator {
 func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 	decls := []goast.Decl{}
 
-	// Use the package name from the input file if available, otherwise default to main
-	pkgName := "main"
-	if file.Package != nil && file.Package.Name != nil {
-		pkgName = file.Package.Name.Name
-	}
-
+	// Add package declaration
 	for _, decl := range file.Decls {
-		ds, err := g.genDecl(decl)
+		generated, err := g.genDecl(decl)
 		if err != nil {
 			return nil, err
 		}
-		if ds != nil {
-			decls = append(decls, ds...)
-		}
+		decls = append(decls, generated...)
 	}
 
 	return &goast.File{
-		Name:  goast.NewIdent(pkgName),
+		Name:  goast.NewIdent(file.Package.Name.Name),
 		Decls: decls,
 	}, nil
+}
+
+// genTypeParams generates Go type parameters from Malphas generic parameters.
+func (g *Generator) genTypeParams(params []mast.GenericParam) (*goast.FieldList, error) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+
+	fields := []*goast.Field{}
+	for _, param := range params {
+		switch p := param.(type) {
+		case *mast.TypeParam:
+			// Build constraint type
+			var constraint goast.Expr = goast.NewIdent("any")
+
+			if len(p.Bounds) > 0 {
+				// If there are bounds, create an interface type with methods
+				methods := []*goast.Field{}
+				for _, bound := range p.Bounds {
+					// For now, treat bounds as interface names
+					// In a full implementation, we'd need to look up trait methods
+					if namedType, ok := bound.(*mast.NamedType); ok {
+						methods = append(methods, &goast.Field{
+							Type: goast.NewIdent(namedType.Name.Name),
+						})
+					}
+				}
+
+				if len(methods) > 0 {
+					constraint = &goast.InterfaceType{
+						Methods: &goast.FieldList{List: methods},
+					}
+				}
+			}
+
+			fields = append(fields, &goast.Field{
+				Names: []*goast.Ident{goast.NewIdent(p.Name.Name)},
+				Type:  constraint,
+			})
+		case *mast.ConstParam:
+			// Const generics aren't fully supported in Go yet
+			// For now, skip them or use a workaround
+			continue
+		}
+	}
+
+	if len(fields) == 0 {
+		return nil, nil
+	}
+
+	return &goast.FieldList{List: fields}, nil
 }
 
 func (g *Generator) genDecl(decl mast.Decl) ([]goast.Decl, error) {
@@ -96,6 +140,12 @@ func (g *Generator) genTypeAliasDecl(decl *mast.TypeAliasDecl) (goast.Decl, erro
 func (g *Generator) genFnDecl(fn *mast.FnDecl) (*goast.FuncDecl, error) {
 	name := goast.NewIdent(fn.Name.Name)
 
+	// Generate type parameters
+	typeParams, err := g.genTypeParams(fn.TypeParams)
+	if err != nil {
+		return nil, err
+	}
+
 	params, err := g.genParams(fn.Params)
 	if err != nil {
 		return nil, err
@@ -114,8 +164,9 @@ func (g *Generator) genFnDecl(fn *mast.FnDecl) (*goast.FuncDecl, error) {
 	return &goast.FuncDecl{
 		Name: name,
 		Type: &goast.FuncType{
-			Params:  params,
-			Results: results,
+			TypeParams: typeParams,
+			Params:     params,
+			Results:    results,
 		},
 		Body: body,
 	}, nil
@@ -191,6 +242,12 @@ func (g *Generator) genStmt(stmt mast.Stmt) (goast.Stmt, error) {
 		return g.genIfStmt(s)
 	case *mast.WhileStmt:
 		return g.genWhileStmt(s)
+	case *mast.ForStmt:
+		return g.genForStmt(s)
+	case *mast.BreakStmt:
+		return &goast.BranchStmt{Tok: token.BREAK}, nil
+	case *mast.ContinueStmt:
+		return &goast.BranchStmt{Tok: token.CONTINUE}, nil
 	case *mast.SpawnStmt:
 		return g.genSpawnStmt(s)
 	case *mast.SelectStmt:
@@ -410,6 +467,26 @@ func (g *Generator) genWhileStmt(stmt *mast.WhileStmt) (goast.Stmt, error) {
 	}, nil
 }
 
+func (g *Generator) genForStmt(stmt *mast.ForStmt) (goast.Stmt, error) {
+	iterable, err := g.genExpr(stmt.Iterable)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := g.genBlock(stmt.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate range-based for loop: for iterator := range iterable { body }
+	return &goast.RangeStmt{
+		Key:  goast.NewIdent(stmt.Iterator.Name),
+		Tok:  token.DEFINE,
+		X:    iterable,
+		Body: body,
+	}, nil
+}
+
 func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 	switch e := expr.(type) {
 	case *mast.IntegerLit:
@@ -448,6 +525,10 @@ func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 			Type: goast.NewIdent(e.Name.Name),
 			Elts: elts,
 		}, nil
+	case *mast.IfExpr:
+		return g.genIfExpr(e)
+	case *mast.IndexExpr:
+		return g.genIndexExpr(e)
 	case *mast.MatchExpr:
 		return g.genMatchExpr(e)
 	default:
@@ -641,6 +722,52 @@ func (g *Generator) genFieldExpr(expr *mast.FieldExpr) (goast.Expr, error) {
 	}, nil
 }
 
+func (g *Generator) genIfExpr(expr *mast.IfExpr) (goast.Expr, error) {
+	// If expressions need to be translated to an immediately-invoked function
+	// that returns a value, since Go if statements don't have values
+	// For now, we'll use a simple wrapping approach
+
+	// Generate the if chain as a statement
+	stmt, err := g.genIfChain(expr.Clauses, expr.Else)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap in an IIFE (immediately invoked function expression)
+	// func() T { <if-stmt> }()
+	// This is a simplified approach - a full implementation would need
+	// to infer the return type T and ensure all branches return a value
+	return &goast.CallExpr{
+		Fun: &goast.FuncLit{
+			Type: &goast.FuncType{
+				Params: &goast.FieldList{},
+				// Results would need to be inferred from the if expression type
+			},
+			Body: &goast.BlockStmt{
+				List: []goast.Stmt{stmt},
+			},
+		},
+		Args: []goast.Expr{},
+	}, nil
+}
+
+func (g *Generator) genIndexExpr(expr *mast.IndexExpr) (goast.Expr, error) {
+	target, err := g.genExpr(expr.Target)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := g.genExpr(expr.Index)
+	if err != nil {
+		return nil, err
+	}
+
+	return &goast.IndexExpr{
+		X:     target,
+		Index: index,
+	}, nil
+}
+
 func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 	if t == nil {
 		return nil, nil
@@ -661,6 +788,27 @@ func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 		default:
 			return goast.NewIdent(t.Name.Name), nil
 		}
+	case *mast.GenericType:
+		// Handle generic type instantiation (e.g. Box[int])
+		base, err := g.mapType(t.Base)
+		if err != nil {
+			return nil, err
+		}
+
+		var args []goast.Expr
+		for _, arg := range t.Args {
+			argType, err := g.mapType(arg)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, argType)
+		}
+
+		// Create indexed expression for Go generics syntax
+		return &goast.IndexListExpr{
+			X:       base,
+			Indices: args,
+		}, nil
 	case *mast.FunctionType:
 		// For now, map function types to interface{} or specific func signature if possible.
 		// Go's type system is strict, so mapping generic functions is hard.
@@ -684,6 +832,12 @@ func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 }
 
 func (g *Generator) genStructDecl(decl *mast.StructDecl) ([]goast.Decl, error) {
+	// Generate type parameters
+	typeParams, err := g.genTypeParams(decl.TypeParams)
+	if err != nil {
+		return nil, err
+	}
+
 	fields := []*goast.Field{}
 	for _, f := range decl.Fields {
 		typ, err := g.mapType(f.Type)
@@ -701,7 +855,8 @@ func (g *Generator) genStructDecl(decl *mast.StructDecl) ([]goast.Decl, error) {
 			Tok: token.TYPE,
 			Specs: []goast.Spec{
 				&goast.TypeSpec{
-					Name: goast.NewIdent(decl.Name.Name),
+					Name:       goast.NewIdent(decl.Name.Name),
+					TypeParams: typeParams,
 					Type: &goast.StructType{
 						Fields: &goast.FieldList{List: fields},
 					},
@@ -716,12 +871,19 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 	enumName := decl.Name.Name
 	methodName := "is" + enumName
 
+	// Generate type parameters
+	typeParams, err := g.genTypeParams(decl.TypeParams)
+	if err != nil {
+		return nil, err
+	}
+
 	// Interface
 	decls = append(decls, &goast.GenDecl{
 		Tok: token.TYPE,
 		Specs: []goast.Spec{
 			&goast.TypeSpec{
-				Name: goast.NewIdent(enumName),
+				Name:       goast.NewIdent(enumName),
+				TypeParams: typeParams,
 				Type: &goast.InterfaceType{
 					Methods: &goast.FieldList{
 						List: []*goast.Field{

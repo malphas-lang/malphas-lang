@@ -11,6 +11,7 @@ import (
 // Checker performs type checking on the AST.
 type Checker struct {
 	GlobalScope *Scope
+	Env         *Environment // Tracks trait implementations
 	Errors      []diag.Diagnostic
 }
 
@@ -18,7 +19,8 @@ type Checker struct {
 func NewChecker() *Checker {
 	return &Checker{
 		GlobalScope: NewScope(nil),
-		Errors:      make([]diag.Diagnostic, 0),
+		Env:         NewEnvironment(),
+		Errors:      []diag.Diagnostic{},
 	}
 }
 
@@ -29,6 +31,36 @@ func (c *Checker) Check(file *ast.File) {
 
 	// Pass 2: Check bodies
 	c.checkBodies(file)
+}
+
+// inferTypeArgs attempts to infer type arguments for a generic function
+// from the actual argument types provided in a function call.
+// It returns the inferred type arguments or an error if inference fails.
+func (c *Checker) inferTypeArgs(typeParams []TypeParam, paramTypes []Type, argTypes []Type) ([]Type, error) {
+	if len(paramTypes) != len(argTypes) {
+		return nil, fmt.Errorf("parameter count mismatch: expected %d, got %d", len(paramTypes), len(argTypes))
+	}
+
+	// Build a combined substitution by unifying each param type with its corresponding arg type
+	subst := make(map[string]Type)
+	for i := range paramTypes {
+		err := unify(paramTypes[i], argTypes[i], subst)
+		if err != nil {
+			return nil, fmt.Errorf("cannot infer type arguments: %v", err)
+		}
+	}
+
+	// Extract the inferred types for each type parameter in order
+	result := make([]Type, len(typeParams))
+	for i, tp := range typeParams {
+		inferred, ok := subst[tp.Name]
+		if !ok {
+			return nil, fmt.Errorf("cannot infer type for parameter %s", tp.Name)
+		}
+		result[i] = inferred
+	}
+
+	return result, nil
 }
 
 func (c *Checker) resolveType(typ ast.TypeExpr) Type {
@@ -52,6 +84,46 @@ func (c *Checker) resolveType(typ ast.TypeExpr) Type {
 			}
 			return &Named{Name: t.Name.Name}
 		}
+	case *ast.GenericType:
+		// Handle generic instantiation (e.g. Box[int])
+		baseType := c.resolveType(t.Base)
+		var args []Type
+		for _, arg := range t.Args {
+			args = append(args, c.resolveType(arg))
+		}
+
+		// Verify constraints if base type has type params
+		if baseType != nil {
+			switch base := baseType.(type) {
+			case *Struct:
+				// Check constraints for each arg
+				for i, arg := range args {
+					if i < len(base.TypeParams) {
+						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
+							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
+						}
+					}
+				}
+			case *Enum:
+				for i, arg := range args {
+					if i < len(base.TypeParams) {
+						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
+							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
+						}
+					}
+				}
+			case *Function:
+				for i, arg := range args {
+					if i < len(base.TypeParams) {
+						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
+							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
+						}
+					}
+				}
+			}
+		}
+
+		return &GenericInstance{Base: baseType, Args: args}
 	case *ast.ChanType:
 		elem := c.resolveType(t.Elem)
 		return &Channel{Elem: elem, Dir: SendRecv}
@@ -88,14 +160,72 @@ func (c *Checker) collectDecls(file *ast.File) {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FnDecl:
-			// For now, just add function name to scope with dummy type
-			// In real impl, we'd parse the signature to build a Function type
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				// If the param type is a Named type matching a type parameter, replace it
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				// Same for return type
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    &Function{}, // Placeholder
+				Name: d.Name.Name,
+				Type: &Function{
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
 				DefNode: d,
 			})
 		case *ast.StructDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
 			fields := []Field{}
 			for _, f := range d.Fields {
 				fields = append(fields, Field{
@@ -104,8 +234,12 @@ func (c *Checker) collectDecls(file *ast.File) {
 				})
 			}
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    &Struct{Name: d.Name.Name, Fields: fields},
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
 				DefNode: d,
 			})
 		case *ast.TypeAliasDecl:
@@ -123,6 +257,21 @@ func (c *Checker) collectDecls(file *ast.File) {
 				DefNode: d,
 			})
 		case *ast.EnumDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
 			variants := []Variant{}
 			for _, v := range d.Variants {
 				payload := []Type{}
@@ -135,10 +284,31 @@ func (c *Checker) collectDecls(file *ast.File) {
 				})
 			}
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    &Enum{Name: d.Name.Name, Variants: variants},
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
 				DefNode: d,
 			})
+		case *ast.TraitDecl:
+			// Add trait to scope
+			// TODO: Build trait type with methods
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name}, // Placeholder
+				DefNode: d,
+			})
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
 		}
 	}
 }
@@ -207,6 +377,44 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 			c.checkStmt(case_.Comm, scope)
 			c.checkBlock(case_.Body, scope)
 		}
+	case *ast.IfStmt:
+		// Check all if clauses
+		for _, clause := range s.Clauses {
+			condType := c.checkExpr(clause.Condition, scope)
+			if condType != TypeBool {
+				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
+			}
+			c.checkBlock(clause.Body, scope)
+		}
+		if s.Else != nil {
+			c.checkBlock(s.Else, scope)
+		}
+	case *ast.WhileStmt:
+		// Condition must be boolean
+		condType := c.checkExpr(s.Condition, scope)
+		if condType != TypeBool {
+			c.reportError(fmt.Sprintf("while condition must be boolean, got %s", condType), s.Condition.Span())
+		}
+		c.checkBlock(s.Body, scope)
+	case *ast.ForStmt:
+		// For now, we support range-based for loops: for item in iterable { }
+		// The iterable type checking would depend on what types are iterable
+		// For MVP, let's just check the body
+		iterableType := c.checkExpr(s.Iterable, scope)
+		_ = iterableType // TODO: validate iterable type (arrays, slices)
+
+		// Create a new scope for the loop body with the iterator variable
+		loopScope := NewScope(scope)
+		loopScope.Insert(s.Iterator.Name, &Symbol{
+			Name:    s.Iterator.Name,
+			Type:    TypeInt, // TODO: infer from iterable element type
+			DefNode: s.Iterator,
+		})
+		c.checkBlock(s.Body, loopScope)
+	case *ast.BreakStmt:
+		// Break is valid (no type checking needed)
+	case *ast.ContinueStmt:
+		// Continue is valid (no type checking needed)
 	}
 }
 
@@ -320,12 +528,44 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		// Check callee
 		calleeType := c.checkExpr(e.Callee, scope)
 
-		// Check args
+		// Check args and collect argument types
+		var argTypes []Type
 		for _, arg := range e.Args {
-			c.checkExpr(arg, scope)
+			argType := c.checkExpr(arg, scope)
+			argTypes = append(argTypes, argType)
 		}
 
 		if fn, ok := calleeType.(*Function); ok {
+			// Check if function is generic and needs type inference
+			if len(fn.TypeParams) > 0 {
+				// Build param types with type parameters
+				paramTypes := fn.Params
+
+				// Try to infer type arguments
+				inferredTypes, err := c.inferTypeArgs(fn.TypeParams, paramTypes, argTypes)
+				if err != nil {
+					c.reportError(fmt.Sprintf("type inference failed: %v", err), e.Span())
+					return TypeVoid
+				}
+
+				// Create substitution map
+				subst := make(map[string]Type)
+				for i, tp := range fn.TypeParams {
+					subst[tp.Name] = inferredTypes[i]
+				}
+
+				// Verify inferred types satisfy constraints
+				for i, tp := range fn.TypeParams {
+					if err := Satisfies(inferredTypes[i], tp.Bounds, c.Env); err != nil {
+						c.reportError(fmt.Sprintf("inferred type %s does not satisfy constraints for %s: %v",
+							inferredTypes[i], tp.Name, err), e.Span())
+					}
+				}
+
+				// Apply substitution to return type
+				return Substitute(fn.Return, subst)
+			}
+
 			return fn.Return
 		}
 		return TypeVoid // Simplified
@@ -371,6 +611,55 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope) Type {
 		}
 
 		return structType
+	case *ast.IfExpr:
+		// Check all if clauses - all branches must return the same type
+		var resultType Type
+		for i, clause := range e.Clauses {
+			condType := c.checkExpr(clause.Condition, scope)
+			if condType != TypeBool {
+				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
+			}
+			branchType := c.checkBlock(clause.Body, scope)
+			if i == 0 {
+				resultType = branchType
+			} else {
+				if !c.assignableTo(branchType, resultType) && !c.assignableTo(resultType, branchType) {
+					c.reportError(fmt.Sprintf("if branch returns %s, but previous branch returned %s", branchType, resultType), clause.Body.Span())
+				}
+			}
+		}
+		// Check else branch if present
+		if e.Else != nil {
+			elseType := c.checkBlock(e.Else, scope)
+			if resultType != nil {
+				if !c.assignableTo(elseType, resultType) && !c.assignableTo(resultType, elseType) {
+					c.reportError(fmt.Sprintf("else branch returns %s, but if branches returned %s", elseType, resultType), e.Else.Span())
+				}
+			} else {
+				resultType = elseType
+			}
+		}
+		if resultType == nil {
+			return TypeVoid
+		}
+		return resultType
+	case *ast.IndexExpr:
+		// Check target and index
+		targetType := c.checkExpr(e.Target, scope)
+		indexType := c.checkExpr(e.Index, scope)
+
+		// Index must be int
+		if indexType != TypeInt {
+			c.reportError(fmt.Sprintf("index must be int, got %s", indexType), e.Index.Span())
+		}
+
+		// For now, we don't have array/slice types in the type system yet
+		// This will be enhanced in Phase 2
+		// Return TypeInt as a placeholder
+		_ = targetType
+		return TypeInt // TODO: return element type when arrays are added
+	case *ast.MatchExpr:
+		return c.checkMatchExpr(e, scope)
 	default:
 		return TypeVoid
 	}

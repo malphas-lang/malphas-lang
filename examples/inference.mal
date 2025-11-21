@@ -1,0 +1,14 @@
+package main;
+
+struct Box[T] {
+    value: T,
+}
+
+fn identity[T](x: T) -> T {
+    return x;
+}
+
+fn main() {
+    let x = identity(42);
+    let y = identity("hello");
+}

@@ -718,6 +718,48 @@ func NewForStmt(iterator *Ident, iterable Expr, body *BlockExpr, span lexer.Span
 // stmtNode marks ForStmt as a statement.
 func (*ForStmt) stmtNode() {}
 
+// BreakStmt represents a break statement.
+type BreakStmt struct {
+	span lexer.Span
+}
+
+// Span returns the statement span.
+func (s *BreakStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *BreakStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewBreakStmt constructs a break statement node.
+func NewBreakStmt(span lexer.Span) *BreakStmt {
+	return &BreakStmt{
+		span: span,
+	}
+}
+
+// stmtNode marks BreakStmt as a statement.
+func (*BreakStmt) stmtNode() {}
+
+// ContinueStmt represents a continue statement.
+type ContinueStmt struct {
+	span lexer.Span
+}
+
+// Span returns the statement span.
+func (s *ContinueStmt) Span() lexer.Span { return s.span }
+
+// SetSpan updates the statement span.
+func (s *ContinueStmt) SetSpan(span lexer.Span) { s.span = span }
+
+// NewContinueStmt constructs a continue statement node.
+func NewContinueStmt(span lexer.Span) *ContinueStmt {
+	return &ContinueStmt{
+		span: span,
+	}
+}
+
+// stmtNode marks ContinueStmt as a statement.
+func (*ContinueStmt) stmtNode() {}
+
 // SpawnStmt represents a spawn statement (goroutine).
 type SpawnStmt struct {
 	Call *CallExpr
@@ -1142,6 +1184,31 @@ func NewNamedType(name *Ident, span lexer.Span) *NamedType {
 func (t *NamedType) SetSpan(span lexer.Span) {
 	t.span = span
 }
+
+// GenericTypeExpr represents a generic type instantiation (e.g. Box[int]).
+type GenericTypeExpr struct {
+	Base TypeExpr   // The base generic type
+	Args []TypeExpr // Type arguments
+	span lexer.Span
+}
+
+// Span returns the type expression span.
+func (t *GenericTypeExpr) Span() lexer.Span { return t.span }
+
+// SetSpan updates the type expression span.
+func (t *GenericTypeExpr) SetSpan(span lexer.Span) { t.span = span }
+
+// NewGenericTypeExpr constructs a generic type expression node.
+func NewGenericTypeExpr(base TypeExpr, args []TypeExpr, span lexer.Span) *GenericTypeExpr {
+	return &GenericTypeExpr{
+		Base: base,
+		Args: args,
+		span: span,
+	}
+}
+
+// typeNode marks GenericTypeExpr as a type expression.
+func (*GenericTypeExpr) typeNode() {}
 
 // GenericType represents a generic type application (Foo[Bar, Baz]).
 type GenericType struct {
