@@ -1,0 +1,6 @@
+package main;
+
+fn main() {
+    let x = if true { 42 } else { 0 };
+    println(x);
+}

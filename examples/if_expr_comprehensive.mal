@@ -1,0 +1,36 @@
+package main;
+
+fn main() {
+    // Test 1: Basic if expression with integers
+    let x = if true { 42 } else { 0 };
+    println(x);
+    
+    // Test 2: If expression with strings
+    let msg = if x > 30 { "high" } else { "low" };
+    println(msg);
+    
+    // Test 3: If expression with booleans
+    let flag = if x > 20 { true } else { false };
+    println(flag);
+    
+    // Test 4: Multiple branches
+    let grade = if x >= 90 { "A" } else if x >= 80 { "B" } else if x >= 70 { "C" } else { "F" };
+    println(grade);
+    
+    // Test 5: Blocks with statements
+    let result = if x > 10 {
+        let doubled = x * 2;
+        doubled + 1
+    } else {
+        0
+    };
+    println(result);
+    
+    // Test 6: Used in function call
+    println(if x > 0 { "positive" } else { "non-positive" });
+    
+    // Test 7: Arithmetic expressions
+    let sum = if true { x + 10 } else { x - 10 };
+    println(sum);
+}
+

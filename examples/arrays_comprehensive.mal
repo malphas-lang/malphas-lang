@@ -1,0 +1,25 @@
+package main;
+
+fn main() {
+    // Basic array literal (slice)
+    let arr1 = [1, 2, 3];
+    println(arr1[0]);
+
+    // Slice type annotation
+    let arr2: []int = [10, 20, 30, 40];
+    println(arr2[2]);
+
+    // Array indexing
+    let sum = arr1[0] + arr1[1] + arr1[2];
+    println(sum);
+
+    // Nested arrays (slices)
+    let matrix: [][]int = [[1, 2], [3, 4]];
+    println(matrix[0][0]);
+    println(matrix[1][1]);
+
+    // String arrays
+    let words: []string = ["hello", "world"];
+    println(words[0]);
+}
+

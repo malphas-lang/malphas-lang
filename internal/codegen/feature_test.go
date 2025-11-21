@@ -89,7 +89,7 @@ fn main() {
 			checks: []string{"switch", "case 1:", "case 2:", "default:", "func()"},
 		},
 		{
-			name: "if_expression",
+			name: "if_expression_basic",
 			src: `
 package main;
 
@@ -98,7 +98,61 @@ fn main() {
 	println(x);
 }
 `,
-			checks: []string{"if true", "func()"},
+			checks: []string{"func() int", "if true", "return 1", "return 2"},
+		},
+		{
+			name: "if_expression_string",
+			src: `
+package main;
+
+fn main() {
+	let x = if true { "yes" } else { "no" };
+	println(x);
+}
+`,
+			checks: []string{"func() string", "if true", "return \"yes\"", "return \"no\""},
+		},
+		{
+			name: "if_expression_multiple_branches",
+			src: `
+package main;
+
+fn main() {
+	let x = 42;
+	let y = if x > 20 { 100 } else if x > 10 { 50 } else { 0 };
+	println(y);
+}
+`,
+			checks: []string{"func() int", "if x > 20", "else if x > 10"},
+		},
+		{
+			name: "if_expression_with_statements",
+			src: `
+package main;
+
+fn main() {
+	let z = if true {
+		let temp = 10;
+		temp + 5
+	} else {
+		0
+	};
+	println(z);
+}
+`,
+			checks: []string{"func()", "if true", "temp := 10", "return temp + 5", "return 0"},
+		},
+		{
+			name: "if_expression_bool",
+			src: `
+package main;
+
+fn main() {
+	let x = if true { true } else { false };
+	println(x);
+}
+`,
+			checks: []string{"func() bool", "if true", "return true", "return false"},
 		},
 		{
 			name: "while_loop",

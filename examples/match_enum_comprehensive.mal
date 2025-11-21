@@ -1,0 +1,55 @@
+package main;
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+    Triangle(int, int, int)
+}
+
+fn main() {
+    // Test Circle variant
+    let shape1 = Circle(5);
+    let area1 = match shape1 {
+        Circle(radius) => {
+            radius * radius * 3  // Should be 75
+        },
+        Rectangle(width, height) => {
+            width * height
+        },
+        Triangle(a, b, c) => {
+            a + b + c
+        }
+    };
+    println(area1);
+    
+    // Test Rectangle variant
+    let shape2 = Rectangle(10, 20);
+    let area2 = match shape2 {
+        Circle(radius) => {
+            radius * radius * 3
+        },
+        Rectangle(width, height) => {
+            width * height  // Should be 200
+        },
+        Triangle(a, b, c) => {
+            a + b + c
+        }
+    };
+    println(area2);
+    
+    // Test Triangle variant
+    let shape3 = Triangle(3, 4, 5);
+    let perimeter = match shape3 {
+        Circle(radius) => {
+            radius * radius * 3
+        },
+        Rectangle(width, height) => {
+            width * height
+        },
+        Triangle(a, b, c) => {
+            a + b + c  // Should be 12
+        }
+    };
+    println(perimeter);
+}
+

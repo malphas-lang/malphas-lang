@@ -82,7 +82,9 @@ const (
 	IMPL     TokenType = "IMPL"
 	TYPE     TokenType = "TYPE"
 	PACKAGE  TokenType = "PACKAGE"
+	MOD      TokenType = "MOD"
 	USE      TokenType = "USE"
+	PUB      TokenType = "PUB"
 	AS       TokenType = "AS"
 	IF       TokenType = "IF"
 	ELSE     TokenType = "ELSE"
@@ -121,7 +123,9 @@ var keywords = map[string]TokenType{
 	"impl":     IMPL,
 	"type":     TYPE,
 	"package":  PACKAGE,
+	"mod":      MOD,
 	"use":      USE,
+	"pub":      PUB,
 	"as":       AS,
 	"if":       IF,
 	"else":     ELSE,

@@ -1,0 +1,33 @@
+package main;
+
+// Module declarations (for future file-based modules)
+mod utils;
+mod math;
+
+// Use statements with module paths
+use std::io;
+use std::collections::HashMap as Map;
+
+// Public and private declarations
+pub fn public_function() -> void {
+    println("This function is public");
+}
+
+fn private_function() -> void {
+    println("This function is private");
+}
+
+pub struct PublicStruct {
+    value: int
+}
+
+struct PrivateStruct {
+    value: int
+}
+
+pub fn main() -> void {
+    public_function();
+    private_function();
+    println("Module system example");
+}
+

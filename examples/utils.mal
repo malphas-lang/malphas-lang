@@ -1,0 +1,15 @@
+package utils;
+
+pub fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn private_fn() -> void {
+    // This is private and won't be exposed
+}
+
+pub struct Point {
+    x: int,
+    y: int
+}
+

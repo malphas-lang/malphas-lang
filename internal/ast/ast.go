@@ -34,6 +34,7 @@ type TypeExpr interface {
 // File represents a parsed compilation unit.
 type File struct {
 	Package *PackageDecl
+	Mods    []*ModDecl
 	Uses    []*UseDecl
 	Decls   []Decl
 	span    lexer.Span
@@ -74,6 +75,31 @@ func (d *PackageDecl) SetSpan(span lexer.Span) {
 	d.span = span
 }
 
+// ModDecl represents a module declaration.
+type ModDecl struct {
+	Name *Ident
+	span lexer.Span
+}
+
+// Span returns the declaration span.
+func (d *ModDecl) Span() lexer.Span { return d.span }
+
+// SetSpan updates the module declaration span.
+func (d *ModDecl) SetSpan(span lexer.Span) {
+	d.span = span
+}
+
+// NewModDecl constructs a module declaration node.
+func NewModDecl(name *Ident, span lexer.Span) *ModDecl {
+	return &ModDecl{
+		Name: name,
+		span: span,
+	}
+}
+
+// declNode marks ModDecl as a declaration.
+func (*ModDecl) declNode() {}
+
 // UseDecl represents a use/import declaration.
 type UseDecl struct {
 	Path  []*Ident
@@ -84,8 +110,26 @@ type UseDecl struct {
 // Span returns the declaration span.
 func (d *UseDecl) Span() lexer.Span { return d.span }
 
+// SetSpan updates the use declaration span.
+func (d *UseDecl) SetSpan(span lexer.Span) {
+	d.span = span
+}
+
+// NewUseDecl constructs a use declaration node.
+func NewUseDecl(path []*Ident, alias *Ident, span lexer.Span) *UseDecl {
+	return &UseDecl{
+		Path:  path,
+		Alias: alias,
+		span:  span,
+	}
+}
+
+// declNode marks UseDecl as a declaration.
+func (*UseDecl) declNode() {}
+
 // FnDecl represents a function declaration.
 type FnDecl struct {
+	Pub        bool
 	Unsafe     bool
 	Name       *Ident
 	TypeParams []GenericParam
@@ -100,8 +144,9 @@ type FnDecl struct {
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
 // NewFnDecl constructs a function declaration node.
-func NewFnDecl(isUnsafe bool, name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
+func NewFnDecl(isPub bool, isUnsafe bool, name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
 	return &FnDecl{
+		Pub:        isPub,
 		Unsafe:     isUnsafe,
 		Name:       name,
 		TypeParams: typeParams,
@@ -200,7 +245,6 @@ func NewParam(name *Ident, typ TypeExpr, span lexer.Span) *Param {
 	}
 }
 
-// SetSpan updates the parameter span.
 // SetSpan updates the parameter span.
 func (p *Param) SetSpan(span lexer.Span) {
 	p.span = span
@@ -333,6 +377,7 @@ func (*LetStmt) stmtNode() {}
 
 // StructDecl represents a struct declaration with fields.
 type StructDecl struct {
+	Pub        bool
 	Name       *Ident
 	TypeParams []GenericParam
 	Where      *WhereClause
@@ -344,9 +389,9 @@ type StructDecl struct {
 func (d *StructDecl) Span() lexer.Span { return d.span }
 
 // NewStructDecl constructs a struct declaration node.
-// NewStructDecl constructs a struct declaration node.
-func NewStructDecl(name *Ident, typeParams []GenericParam, where *WhereClause, fields []*StructField, span lexer.Span) *StructDecl {
+func NewStructDecl(isPub bool, name *Ident, typeParams []GenericParam, where *WhereClause, fields []*StructField, span lexer.Span) *StructDecl {
 	return &StructDecl{
+		Pub:        isPub,
 		Name:       name,
 		TypeParams: typeParams,
 		Where:      where,
@@ -389,6 +434,7 @@ func (f *StructField) SetSpan(span lexer.Span) {
 
 // EnumDecl represents an enum declaration with variants.
 type EnumDecl struct {
+	Pub        bool
 	Name       *Ident
 	TypeParams []GenericParam
 	Where      *WhereClause
@@ -400,9 +446,9 @@ type EnumDecl struct {
 func (d *EnumDecl) Span() lexer.Span { return d.span }
 
 // NewEnumDecl constructs an enum declaration node.
-// NewEnumDecl constructs an enum declaration node.
-func NewEnumDecl(name *Ident, typeParams []GenericParam, where *WhereClause, variants []*EnumVariant, span lexer.Span) *EnumDecl {
+func NewEnumDecl(isPub bool, name *Ident, typeParams []GenericParam, where *WhereClause, variants []*EnumVariant, span lexer.Span) *EnumDecl {
 	return &EnumDecl{
+		Pub:        isPub,
 		Name:       name,
 		TypeParams: typeParams,
 		Where:      where,
@@ -445,6 +491,7 @@ func (v *EnumVariant) SetSpan(span lexer.Span) {
 
 // TypeAliasDecl represents a type alias declaration.
 type TypeAliasDecl struct {
+	Pub        bool
 	Name       *Ident
 	TypeParams []GenericParam
 	Where      *WhereClause
@@ -456,9 +503,9 @@ type TypeAliasDecl struct {
 func (d *TypeAliasDecl) Span() lexer.Span { return d.span }
 
 // NewTypeAliasDecl constructs a type alias node.
-// NewTypeAliasDecl constructs a type alias node.
-func NewTypeAliasDecl(name *Ident, typeParams []GenericParam, where *WhereClause, target TypeExpr, span lexer.Span) *TypeAliasDecl {
+func NewTypeAliasDecl(isPub bool, name *Ident, typeParams []GenericParam, where *WhereClause, target TypeExpr, span lexer.Span) *TypeAliasDecl {
 	return &TypeAliasDecl{
+		Pub:        isPub,
 		Name:       name,
 		TypeParams: typeParams,
 		Where:      where,
@@ -477,6 +524,7 @@ func (*TypeAliasDecl) declNode() {}
 
 // ConstDecl represents a constant declaration.
 type ConstDecl struct {
+	Pub   bool
 	Name  *Ident
 	Type  TypeExpr
 	Value Expr
@@ -487,8 +535,9 @@ type ConstDecl struct {
 func (d *ConstDecl) Span() lexer.Span { return d.span }
 
 // NewConstDecl constructs a const declaration node.
-func NewConstDecl(name *Ident, typ TypeExpr, value Expr, span lexer.Span) *ConstDecl {
+func NewConstDecl(isPub bool, name *Ident, typ TypeExpr, value Expr, span lexer.Span) *ConstDecl {
 	return &ConstDecl{
+		Pub:   isPub,
 		Name:  name,
 		Type:  typ,
 		Value: value,
@@ -506,6 +555,7 @@ func (*ConstDecl) declNode() {}
 
 // TraitDecl represents a trait declaration.
 type TraitDecl struct {
+	Pub        bool
 	Name       *Ident
 	TypeParams []GenericParam
 	Where      *WhereClause
@@ -517,9 +567,9 @@ type TraitDecl struct {
 func (d *TraitDecl) Span() lexer.Span { return d.span }
 
 // NewTraitDecl constructs a trait declaration node.
-// NewTraitDecl constructs a trait declaration node.
-func NewTraitDecl(name *Ident, typeParams []GenericParam, where *WhereClause, methods []*FnDecl, span lexer.Span) *TraitDecl {
+func NewTraitDecl(isPub bool, name *Ident, typeParams []GenericParam, where *WhereClause, methods []*FnDecl, span lexer.Span) *TraitDecl {
 	return &TraitDecl{
+		Pub:        isPub,
 		Name:       name,
 		TypeParams: typeParams,
 		Where:      where,
@@ -549,7 +599,6 @@ type ImplDecl struct {
 // Span returns the impl declaration span.
 func (d *ImplDecl) Span() lexer.Span { return d.span }
 
-// NewImplDecl constructs an impl declaration node.
 // NewImplDecl constructs an impl declaration node.
 func NewImplDecl(typeParams []GenericParam, trait TypeExpr, target TypeExpr, where *WhereClause, methods []*FnDecl, span lexer.Span) *ImplDecl {
 	return &ImplDecl{
@@ -1365,4 +1414,5 @@ func (l *StructLiteral) SetSpan(span lexer.Span) {
 
 // exprNode marks StructLiteral as an expression.
 func (*StructLiteral) exprNode() {}
+
 

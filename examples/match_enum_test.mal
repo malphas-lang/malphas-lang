@@ -1,0 +1,23 @@
+package main;
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int)
+}
+
+fn main() {
+    let shape = Circle(5);
+    
+    // This should bind 'radius' from the Circle variant
+    let area = match shape {
+        Circle(radius) => {
+            radius * radius * 3
+        },
+        Rectangle(width, height) => {
+            width * height
+        }
+    };
+    
+    println(area);
+}
+

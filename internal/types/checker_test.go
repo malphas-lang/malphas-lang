@@ -37,7 +37,8 @@ func TestChecker_BasicTypes(t *testing.T) {
 	}
 
 	fnDecl := ast.NewFnDecl(
-		false,
+		false, // pub
+		false, // unsafe
 		ast.NewIdent("main", lexer.Span{}),
 		nil, // type params
 		nil, // params
@@ -78,7 +79,8 @@ func TestChecker_UndefinedVariable(t *testing.T) {
 	}
 
 	fnDecl := ast.NewFnDecl(
-		false,
+		false, // pub
+		false, // unsafe
 		ast.NewIdent("test", lexer.Span{}),
 		nil, nil, nil, nil, fnBody, lexer.Span{},
 	)
@@ -309,7 +311,8 @@ func wrapStmts(stmts ...ast.Stmt) *ast.File {
 		Stmts: stmts,
 	}
 	fnDecl := ast.NewFnDecl(
-		false,
+		false, // pub
+		false, // unsafe
 		ast.NewIdent("test", lexer.Span{}),
 		nil, nil, nil, nil, fnBody, lexer.Span{},
 	)

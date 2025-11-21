@@ -1,0 +1,23 @@
+package main;
+
+fn main() {
+    // Array literal (creates a slice)
+    let arr = [1, 2, 3];
+    let first = arr[0];
+    println(first);
+
+    // Array type with explicit length (for now, use slice assignment)
+    let fixed: []int = [1, 2, 3, 4, 5];
+    let second = fixed[1];
+    println(second);
+
+    // Slice type
+    let slice: []int = [10, 20, 30];
+    let third = slice[2];
+    println(third);
+
+    // Indexing
+    let x = arr[0] + fixed[1] + slice[2];
+    println(x);
+}
+

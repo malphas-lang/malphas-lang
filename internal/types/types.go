@@ -14,6 +14,9 @@ type PrimitiveKind string
 
 const (
 	Int    PrimitiveKind = "int"
+	Int8   PrimitiveKind = "int8"
+	Int32  PrimitiveKind = "int32"
+	Int64  PrimitiveKind = "int64"
 	Float  PrimitiveKind = "float"
 	Bool   PrimitiveKind = "bool"
 	String PrimitiveKind = "string"
@@ -32,6 +35,9 @@ func (p *Primitive) IsType()        {}
 // Common primitive instances
 var (
 	TypeInt    = &Primitive{Kind: Int}
+	TypeInt8   = &Primitive{Kind: Int8}
+	TypeInt32  = &Primitive{Kind: Int32}
+	TypeInt64  = &Primitive{Kind: Int64}
 	TypeFloat  = &Primitive{Kind: Float}
 	TypeBool   = &Primitive{Kind: Bool}
 	TypeString = &Primitive{Kind: String}
@@ -68,6 +74,28 @@ type Variant struct {
 
 func (e *Enum) String() string { return e.Name }
 func (e *Enum) IsType()        {}
+
+// Array represents a fixed-size array type [T; N].
+type Array struct {
+	Elem Type
+	Len  int64
+}
+
+func (a *Array) String() string {
+	// TODO: Format length properly
+	return "[" + a.Elem.String() + "; " + "N" + "]"
+}
+func (a *Array) IsType() {}
+
+// Slice represents a dynamically-sized slice type []T.
+type Slice struct {
+	Elem Type
+}
+
+func (s *Slice) String() string {
+	return "[]" + s.Elem.String()
+}
+func (s *Slice) IsType() {}
 
 // Function represents a function type.
 type Function struct {

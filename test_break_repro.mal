@@ -1,0 +1,9 @@
+package main;
+
+fn main() {
+    while true {
+        let x = if true {
+            break;
+        };
+    }
+}

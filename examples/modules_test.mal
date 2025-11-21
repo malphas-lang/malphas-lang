@@ -1,0 +1,8 @@
+package main;
+
+use std::io as io;
+
+pub fn main() -> void {
+    println("Module system test");
+}
+

@@ -1,0 +1,21 @@
+package main;
+
+fn main() {
+    // Test basic if expression
+    let x = if true { 42 } else { 0 };
+    println(x); // Should print 42
+    
+    // Test with multiple conditions
+    let y = if x > 20 { 100 } else if x > 10 { 50 } else { 0 };
+    println(y); // Should print 50
+    
+    // Test with statements in branches
+    let z = if true {
+        let temp = 10;
+        temp + 5
+    } else {
+        0
+    };
+    println(z); // Should print 15
+}
+

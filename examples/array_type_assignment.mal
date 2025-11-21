@@ -1,0 +1,12 @@
+package main;
+
+fn main() {
+    // Array type with explicit length - should work now
+    let fixed: [int; 5] = [1, 2, 3, 4, 5];
+    println(fixed[0]);
+    println(fixed[4]);
+
+    // Array type with different length - should error at type check
+    // let wrong: [int; 3] = [1, 2, 3, 4, 5]; // This should fail type checking
+}
+

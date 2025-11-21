@@ -1,0 +1,13 @@
+package main;
+
+mod utils;
+
+use utils::add;
+use utils::Point;
+
+pub fn main() -> void {
+    let result = add(5, 3);
+    println("Result: " + result);
+    let p = Point { x: 1, y: 2 };
+}
+

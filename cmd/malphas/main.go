@@ -59,7 +59,7 @@ func compileToTemp(filename string) (string, error) {
 	}
 
 	// Parse
-	p := parser.New(string(src))
+	p := parser.New(string(src), parser.WithFilename(filename))
 	file := p.ParseFile()
 
 	if len(p.Errors()) > 0 {
@@ -71,7 +71,12 @@ func compileToTemp(filename string) (string, error) {
 
 	// Type Check
 	checker := types.NewChecker()
-	checker.Check(file)
+	// Convert filename to absolute path for module resolution
+	absFilename, err := filepath.Abs(filename)
+	if err != nil {
+		absFilename = filename // Fallback to original if abs fails
+	}
+	checker.CheckWithFilename(file, absFilename)
 
 	if len(checker.Errors) > 0 {
 		for _, err := range checker.Errors {

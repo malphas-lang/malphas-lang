@@ -4,6 +4,7 @@ import (
 	"fmt"
 	goast "go/ast"
 	"go/token"
+	"strconv"
 
 	mast "github.com/malphas-lang/malphas-lang/internal/ast"
 	mlexer "github.com/malphas-lang/malphas-lang/internal/lexer"
@@ -11,19 +12,24 @@ import (
 
 // Generator converts Malphas AST to Go AST.
 type Generator struct {
-	fset *token.FileSet
+	fset         *token.FileSet
+	enumVariants map[string]bool // Track enum variant names to detect constructors
 }
 
 // NewGenerator creates a new generator.
 func NewGenerator() *Generator {
 	return &Generator{
-		fset: token.NewFileSet(),
+		fset:         token.NewFileSet(),
+		enumVariants: make(map[string]bool),
 	}
 }
 
 // Generate converts a Malphas file to a Go file.
 func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 	decls := []goast.Decl{}
+
+	// Generate imports from use declarations
+	imports := g.generateImports(file.Uses)
 
 	// Add package declaration
 	for _, decl := range file.Decls {
@@ -35,9 +41,121 @@ func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 	}
 
 	return &goast.File{
-		Name:  goast.NewIdent(file.Package.Name.Name),
-		Decls: decls,
+		Name:    goast.NewIdent(file.Package.Name.Name),
+		Imports: imports,
+		Decls:   decls,
 	}, nil
+}
+
+// generateImports converts Malphas use declarations to Go import declarations.
+func (g *Generator) generateImports(uses []*mast.UseDecl) []*goast.ImportSpec {
+	if len(uses) == 0 {
+		return nil
+	}
+
+	imports := []*goast.ImportSpec{}
+	importMap := make(map[string]string) // path -> alias
+
+	for _, use := range uses {
+		if len(use.Path) == 0 {
+			continue
+		}
+
+		// Convert module path to Go import path
+		goPath, alias := g.convertUseToGoImport(use)
+		if goPath == "" {
+			continue // Skip invalid imports
+		}
+
+		// Check for duplicates
+		if existingAlias, exists := importMap[goPath]; exists {
+			// If we have a different alias, that's an error, but for now just use the first one
+			if alias != "" && existingAlias != alias {
+				// TODO: Report error
+				continue
+			}
+			continue
+		}
+
+		importMap[goPath] = alias
+
+		spec := &goast.ImportSpec{
+			Path: &goast.BasicLit{
+				Kind:  token.STRING,
+				Value: fmt.Sprintf("%q", goPath),
+			},
+		}
+
+		if alias != "" {
+			spec.Name = goast.NewIdent(alias)
+		}
+
+		imports = append(imports, spec)
+	}
+
+	return imports
+}
+
+// convertUseToGoImport converts a Malphas use declaration to a Go import path and alias.
+// Returns (importPath, alias). Returns empty string for importPath if not a valid Go import.
+func (g *Generator) convertUseToGoImport(use *mast.UseDecl) (string, string) {
+	if len(use.Path) == 0 {
+		return "", ""
+	}
+
+	// Build path parts
+	pathParts := make([]string, len(use.Path))
+	for i, ident := range use.Path {
+		pathParts[i] = ident.Name
+	}
+
+	// Determine alias
+	var alias string
+	if use.Alias != nil {
+		alias = use.Alias.Name
+	}
+
+	// Convert std:: paths to Go standard library imports
+	if pathParts[0] == "std" {
+		return g.convertStdPathToGoImport(pathParts[1:], alias)
+	}
+
+	// For user modules, we'd need to resolve the actual file path
+	// For now, return empty to skip
+	return "", ""
+}
+
+// convertStdPathToGoImport converts std:: paths to Go standard library imports.
+func (g *Generator) convertStdPathToGoImport(path []string, alias string) (string, string) {
+	if len(path) == 0 {
+		return "", ""
+	}
+
+	// Map std::collections to appropriate Go packages
+	if path[0] == "collections" {
+		// For now, std::collections types might come from different packages
+		// HashMap -> no direct equivalent, might need a custom package
+		// Vec -> slices package
+		if len(path) > 1 {
+			switch path[1] {
+			case "HashMap":
+				// Go doesn't have HashMap in stdlib, would need a custom package
+				// For now, return empty to skip
+				return "", ""
+			case "Vec":
+				// Vec could map to slices, but it's not a direct equivalent
+				return "", ""
+			}
+		}
+		return "", ""
+	}
+
+	if path[0] == "io" {
+		// std::io maps to Go's io package
+		return "io", alias
+	}
+
+	return "", ""
 }
 
 // genTypeParams generates Go type parameters from Malphas generic parameters.
@@ -392,6 +510,32 @@ func (g *Generator) genLetStmt(stmt *mast.LetStmt) (goast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// Special handling: if type is array and value is array literal, ensure proper conversion
+		if arrType, ok := stmt.Type.(*mast.ArrayType); ok {
+			if arrLit, ok := stmt.Value.(*mast.ArrayLiteral); ok {
+				// Check if lengths match
+				expectedLen := int64(0)
+				if intLit, ok := arrType.Len.(*mast.IntegerLit); ok {
+					parsed, err := strconv.ParseInt(intLit.Text, 10, 64)
+					if err == nil {
+						expectedLen = parsed
+					}
+				}
+				actualLen := int64(len(arrLit.Elements))
+				if expectedLen > 0 && actualLen != expectedLen {
+					// Length mismatch - this should have been caught by type checker
+					// but we'll handle it gracefully by generating a conversion
+					// For now, just use the value as-is (type checker should catch this)
+				}
+				// Generate array literal with explicit type
+				val, err = g.genArrayLiteralWithType(arrLit, arrType)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
 		return &goast.DeclStmt{
 			Decl: &goast.GenDecl{
 				Tok: token.VAR,
@@ -657,29 +801,99 @@ func (g *Generator) genAssignExpr(expr *mast.AssignExpr) (goast.Expr, error) {
 }
 
 func (g *Generator) genArrayLiteral(expr *mast.ArrayLiteral) (goast.Expr, error) {
-	elts := []goast.Expr{}
-	// Try to infer type from first element if possible
-	eltType := "int" // Default
+	if len(expr.Elements) == 0 {
+		// Empty array literal - default to []int
+		return &goast.CompositeLit{
+			Type: &goast.ArrayType{Elt: goast.NewIdent("int")},
+			Elts: []goast.Expr{},
+		}, nil
+	}
 
-	for i, elem := range expr.Elements {
+	elts := []goast.Expr{}
+	var eltType goast.Expr
+
+	// Check if first element is an array literal (nested arrays)
+	firstElem := expr.Elements[0]
+	if nestedArr, ok := firstElem.(*mast.ArrayLiteral); ok {
+		// Nested array - determine element type from nested array's elements
+		if len(nestedArr.Elements) > 0 {
+			// Infer from nested array's first element
+			if _, ok := nestedArr.Elements[0].(*mast.StringLit); ok {
+				eltType = goast.NewIdent("string")
+			} else if _, ok := nestedArr.Elements[0].(*mast.BoolLit); ok {
+				eltType = goast.NewIdent("bool")
+			} else {
+				eltType = goast.NewIdent("int")
+			}
+		} else {
+			eltType = goast.NewIdent("int")
+		}
+		// eltType is now the element type of the nested array (e.g., int)
+		// So the outer array's element type should be []int (slice of that type)
+		eltType = &goast.ArrayType{Elt: eltType} // Slice type
+	} else {
+		// Simple element - infer type from first element
+		if _, ok := firstElem.(*mast.StringLit); ok {
+			eltType = goast.NewIdent("string")
+		} else if _, ok := firstElem.(*mast.BoolLit); ok {
+			eltType = goast.NewIdent("bool")
+		} else {
+			eltType = goast.NewIdent("int")
+		}
+	}
+
+	// Generate all elements
+	for _, elem := range expr.Elements {
 		e, err := g.genExpr(elem)
 		if err != nil {
 			return nil, err
 		}
 		elts = append(elts, e)
-
-		if i == 0 {
-			// Infer type from first element (simplified)
-			if _, ok := elem.(*mast.StringLit); ok {
-				eltType = "string"
-			} else if _, ok := elem.(*mast.BoolLit); ok {
-				eltType = "bool"
-			}
-		}
 	}
 
 	return &goast.CompositeLit{
-		Type: &goast.ArrayType{Elt: goast.NewIdent(eltType)},
+		Type: &goast.ArrayType{Elt: eltType},
+		Elts: elts,
+	}, nil
+}
+
+// genArrayLiteralWithType generates an array literal with an explicit array type
+func (g *Generator) genArrayLiteralWithType(expr *mast.ArrayLiteral, arrType *mast.ArrayType) (goast.Expr, error) {
+	// Generate element type
+	elemType, err := g.mapType(arrType.Elem)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate length
+	lenVal := int64(0)
+	if intLit, ok := arrType.Len.(*mast.IntegerLit); ok {
+		parsed, err := strconv.ParseInt(intLit.Text, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid array length: %s", intLit.Text)
+		}
+		lenVal = parsed
+	}
+
+	// Generate elements
+	elts := []goast.Expr{}
+	for _, elem := range expr.Elements {
+		e, err := g.genExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, e)
+	}
+
+	// Generate Go array type with explicit length
+	return &goast.CompositeLit{
+		Type: &goast.ArrayType{
+			Len: &goast.BasicLit{
+				Kind:  token.INT,
+				Value: fmt.Sprintf("%d", lenVal),
+			},
+			Elt: elemType,
+		},
 		Elts: elts,
 	}, nil
 }
@@ -692,6 +906,18 @@ func (g *Generator) genInfixExpr(expr *mast.InfixExpr) (goast.Expr, error) {
 	right, err := g.genExpr(expr.Right)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle module paths with DOUBLE_COLON (e.g., std::collections::HashMap)
+	// These are resolved to just the final identifier in Go
+	if expr.Op == mlexer.DOUBLE_COLON {
+		// Extract the final identifier from the nested path
+		finalIdent := g.extractFinalIdentFromPath(expr)
+		if finalIdent != nil {
+			return g.genExpr(finalIdent)
+		}
+		// If extraction fails, fall through to error
+		return nil, fmt.Errorf("failed to extract identifier from path expression")
 	}
 
 	var op token.Token
@@ -751,6 +977,26 @@ func (g *Generator) genInfixExpr(expr *mast.InfixExpr) (goast.Expr, error) {
 		Op: op,
 		Y:  right,
 	}, nil
+}
+
+// extractFinalIdentFromPath extracts the final identifier from a nested DOUBLE_COLON path expression.
+// For example, std::collections::HashMap -> HashMap
+func (g *Generator) extractFinalIdentFromPath(expr *mast.InfixExpr) *mast.Ident {
+	if expr.Op != mlexer.DOUBLE_COLON {
+		return nil
+	}
+
+	// If the right side is an identifier, return it
+	if ident, ok := expr.Right.(*mast.Ident); ok {
+		return ident
+	}
+
+	// If the right side is another nested path, recurse
+	if nestedInfix, ok := expr.Right.(*mast.InfixExpr); ok {
+		return g.extractFinalIdentFromPath(nestedInfix)
+	}
+
+	return nil
 }
 
 func (g *Generator) genPrefixExpr(expr *mast.PrefixExpr) (goast.Expr, error) {
@@ -920,6 +1166,32 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 		callee = idxExpr.Target
 	}
 
+	// Handle enum variant construction (e.g., Circle(5))
+	// Check if this is an enum variant constructor by looking up the variant name
+	if ident, ok := callee.(*mast.Ident); ok {
+		if g.enumVariants[ident.Name] {
+			// This is an enum variant constructor - generate struct literal
+			elts := []goast.Expr{}
+			for i, arg := range expr.Args {
+				val, err := g.genExpr(arg)
+				if err != nil {
+					return nil, err
+				}
+				// Use Field0, Field1, etc. for enum variant fields (matching enum generation)
+				fieldName := fmt.Sprintf("Field%d", i)
+				elts = append(elts, &goast.KeyValueExpr{
+					Key:   goast.NewIdent(fieldName),
+					Value: val,
+				})
+			}
+			// Generate struct literal for variant
+			return &goast.CompositeLit{
+				Type: goast.NewIdent(ident.Name),
+				Elts: elts,
+			}, nil
+		}
+	}
+
 	// Handle static method calls like Channel::new
 	if infix, ok := callee.(*mast.InfixExpr); ok && infix.Op == mlexer.DOUBLE_COLON {
 		// Check for Channel::new
@@ -1036,10 +1308,81 @@ func (g *Generator) genFieldExpr(expr *mast.FieldExpr) (goast.Expr, error) {
 	}, nil
 }
 
+// inferExprType attempts to infer the Go type from a Malphas expression AST.
+// Returns nil if the type cannot be inferred (e.g., for identifiers or complex expressions).
+func (g *Generator) inferExprType(expr mast.Expr) goast.Expr {
+	switch e := expr.(type) {
+	case *mast.IntegerLit:
+		return goast.NewIdent("int")
+	case *mast.StringLit:
+		return goast.NewIdent("string")
+	case *mast.BoolLit:
+		return goast.NewIdent("bool")
+	case *mast.NilLit:
+		// nil can be any pointer type - we can't infer the specific type
+		return nil
+	case *mast.PrefixExpr:
+		// For unary operators like -x, *x, infer from operand
+		if e.Op == mlexer.ASTERISK || e.Op == mlexer.MINUS {
+			return g.inferExprType(e.Expr)
+		}
+		return nil
+	case *mast.InfixExpr:
+		// For binary operators, try to infer from left operand
+		// (e.g., x + 1 -> infer from x if it's a literal)
+		return g.inferExprType(e.Left)
+	case *mast.CallExpr:
+		// For function calls, we can't infer the return type without type info
+		return nil
+	case *mast.Ident:
+		// For identifiers, we can't infer without type information
+		return nil
+	case *mast.FieldExpr:
+		// For field access, we can't infer without type information
+		return nil
+	case *mast.IndexExpr:
+		// For array indexing, we can't infer element type without type info
+		return nil
+	case *mast.IfExpr:
+		// Recursively infer from if expression branches
+		if len(e.Clauses) > 0 && e.Clauses[0].Body != nil && e.Clauses[0].Body.Tail != nil {
+			return g.inferExprType(e.Clauses[0].Body.Tail)
+		}
+		if e.Else != nil && e.Else.Tail != nil {
+			return g.inferExprType(e.Else.Tail)
+		}
+		return nil
+	case *mast.BlockExpr:
+		// For blocks, infer from tail expression
+		if e.Tail != nil {
+			return g.inferExprType(e.Tail)
+		}
+		return nil
+	default:
+		// Unknown expression type - cannot infer
+		return nil
+	}
+}
+
 func (g *Generator) genIfExpr(expr *mast.IfExpr) (goast.Expr, error) {
 	// If expressions need to be translated to an immediately-invoked function
 	// that returns a value, since Go if statements don't have values
-	// For now, we'll use a simple wrapping approach
+	// We infer the return type from the tail expression of the first branch
+
+	// Infer the return type from the tail expression of any branch
+	var returnType goast.Expr = goast.NewIdent("any") // Default fallback
+
+	// Try to infer type from first clause's tail expression
+	if len(expr.Clauses) > 0 && expr.Clauses[0].Body != nil && expr.Clauses[0].Body.Tail != nil {
+		if inferredType := g.inferExprType(expr.Clauses[0].Body.Tail); inferredType != nil {
+			returnType = inferredType
+		}
+	} else if expr.Else != nil && expr.Else.Tail != nil {
+		// Fall back to else branch
+		if inferredType := g.inferExprType(expr.Else.Tail); inferredType != nil {
+			returnType = inferredType
+		}
+	}
 
 	// Generate the if chain as a statement
 	stmt, err := g.genIfChain(expr.Clauses, expr.Else)
@@ -1047,15 +1390,18 @@ func (g *Generator) genIfExpr(expr *mast.IfExpr) (goast.Expr, error) {
 		return nil, err
 	}
 
-	// Wrap in an IIFE (immediately invoked function expression)
+	// Wrap in an IIFE (immediately invoked function expression) with inferred return type
 	// func() T { <if-stmt> }()
-	// This is a simplified approach - a full implementation would need
-	// to infer the return type T and ensure all branches return a value
+	// genBlock already adds return statements for tail expressions
 	return &goast.CallExpr{
 		Fun: &goast.FuncLit{
 			Type: &goast.FuncType{
 				Params: &goast.FieldList{},
-				// Results would need to be inferred from the if expression type
+				Results: &goast.FieldList{
+					List: []*goast.Field{
+						{Type: returnType},
+					},
+				},
 			},
 			Body: &goast.BlockStmt{
 				List: []goast.Stmt{stmt},
@@ -1091,6 +1437,12 @@ func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 		switch t.Name.Name {
 		case "int":
 			return goast.NewIdent("int"), nil
+		case "int8":
+			return goast.NewIdent("int8"), nil
+		case "int32":
+			return goast.NewIdent("int32"), nil
+		case "int64":
+			return goast.NewIdent("int64"), nil
 		case "float":
 			return goast.NewIdent("float64"), nil
 		case "bool":
@@ -1158,6 +1510,38 @@ func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
 			return nil, err
 		}
 		return &goast.StarExpr{X: elem}, nil
+	case *mast.ArrayType:
+		elem, err := g.mapType(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		// Evaluate length expression - must be a constant integer
+		lenVal := int64(0)
+		if intLit, ok := t.Len.(*mast.IntegerLit); ok {
+			parsed, err := strconv.ParseInt(intLit.Text, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid array length: %s", intLit.Text)
+			}
+			lenVal = parsed
+		} else {
+			return nil, fmt.Errorf("array length must be a constant integer literal")
+		}
+		return &goast.ArrayType{
+			Len: &goast.BasicLit{
+				Kind:  token.INT,
+				Value: fmt.Sprintf("%d", lenVal),
+			},
+			Elt: elem,
+		}, nil
+	case *mast.SliceType:
+		elem, err := g.mapType(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		return &goast.ArrayType{
+			Len: nil, // nil length means slice in Go
+			Elt: elem,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type expression: %T", t)
 	}
@@ -1236,6 +1620,9 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 	// Variants
 	for _, v := range decl.Variants {
 		variantName := v.Name.Name
+		// Track this variant name so we can detect it in function calls
+		g.enumVariants[variantName] = true
+
 		// Struct for variant
 		fields := []*goast.Field{}
 		for i, p := range v.Payloads {
@@ -1369,6 +1756,190 @@ func (g *Generator) genMatchExpr(expr *mast.MatchExpr) (goast.Expr, error) {
 		return nil, err
 	}
 
+	// Check if this is matching on an enum by looking at patterns
+	// If patterns are CallExpr (variant with payload) or FieldExpr/Ident (variant without payload)
+	// and the callee/field name is in enumVariants, it's an enum match
+	isEnumMatch := false
+	for _, arm := range expr.Arms {
+		if callExpr, ok := arm.Pattern.(*mast.CallExpr); ok {
+			if ident, ok := callExpr.Callee.(*mast.Ident); ok {
+				if g.enumVariants[ident.Name] {
+					isEnumMatch = true
+					break
+				}
+			} else if fieldExpr, ok := callExpr.Callee.(*mast.FieldExpr); ok {
+				if g.enumVariants[fieldExpr.Field.Name] {
+					isEnumMatch = true
+					break
+				}
+			}
+		} else if ident, ok := arm.Pattern.(*mast.Ident); ok && ident.Name != "_" {
+			if g.enumVariants[ident.Name] {
+				isEnumMatch = true
+				break
+			}
+		} else if fieldExpr, ok := arm.Pattern.(*mast.FieldExpr); ok {
+			if g.enumVariants[fieldExpr.Field.Name] {
+				isEnumMatch = true
+				break
+			}
+		}
+	}
+
+	if isEnumMatch {
+		// Generate if-else chain with type assertions for enum variants
+		return g.genEnumMatch(expr, subject)
+	}
+
+	// Generate switch statement for primitives
+	return g.genPrimitiveMatch(expr, subject)
+}
+
+// genEnumMatch generates match expression for enums using if-else with type assertions
+func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goast.Expr, error) {
+	// Use if-else chain with type assertions on interface{}
+	// Convert subject to interface{} first, then use type assertions
+	subjectVar := "_subject_any"
+
+	var ifStmt goast.Stmt
+	var currentElse goast.Stmt
+
+	// Build if-else chain from bottom up (right to left in AST)
+	for i := len(expr.Arms) - 1; i >= 0; i-- {
+		arm := expr.Arms[i]
+		body, err := g.genBlock(arm.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if pattern is wildcard "_"
+		isDefault := false
+		if ident, ok := arm.Pattern.(*mast.Ident); ok && ident.Name == "_" {
+			isDefault = true
+		}
+
+		if !isDefault {
+			// Extract variant name and pattern variables
+			var variantName string
+			var patternVars []*mast.Ident
+
+			switch p := arm.Pattern.(type) {
+			case *mast.CallExpr:
+				// Variant with payload: Circle(radius)
+				if ident, ok := p.Callee.(*mast.Ident); ok {
+					variantName = ident.Name
+				} else if fieldExpr, ok := p.Callee.(*mast.FieldExpr); ok {
+					variantName = fieldExpr.Field.Name
+				}
+				for _, arg := range p.Args {
+					if ident, ok := arg.(*mast.Ident); ok {
+						patternVars = append(patternVars, ident)
+					}
+				}
+			case *mast.Ident:
+				variantName = p.Name
+			case *mast.FieldExpr:
+				variantName = p.Field.Name
+			}
+
+			varName := fmt.Sprintf("_v%d", i)
+			okVarName := fmt.Sprintf("_ok%d", i)
+			bodyStmts := []goast.Stmt{}
+
+			// Generate variable bindings for pattern variables
+			for j, patternVar := range patternVars {
+				fieldName := fmt.Sprintf("Field%d", j)
+				bodyStmts = append(bodyStmts, &goast.AssignStmt{
+					Lhs: []goast.Expr{goast.NewIdent(patternVar.Name)},
+					Tok: token.DEFINE,
+					Rhs: []goast.Expr{
+						&goast.SelectorExpr{
+							X:   goast.NewIdent(varName),
+							Sel: goast.NewIdent(fieldName),
+						},
+					},
+				})
+			}
+
+			// Add body statements
+			bodyStmts = append(bodyStmts, body.List...)
+
+			// Generate: if _v, _ok := _subject_any.(Variant); _ok { ... }
+			ifStmt = &goast.IfStmt{
+				Init: &goast.AssignStmt{
+					Lhs: []goast.Expr{
+						goast.NewIdent(varName),
+						goast.NewIdent(okVarName),
+					},
+					Tok: token.DEFINE,
+					Rhs: []goast.Expr{
+						&goast.TypeAssertExpr{
+							X:    goast.NewIdent(subjectVar),
+							Type: goast.NewIdent(variantName),
+						},
+					},
+				},
+				Cond: goast.NewIdent(okVarName),
+				Body: &goast.BlockStmt{List: bodyStmts},
+				Else: currentElse,
+			}
+		} else {
+			// Default case
+			ifStmt = &goast.BlockStmt{List: body.List}
+			if currentElse != nil {
+				ifStmt = &goast.IfStmt{
+					Cond: goast.NewIdent("true"),
+					Body: &goast.BlockStmt{List: body.List},
+					Else: currentElse,
+				}
+			}
+		}
+
+		currentElse = ifStmt
+	}
+
+	// Wrap in IIFE with conversion to interface{}
+	return &goast.CallExpr{
+		Fun: &goast.FuncLit{
+			Type: &goast.FuncType{
+				Params: &goast.FieldList{},
+				Results: &goast.FieldList{
+					List: []*goast.Field{
+						{Type: goast.NewIdent("any")},
+					},
+				},
+			},
+			Body: &goast.BlockStmt{
+				List: []goast.Stmt{
+					&goast.DeclStmt{
+						Decl: &goast.GenDecl{
+							Tok: token.VAR,
+							Specs: []goast.Spec{
+								&goast.ValueSpec{
+									Names:  []*goast.Ident{goast.NewIdent(subjectVar)},
+									Type:   goast.NewIdent("any"), // Explicitly type as interface{}
+									Values: []goast.Expr{subject},
+								},
+							},
+						},
+					},
+					ifStmt,
+					// Panic if no case matches (shouldn't happen if match is exhaustive)
+					&goast.ExprStmt{
+						X: &goast.CallExpr{
+							Fun:  goast.NewIdent("panic"),
+							Args: []goast.Expr{goast.NewIdent("\"unreachable: match expression should be exhaustive\"")},
+						},
+					},
+				},
+			},
+		},
+		Args: []goast.Expr{},
+	}, nil
+}
+
+// genPrimitiveMatch generates match expression for primitives using switch
+func (g *Generator) genPrimitiveMatch(expr *mast.MatchExpr, subject goast.Expr) (goast.Expr, error) {
 	cases := []goast.Stmt{}
 	for _, arm := range expr.Arms {
 		body, err := g.genBlock(arm.Body)
