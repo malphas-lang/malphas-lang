@@ -21,7 +21,7 @@ fn main() {
     println(x);
 }
 `,
-			checks: []string{"[]int{", "[", "println"},
+			checks: []string{"[]int{", "[", "fmt.Println"},
 		},
 		{
 			name: "channel_new_and_send_recv",
@@ -35,7 +35,7 @@ fn main() {
     println(v);
 }
 `,
-			checks: []string{"make(chan int", "<-", "println"},
+			checks: []string{"make(chan int", "<-", "fmt.Println"},
 		},
 		{
 			name: "select_statement",
@@ -55,7 +55,7 @@ fn main() {
     }
 }
 `,
-			checks: []string{"select", "case", "<-", "println"},
+			checks: []string{"select", "case", "<-", "fmt.Println"},
 		},
 		{
 			name: "struct_literal",
@@ -69,7 +69,7 @@ fn main() {
     println(p.x);
 }
 `,
-			checks: []string{"Point", "struct", "println"},
+			checks: []string{"Point", "struct", "fmt.Println"},
 		},
 		{
 			name: "match_expression",
@@ -98,7 +98,7 @@ fn main() {
 	println(x);
 }
 `,
-			checks: []string{"func() int", "if true", "return 1", "return 2"},
+			checks: []string{"var x int", "if true", "x = 1", "x = 2"},
 		},
 		{
 			name: "if_expression_string",
@@ -110,7 +110,7 @@ fn main() {
 	println(x);
 }
 `,
-			checks: []string{"func() string", "if true", "return \"yes\"", "return \"no\""},
+			checks: []string{"var x string", "if true", "x = \"yes\"", "x = \"no\""},
 		},
 		{
 			name: "if_expression_multiple_branches",
@@ -123,7 +123,7 @@ fn main() {
 	println(y);
 }
 `,
-			checks: []string{"func() int", "if x > 20", "else if x > 10"},
+			checks: []string{"var y int", "if x > 20", "else if x > 10", "y = 100", "y = 50", "y = 0"},
 		},
 		{
 			name: "if_expression_with_statements",
@@ -140,7 +140,7 @@ fn main() {
 	println(z);
 }
 `,
-			checks: []string{"func()", "if true", "temp := 10", "return temp + 5", "return 0"},
+			checks: []string{"var z int", "if true", "temp := 10", "z = temp + 5", "z = 0"},
 		},
 		{
 			name: "if_expression_bool",
@@ -152,7 +152,7 @@ fn main() {
 	println(x);
 }
 `,
-			checks: []string{"func() bool", "if true", "return true", "return false"},
+			checks: []string{"var x bool", "if true", "x = true", "x = false"},
 		},
 		{
 			name: "while_loop",
@@ -181,7 +181,7 @@ fn main() {
 	}
 }
 `,
-			checks: []string{"range arr", "println(x)"},
+			checks: []string{"range arr", "fmt.Println(x)"},
 		},
 		{
 			name: "nullable_types",

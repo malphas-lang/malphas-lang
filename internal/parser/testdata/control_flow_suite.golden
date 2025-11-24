@@ -4,9 +4,11 @@
       "Name": "suite"
     }
   },
+  "Mods": null,
   "Uses": null,
   "Decls": [
     {
+      "Pub": false,
       "Unsafe": false,
       "Name": {
         "Name": "compute"
@@ -158,35 +160,33 @@
                         "Name": "items"
                       },
                       "Body": {
-                        "Stmts": [
-                          {
-                            "Clauses": [
-                              {
-                                "Condition": {
-                                  "Op": "\u003e",
-                                  "Left": {
-                                    "Name": "item"
-                                  },
-                                  "Right": {
-                                    "Name": "base"
-                                  }
+                        "Stmts": null,
+                        "Tail": {
+                          "Clauses": [
+                            {
+                              "Condition": {
+                                "Op": "\u003e",
+                                "Left": {
+                                  "Name": "item"
                                 },
-                                "Body": {
-                                  "Stmts": [
-                                    {
-                                      "Value": {
-                                        "Name": "item"
-                                      }
-                                    }
-                                  ],
-                                  "Tail": null
+                                "Right": {
+                                  "Name": "base"
                                 }
+                              },
+                              "Body": {
+                                "Stmts": [
+                                  {
+                                    "Value": {
+                                      "Name": "item"
+                                    }
+                                  }
+                                ],
+                                "Tail": null
                               }
-                            ],
-                            "Else": null
-                          }
-                        ],
-                        "Tail": null
+                            }
+                          ],
+                          "Else": null
+                        }
                       }
                     }
                   ],

@@ -8,13 +8,43 @@ import (
 
 	mast "github.com/malphas-lang/malphas-lang/internal/ast"
 	mlexer "github.com/malphas-lang/malphas-lang/internal/lexer"
+	"github.com/malphas-lang/malphas-lang/internal/types"
 )
+
+// Scope tracks variable types in the current scope.
+type Scope struct {
+	Parent *Scope
+	Vars   map[string]goast.Expr
+}
+
+func NewScope(parent *Scope) *Scope {
+	return &Scope{
+		Parent: parent,
+		Vars:   make(map[string]goast.Expr),
+	}
+}
+
+func (s *Scope) Insert(name string, typ goast.Expr) {
+	s.Vars[name] = typ
+}
+
+func (s *Scope) Lookup(name string) goast.Expr {
+	if typ, ok := s.Vars[name]; ok {
+		return typ
+	}
+	if s.Parent != nil {
+		return s.Parent.Lookup(name)
+	}
+	return nil
+}
 
 // Generator converts Malphas AST to Go AST.
 type Generator struct {
 	fset         *token.FileSet
-	enumVariants map[string]bool       // Track enum variant names to detect constructors
-	modules      map[string]*mast.File // Loaded modules (name -> file)
+	enumVariants map[string]bool          // Track enum variant names to detect constructors
+	modules      map[string]*mast.File    // Loaded modules (name -> file)
+	scope        *Scope                   // Current scope for variable types
+	typeInfo     map[mast.Expr]types.Type // Resolved types from checker
 }
 
 // NewGenerator creates a new generator.
@@ -23,6 +53,18 @@ func NewGenerator() *Generator {
 		fset:         token.NewFileSet(),
 		enumVariants: make(map[string]bool),
 		modules:      make(map[string]*mast.File),
+		scope:        NewScope(nil), // Global scope
+		typeInfo:     make(map[mast.Expr]types.Type),
+	}
+}
+
+func (g *Generator) pushScope() {
+	g.scope = NewScope(g.scope)
+}
+
+func (g *Generator) popScope() {
+	if g.scope.Parent != nil {
+		g.scope = g.scope.Parent
 	}
 }
 
@@ -31,9 +73,26 @@ func (g *Generator) SetModules(modules map[string]*mast.File) {
 	g.modules = modules
 }
 
+// SetTypeInfo sets the type information from the checker.
+func (g *Generator) SetTypeInfo(info map[mast.Expr]types.Type) {
+	g.typeInfo = info
+}
+
 // Generate converts a Malphas file to a Go file.
 func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 	decls := []goast.Decl{}
+
+	// Generate imports from use declarations
+	imports := g.generateImports(file.Uses)
+	if len(imports) > 0 {
+		decls = append(decls, &goast.GenDecl{
+			Tok:   token.IMPORT,
+			Specs: make([]goast.Spec, len(imports)),
+		})
+		for i, imp := range imports {
+			decls[len(decls)-1].(*goast.GenDecl).Specs[i] = imp
+		}
+	}
 
 	// Generate code for all loaded module files first (so their symbols are available)
 	for moduleName, moduleFile := range g.modules {
@@ -66,9 +125,6 @@ func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 		}
 	}
 
-	// Generate imports from use declarations
-	imports := g.generateImports(file.Uses)
-
 	// Add package declaration
 	for _, decl := range file.Decls {
 		generated, err := g.genDecl(decl)
@@ -87,10 +143,6 @@ func (g *Generator) Generate(file *mast.File) (*goast.File, error) {
 
 // generateImports converts Malphas use declarations to Go import declarations.
 func (g *Generator) generateImports(uses []*mast.UseDecl) []*goast.ImportSpec {
-	if len(uses) == 0 {
-		return nil
-	}
-
 	imports := []*goast.ImportSpec{}
 	importMap := make(map[string]string) // path -> alias
 
@@ -129,6 +181,16 @@ func (g *Generator) generateImports(uses []*mast.UseDecl) []*goast.ImportSpec {
 		}
 
 		imports = append(imports, spec)
+	}
+
+	// Always import "fmt" for println support
+	if _, exists := importMap["fmt"]; !exists {
+		imports = append(imports, &goast.ImportSpec{
+			Path: &goast.BasicLit{
+				Kind:  token.STRING,
+				Value: "\"fmt\"",
+			},
+		})
 	}
 
 	return imports
@@ -296,6 +358,10 @@ func (g *Generator) genTypeAliasDecl(decl *mast.TypeAliasDecl) (goast.Decl, erro
 func (g *Generator) genFnDecl(fn *mast.FnDecl) (*goast.FuncDecl, error) {
 	name := goast.NewIdent(fn.Name.Name)
 
+	// Push function scope
+	g.pushScope()
+	defer g.popScope()
+
 	// Generate type parameters
 	typeParams, err := g.genTypeParams(fn.TypeParams)
 	if err != nil {
@@ -307,12 +373,19 @@ func (g *Generator) genFnDecl(fn *mast.FnDecl) (*goast.FuncDecl, error) {
 		return nil, err
 	}
 
+	// Register params in scope
+	for i, p := range fn.Params {
+		if i < len(params.List) {
+			g.scope.Insert(p.Name.Name, params.List[i].Type)
+		}
+	}
+
 	results, err := g.genResults(fn.ReturnType)
 	if err != nil {
 		return nil, err
 	}
 
-	body, err := g.genBlock(fn.Body)
+	body, err := g.genBlock(fn.Body, fn.ReturnType != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +422,7 @@ func (g *Generator) genMethodDecl(fn *mast.FnDecl, params []*mast.Param) (*goast
 		return nil, err
 	}
 
-	body, err := g.genBlock(fn.Body)
+	body, err := g.genBlock(fn.Body, fn.ReturnType != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -398,15 +471,18 @@ func (g *Generator) genResults(ret mast.TypeExpr) (*goast.FieldList, error) {
 	}, nil
 }
 
-func (g *Generator) genBlock(block *mast.BlockExpr) (*goast.BlockStmt, error) {
+func (g *Generator) genBlock(block *mast.BlockExpr, shouldReturn bool) (*goast.BlockStmt, error) {
+	g.pushScope()
+	defer g.popScope()
+
 	stmts := []goast.Stmt{}
 	for _, s := range block.Stmts {
-		stmt, err := g.genStmt(s)
+		sStmts, err := g.genStmt(s)
 		if err != nil {
 			return nil, err
 		}
-		if stmt != nil {
-			stmts = append(stmts, stmt)
+		if sStmts != nil {
+			stmts = append(stmts, sStmts...)
 		}
 	}
 
@@ -415,36 +491,70 @@ func (g *Generator) genBlock(block *mast.BlockExpr) (*goast.BlockStmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		stmts = append(stmts, &goast.ReturnStmt{
-			Results: []goast.Expr{expr},
-		})
+		if shouldReturn {
+			stmts = append(stmts, &goast.ReturnStmt{
+				Results: []goast.Expr{expr},
+			})
+		} else {
+			stmts = append(stmts, &goast.ExprStmt{
+				X: expr,
+			})
+		}
 	}
 
 	return &goast.BlockStmt{List: stmts}, nil
 }
 
-func (g *Generator) genStmt(stmt mast.Stmt) (goast.Stmt, error) {
+func (g *Generator) genStmt(stmt mast.Stmt) ([]goast.Stmt, error) {
 	switch s := stmt.(type) {
 	case *mast.LetStmt:
 		return g.genLetStmt(s)
 	case *mast.ReturnStmt:
-		return g.genReturnStmt(s)
+		res, err := g.genReturnStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.ExprStmt:
-		return g.genExprStmt(s)
+		res, err := g.genExprStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.IfStmt:
-		return g.genIfStmt(s)
+		res, err := g.genIfStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.WhileStmt:
-		return g.genWhileStmt(s)
+		res, err := g.genWhileStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.ForStmt:
-		return g.genForStmt(s)
+		res, err := g.genForStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.BreakStmt:
-		return &goast.BranchStmt{Tok: token.BREAK}, nil
+		return []goast.Stmt{&goast.BranchStmt{Tok: token.BREAK}}, nil
 	case *mast.ContinueStmt:
-		return &goast.BranchStmt{Tok: token.CONTINUE}, nil
+		return []goast.Stmt{&goast.BranchStmt{Tok: token.CONTINUE}}, nil
 	case *mast.SpawnStmt:
-		return g.genSpawnStmt(s)
+		res, err := g.genSpawnStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	case *mast.SelectStmt:
-		return g.genSelectStmt(s)
+		res, err := g.genSelectStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		return []goast.Stmt{res}, nil
 	default:
 		return nil, fmt.Errorf("unsupported statement: %T", stmt)
 	}
@@ -526,7 +636,7 @@ func (g *Generator) genSelectCase(c *mast.SelectCase) (*goast.CommClause, error)
 		}
 	}
 
-	body, err := g.genBlock(c.Body)
+	body, err := g.genBlock(c.Body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -537,17 +647,24 @@ func (g *Generator) genSelectCase(c *mast.SelectCase) (*goast.CommClause, error)
 	}, nil
 }
 
-func (g *Generator) genLetStmt(stmt *mast.LetStmt) (goast.Stmt, error) {
+func (g *Generator) genLetStmt(stmt *mast.LetStmt) ([]goast.Stmt, error) {
+	// Special handling for IfExpr to support non-local returns
+	if ifExpr, ok := stmt.Value.(*mast.IfExpr); ok {
+		return g.genLetIfExpr(stmt, ifExpr)
+	}
+
 	val, err := g.genExpr(stmt.Value)
 	if err != nil {
 		return nil, err
 	}
 
+	var typ goast.Expr
 	if stmt.Type != nil {
-		typ, err := g.mapType(stmt.Type)
+		t, err := g.mapType(stmt.Type)
 		if err != nil {
 			return nil, err
 		}
+		typ = t
 
 		// Special handling: if type is array and value is array literal, ensure proper conversion
 		if arrType, ok := stmt.Type.(*mast.ArrayType); ok {
@@ -574,7 +691,7 @@ func (g *Generator) genLetStmt(stmt *mast.LetStmt) (goast.Stmt, error) {
 			}
 		}
 
-		return &goast.DeclStmt{
+		return []goast.Stmt{&goast.DeclStmt{
 			Decl: &goast.GenDecl{
 				Tok: token.VAR,
 				Specs: []goast.Spec{
@@ -585,14 +702,140 @@ func (g *Generator) genLetStmt(stmt *mast.LetStmt) (goast.Stmt, error) {
 					},
 				},
 			},
-		}, nil
+		}}, nil
+	} else {
+		// Attempt to infer type for scope tracking
+		typ = g.inferExprType(stmt.Value)
 	}
 
-	return &goast.AssignStmt{
+	// Register variable in scope
+	if typ != nil {
+		g.scope.Insert(stmt.Name.Name, typ)
+	}
+
+	return []goast.Stmt{&goast.AssignStmt{
 		Lhs: []goast.Expr{goast.NewIdent(stmt.Name.Name)},
 		Tok: token.DEFINE,
 		Rhs: []goast.Expr{val},
-	}, nil
+	}}, nil
+}
+
+func (g *Generator) genLetIfExpr(stmt *mast.LetStmt, ifExpr *mast.IfExpr) ([]goast.Stmt, error) {
+	// 1. Determine Type
+	var typ goast.Expr
+	if stmt.Type != nil {
+		t, err := g.mapType(stmt.Type)
+		if err != nil {
+			return nil, err
+		}
+		typ = t
+	} else {
+		// Infer type
+		// Check g.typeInfo first
+		if t, ok := g.typeInfo[stmt.Value]; ok {
+			if gt, err := g.mapSemanticType(t); err == nil {
+				typ = gt
+			}
+		}
+		if typ == nil {
+			// Fallback to simple inference
+			typ = g.inferExprType(stmt.Value)
+		}
+		if typ == nil {
+			typ = goast.NewIdent("any")
+		}
+	}
+
+	g.scope.Insert(stmt.Name.Name, typ)
+
+	// 2. Generate Var Decl
+	varDecl := &goast.DeclStmt{
+		Decl: &goast.GenDecl{
+			Tok: token.VAR,
+			Specs: []goast.Spec{
+				&goast.ValueSpec{
+					Names: []*goast.Ident{goast.NewIdent(stmt.Name.Name)},
+					Type:  typ,
+				},
+			},
+		},
+	}
+
+	// 3. Generate If Chain with Assignments
+	ifStmt, err := g.genIfChainWithAssignment(ifExpr.Clauses, ifExpr.Else, stmt.Name.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return []goast.Stmt{varDecl, ifStmt}, nil
+}
+
+func (g *Generator) genIfChainWithAssignment(clauses []*mast.IfClause, elseBlock *mast.BlockExpr, targetName string) (goast.Stmt, error) {
+	if len(clauses) == 0 {
+		if elseBlock != nil {
+			return g.genBlockWithAssignment(elseBlock, targetName)
+		}
+		return nil, nil
+	}
+
+	clause := clauses[0]
+	cond, err := g.genExpr(clause.Condition)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := g.genBlockWithAssignment(clause.Body, targetName)
+	if err != nil {
+		return nil, err
+	}
+
+	ifStmt := &goast.IfStmt{
+		Cond: cond,
+		Body: body,
+	}
+
+	elseStmt, err := g.genIfChainWithAssignment(clauses[1:], elseBlock, targetName)
+	if err != nil {
+		return nil, err
+	}
+
+	if elseStmt != nil {
+		ifStmt.Else = elseStmt
+	}
+
+	return ifStmt, nil
+}
+
+func (g *Generator) genBlockWithAssignment(block *mast.BlockExpr, targetName string) (*goast.BlockStmt, error) {
+	g.pushScope()
+	defer g.popScope()
+
+	stmts := []goast.Stmt{}
+	for _, s := range block.Stmts {
+		sStmts, err := g.genStmt(s)
+		if err != nil {
+			return nil, err
+		}
+		if sStmts != nil {
+			stmts = append(stmts, sStmts...)
+		}
+	}
+
+	if block.Tail != nil {
+		expr, err := g.genExpr(block.Tail)
+		if err != nil {
+			return nil, err
+		}
+
+		// Assignment: target = expr
+		stmts = append(stmts, &goast.AssignStmt{
+			Lhs: []goast.Expr{goast.NewIdent(targetName)},
+			Tok: token.ASSIGN,
+			Rhs: []goast.Expr{expr},
+		})
+	}
+
+	return &goast.BlockStmt{List: stmts}, nil
 }
 
 func (g *Generator) genReturnStmt(stmt *mast.ReturnStmt) (goast.Stmt, error) {
@@ -639,12 +882,12 @@ func (g *Generator) genExprStmt(stmt *mast.ExprStmt) (goast.Stmt, error) {
 
 	// Check for UnsafeBlock used as statement
 	if unsafeBlock, ok := stmt.Expr.(*mast.UnsafeBlock); ok {
-		return g.genBlock(unsafeBlock.Block)
+		return g.genBlock(unsafeBlock.Block, false)
 	}
 
 	// Check for BlockExpr used as statement
 	if blockExpr, ok := stmt.Expr.(*mast.BlockExpr); ok {
-		return g.genBlock(blockExpr)
+		return g.genBlock(blockExpr, false)
 	}
 
 	expr, err := g.genExpr(stmt.Expr)
@@ -664,7 +907,7 @@ func (g *Generator) genIfStmt(stmt *mast.IfStmt) (goast.Stmt, error) {
 func (g *Generator) genIfChain(clauses []*mast.IfClause, elseBlock *mast.BlockExpr) (goast.Stmt, error) {
 	if len(clauses) == 0 {
 		if elseBlock != nil {
-			return g.genBlock(elseBlock)
+			return g.genBlock(elseBlock, false)
 		}
 		return nil, nil
 	}
@@ -675,7 +918,7 @@ func (g *Generator) genIfChain(clauses []*mast.IfClause, elseBlock *mast.BlockEx
 		return nil, err
 	}
 
-	body, err := g.genBlock(clause.Body)
+	body, err := g.genBlock(clause.Body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -702,7 +945,7 @@ func (g *Generator) genWhileStmt(stmt *mast.WhileStmt) (goast.Stmt, error) {
 		return nil, err
 	}
 
-	body, err := g.genBlock(stmt.Body)
+	body, err := g.genBlock(stmt.Body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -719,7 +962,7 @@ func (g *Generator) genForStmt(stmt *mast.ForStmt) (goast.Stmt, error) {
 		return nil, err
 	}
 
-	body, err := g.genBlock(stmt.Body)
+	body, err := g.genBlock(stmt.Body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -770,8 +1013,14 @@ func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 				Value: val,
 			})
 		}
+
+		typeName, err := g.genTypeFromExpr(e.Name)
+		if err != nil {
+			return nil, err
+		}
+
 		return &goast.CompositeLit{
-			Type: goast.NewIdent(e.Name.Name),
+			Type: typeName,
 			Elts: elts,
 		}, nil
 	case *mast.ArrayLiteral:
@@ -794,7 +1043,7 @@ func (g *Generator) genExpr(expr mast.Expr) (goast.Expr, error) {
 }
 
 func (g *Generator) genBlockExpr(block *mast.BlockExpr) (goast.Expr, error) {
-	body, err := g.genBlock(block)
+	body, err := g.genBlock(block, true)
 	if err != nil {
 		return nil, err
 	}
@@ -997,10 +1246,6 @@ func (g *Generator) genInfixExpr(expr *mast.InfixExpr) (goast.Expr, error) {
 		// If it's used as an expression, we might need a runtime helper.
 		// For now, assuming it's used as a statement, we can't easily return it here.
 		// BUT, if we are in genExprStmt, we can handle it.
-		// Let's see if we can map it to a function call or similar if used as expr.
-		// Or maybe we panic if used as expression?
-		// Actually, in Go `ch <- val` is a statement.
-		// If Malphas allows `x = (ch <- val)`, that's invalid in Go.
 		// Let's assume it's only valid as a statement for now, or return a dummy.
 		// Wait, if it's in `genExpr`, we are expecting an expression.
 		// If we return nil, it errors.
@@ -1179,6 +1424,48 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 			return nil, err
 		}
 
+		// Special handling for StructLiteral targets (r-values)
+		// If we call a method on a struct literal, and the method expects a pointer receiver (which we default to),
+		// Go requires the target to be addressable. Struct literals are not addressable.
+		// We wrap the literal in an IIFE to create a temporary variable and return its address.
+		if structLit, ok := fieldExpr.Target.(*mast.StructLiteral); ok {
+			// Generate: func() *T { t := Lit; return &t }()
+			typeName, err := g.genTypeFromExpr(structLit.Name)
+			if err != nil {
+				return nil, err
+			}
+
+			target = &goast.CallExpr{
+				Fun: &goast.FuncLit{
+					Type: &goast.FuncType{
+						Params: &goast.FieldList{},
+						Results: &goast.FieldList{
+							List: []*goast.Field{
+								{Type: &goast.StarExpr{X: typeName}},
+							},
+						},
+					},
+					Body: &goast.BlockStmt{
+						List: []goast.Stmt{
+							&goast.AssignStmt{
+								Lhs: []goast.Expr{goast.NewIdent("t")},
+								Tok: token.DEFINE,
+								Rhs: []goast.Expr{target},
+							},
+							&goast.ReturnStmt{
+								Results: []goast.Expr{
+									&goast.UnaryExpr{
+										Op: token.AND,
+										X:  goast.NewIdent("t"),
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+		}
+
 		// Generate arguments
 		var args []goast.Expr
 		for _, arg := range expr.Args {
@@ -1230,7 +1517,7 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 		}
 	}
 
-	// Handle static method calls like Channel::new
+	// Handle static method calls like Channel::new or Enum::Variant
 	if infix, ok := callee.(*mast.InfixExpr); ok && infix.Op == mlexer.DOUBLE_COLON {
 		// Check for Channel::new
 		isChannel := false
@@ -1240,20 +1527,24 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 		if idxExpr, ok := expr.Callee.(*mast.IndexExpr); ok {
 			if ident, ok := infix.Left.(*mast.Ident); ok && ident.Name == "Channel" {
 				isChannel = true
-				// Extract type from IndexExpr.Index
-				if typeIdent, ok := idxExpr.Index.(*mast.Ident); ok {
-					switch typeIdent.Name {
-					case "int":
-						elemType = goast.NewIdent("int")
-					case "string":
-						elemType = goast.NewIdent("string")
-					case "bool":
-						elemType = goast.NewIdent("bool")
-					default:
-						elemType = goast.NewIdent(typeIdent.Name)
+				// Extract type from IndexExpr.Indices
+				if len(idxExpr.Indices) > 0 {
+					if typeIdent, ok := idxExpr.Indices[0].(*mast.Ident); ok {
+						switch typeIdent.Name {
+						case "int":
+							elemType = goast.NewIdent("int")
+						case "string":
+							elemType = goast.NewIdent("string")
+						case "bool":
+							elemType = goast.NewIdent("bool")
+						default:
+							elemType = goast.NewIdent(typeIdent.Name)
+						}
+					} else {
+						return nil, fmt.Errorf("complex type arguments in Channel::new[...] not supported in codegen")
 					}
 				} else {
-					return nil, fmt.Errorf("complex type arguments in Channel::new[...] not supported in codegen")
+					return nil, fmt.Errorf("missing type argument in Channel::new[...] ")
 				}
 			}
 		} else {
@@ -1266,20 +1557,24 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 				if ident, ok := indexExpr.Target.(*mast.Ident); ok && ident.Name == "Channel" {
 					isChannel = true
 					// Resolve type arg
-					if typeIdent, ok := indexExpr.Index.(*mast.Ident); ok {
-						// Map primitive types
-						switch typeIdent.Name {
-						case "int":
-							elemType = goast.NewIdent("int")
-						case "string":
-							elemType = goast.NewIdent("string")
-						case "bool":
-							elemType = goast.NewIdent("bool")
-						default:
-							elemType = goast.NewIdent(typeIdent.Name)
+					if len(indexExpr.Indices) > 0 {
+						if typeIdent, ok := indexExpr.Indices[0].(*mast.Ident); ok {
+							// Map primitive types
+							switch typeIdent.Name {
+							case "int":
+								elemType = goast.NewIdent("int")
+							case "string":
+								elemType = goast.NewIdent("string")
+							case "bool":
+								elemType = goast.NewIdent("bool")
+							default:
+								elemType = goast.NewIdent(typeIdent.Name)
+							}
+						} else {
+							return nil, fmt.Errorf("unsupported type argument in Channel[...]::new")
 						}
 					} else {
-						return nil, fmt.Errorf("unsupported type argument in Channel[...]::new")
+						return nil, fmt.Errorf("missing type argument in Channel[...]::new")
 					}
 				}
 			}
@@ -1312,6 +1607,66 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 				}, nil
 			}
 		}
+
+		// Handle Enum::Variant or Enum[T]::Variant
+		var variantName string
+		if right, ok := infix.Right.(*mast.Ident); ok {
+			variantName = right.Name
+		}
+
+		if variantName != "" && g.enumVariants[variantName] {
+			// This is an enum variant constructor
+			// Check for type arguments in Left
+			var typeArgs []goast.Expr
+
+			if indexExpr, ok := infix.Left.(*mast.IndexExpr); ok {
+				// Enum[T]::Variant
+				for _, idx := range indexExpr.Indices {
+					argType, err := g.genExpr(idx)
+					if err != nil {
+						return nil, err
+					}
+					typeArgs = append(typeArgs, argType)
+				}
+			}
+
+			// Generate struct literal
+			elts := []goast.Expr{}
+			for i, arg := range expr.Args {
+				val, err := g.genExpr(arg)
+				if err != nil {
+					return nil, err
+				}
+				fieldName := fmt.Sprintf("Field%d", i)
+				elts = append(elts, &goast.KeyValueExpr{
+					Key:   goast.NewIdent(fieldName),
+					Value: val,
+				})
+			}
+
+			var structType goast.Expr = goast.NewIdent(variantName)
+			if len(typeArgs) > 0 {
+				if len(typeArgs) == 1 {
+					structType = &goast.IndexExpr{
+						X:     structType,
+						Index: typeArgs[0],
+					}
+				} else {
+					structType = &goast.IndexListExpr{
+						X:       structType,
+						Indices: typeArgs,
+					}
+				}
+			}
+
+			return &goast.UnaryExpr{
+				Op: token.AND,
+				X: &goast.CompositeLit{
+					Type: structType,
+					Elts: elts,
+				},
+			}, nil
+		}
 	}
 
 	fun, err := g.genExpr(expr.Callee)
@@ -1326,6 +1681,17 @@ func (g *Generator) genCallExpr(expr *mast.CallExpr) (goast.Expr, error) {
 			return nil, err
 		}
 		args = append(args, a)
+	}
+
+	// Handle built-in println -> fmt.Println
+	if ident, ok := fun.(*goast.Ident); ok && ident.Name == "println" {
+		return &goast.CallExpr{
+			Fun: &goast.SelectorExpr{
+				X:   goast.NewIdent("fmt"),
+				Sel: goast.NewIdent("Println"),
+			},
+			Args: args,
+		}, nil
 	}
 
 	return &goast.CallExpr{
@@ -1368,13 +1734,18 @@ func (g *Generator) inferExprType(expr mast.Expr) goast.Expr {
 	case *mast.InfixExpr:
 		// For binary operators, try to infer from left operand
 		// (e.g., x + 1 -> infer from x if it's a literal)
-		return g.inferExprType(e.Left)
+		leftType := g.inferExprType(e.Left)
+		if leftType != nil {
+			return leftType
+		}
+		return g.inferExprType(e.Right)
 	case *mast.CallExpr:
 		// For function calls, we can't infer the return type without type info
+		// Unless we look up the function name in scope? (TODO)
 		return nil
 	case *mast.Ident:
-		// For identifiers, we can't infer without type information
-		return nil
+		// Look up in scope
+		return g.scope.Lookup(e.Name)
 	case *mast.FieldExpr:
 		// For field access, we can't infer without type information
 		return nil
@@ -1404,33 +1775,39 @@ func (g *Generator) inferExprType(expr mast.Expr) goast.Expr {
 
 func (g *Generator) genIfExpr(expr *mast.IfExpr) (goast.Expr, error) {
 	// If expressions need to be translated to an immediately-invoked function
-	// that returns a value, since Go if statements don't have values
-	// We infer the return type from the tail expression of the first branch
+	// that returns a value, since Go if statements don't have values.
 
-	// Infer the return type from the tail expression of any branch
+	// Use type info from checker if available
 	var returnType goast.Expr = goast.NewIdent("any") // Default fallback
 
-	// Try to infer type from first clause's tail expression
-	if len(expr.Clauses) > 0 && expr.Clauses[0].Body != nil && expr.Clauses[0].Body.Tail != nil {
-		if inferredType := g.inferExprType(expr.Clauses[0].Body.Tail); inferredType != nil {
-			returnType = inferredType
+	if typ, ok := g.typeInfo[expr]; ok {
+		goType, err := g.mapSemanticType(typ)
+		if err == nil && goType != nil {
+			returnType = goType
 		}
-	} else if expr.Else != nil && expr.Else.Tail != nil {
-		// Fall back to else branch
-		if inferredType := g.inferExprType(expr.Else.Tail); inferredType != nil {
-			returnType = inferredType
+	} else {
+		// Fallback to inference if type info missing (shouldn't happen if checker ran)
+		// Try to infer type from first clause's tail expression
+		if len(expr.Clauses) > 0 && expr.Clauses[0].Body != nil && expr.Clauses[0].Body.Tail != nil {
+			if inferredType := g.inferExprType(expr.Clauses[0].Body.Tail); inferredType != nil {
+				returnType = inferredType
+			}
+		} else if expr.Else != nil && expr.Else.Tail != nil {
+			// Fall back to else branch
+			if inferredType := g.inferExprType(expr.Else.Tail); inferredType != nil {
+				returnType = inferredType
+			}
 		}
 	}
 
-	// Generate the if chain as a statement
-	stmt, err := g.genIfChain(expr.Clauses, expr.Else)
+	// Generate the if chain as an expression (with return statements)
+	stmt, err := g.genIfChainWithReturns(expr.Clauses, expr.Else)
 	if err != nil {
 		return nil, err
 	}
 
 	// Wrap in an IIFE (immediately invoked function expression) with inferred return type
 	// func() T { <if-stmt> }()
-	// genBlock already adds return statements for tail expressions
 	return &goast.CallExpr{
 		Fun: &goast.FuncLit{
 			Type: &goast.FuncType{
@@ -1449,13 +1826,52 @@ func (g *Generator) genIfExpr(expr *mast.IfExpr) (goast.Expr, error) {
 	}, nil
 }
 
+// genIfChainWithReturns generates if chains for expression context (with return statements)
+func (g *Generator) genIfChainWithReturns(clauses []*mast.IfClause, elseBlock *mast.BlockExpr) (goast.Stmt, error) {
+	if len(clauses) == 0 {
+		if elseBlock != nil {
+			return g.genBlock(elseBlock, true)
+		}
+		return nil, nil
+	}
+
+	clause := clauses[0]
+	cond, err := g.genExpr(clause.Condition)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := g.genBlock(clause.Body, true)
+	if err != nil {
+		return nil, err
+	}
+
+	ifStmt := &goast.IfStmt{
+		Cond: cond,
+		Body: body,
+	}
+
+	elseStmt, err := g.genIfChainWithReturns(clauses[1:], elseBlock)
+	if err != nil {
+		return nil, err
+	}
+	if elseStmt != nil {
+		ifStmt.Else = elseStmt
+	}
+
+	return ifStmt, nil
+}
+
 func (g *Generator) genIndexExpr(expr *mast.IndexExpr) (goast.Expr, error) {
 	target, err := g.genExpr(expr.Target)
 	if err != nil {
 		return nil, err
 	}
 
-	index, err := g.genExpr(expr.Index)
+	if len(expr.Indices) == 0 {
+		return nil, fmt.Errorf("index expression missing index")
+	}
+	index, err := g.genExpr(expr.Indices[0])
 	if err != nil {
 		return nil, err
 	}
@@ -1464,6 +1880,51 @@ func (g *Generator) genIndexExpr(expr *mast.IndexExpr) (goast.Expr, error) {
 		X:     target,
 		Index: index,
 	}, nil
+}
+
+func (g *Generator) genTypeFromExpr(expr mast.Expr) (goast.Expr, error) {
+	switch e := expr.(type) {
+	case *mast.Ident:
+		return g.mapType(&mast.NamedType{Name: e})
+	case *mast.IndexExpr:
+		target, err := g.genTypeFromExpr(e.Target)
+		if err != nil {
+			return nil, err
+		}
+
+		var args []goast.Expr
+		for _, idx := range e.Indices {
+			a, err := g.genTypeFromExpr(idx)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, a)
+		}
+
+		if len(args) == 1 {
+			return &goast.IndexExpr{X: target, Index: args[0]}, nil
+		}
+		return &goast.IndexListExpr{X: target, Indices: args}, nil
+	case *mast.PrefixExpr:
+		if e.Op == mlexer.ASTERISK {
+			elem, err := g.genTypeFromExpr(e.Expr)
+			if err != nil {
+				return nil, err
+			}
+			return &goast.StarExpr{X: elem}, nil
+		}
+		// Map &T to *T in Go (assuming reference semantics)
+		if e.Op == mlexer.AMPERSAND {
+			elem, err := g.genTypeFromExpr(e.Expr)
+			if err != nil {
+				return nil, err
+			}
+			return &goast.StarExpr{X: elem}, nil
+		}
+		return nil, fmt.Errorf("unsupported prefix operator in type context: %s", e.Op)
+	default:
+		return nil, fmt.Errorf("unsupported expression in type context: %T", expr)
+	}
 }
 
 func (g *Generator) mapType(t mast.TypeExpr) (goast.Expr, error) {
@@ -1632,6 +2093,59 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 	}
 
 	// Interface
+	interfaceMethods := []*goast.Field{
+		{
+			Names: []*goast.Ident{goast.NewIdent(methodName)},
+			Type: &goast.FuncType{
+				Params:  &goast.FieldList{},
+				Results: &goast.FieldList{},
+			},
+		},
+	}
+
+	// Add As<Variant> methods to interface
+	for _, v := range decl.Variants {
+		variantName := v.Name.Name
+		methodName := "As" + variantName
+
+		// Return type: *VariantName[T, U...]
+		var returnType goast.Expr = goast.NewIdent(variantName)
+
+		// Add type params to return type
+		typeParamExprs := []goast.Expr{}
+		for _, tp := range decl.TypeParams {
+			if tParam, ok := tp.(*mast.TypeParam); ok {
+				typeParamExprs = append(typeParamExprs, goast.NewIdent(tParam.Name.Name))
+			}
+		}
+
+		if len(typeParamExprs) > 0 {
+			if len(typeParamExprs) == 1 {
+				returnType = &goast.IndexExpr{
+					X:     returnType,
+					Index: typeParamExprs[0],
+				}
+			} else {
+				returnType = &goast.IndexListExpr{
+					X:       returnType,
+					Indices: typeParamExprs,
+				}
+			}
+		}
+
+		interfaceMethods = append(interfaceMethods, &goast.Field{
+			Names: []*goast.Ident{goast.NewIdent(methodName)},
+			Type: &goast.FuncType{
+				Params: &goast.FieldList{},
+				Results: &goast.FieldList{
+					List: []*goast.Field{
+						{Type: &goast.StarExpr{X: returnType}},
+					},
+				},
+			},
+		})
+	}
+
 	decls = append(decls, &goast.GenDecl{
 		Tok: token.TYPE,
 		Specs: []goast.Spec{
@@ -1640,21 +2154,14 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 				TypeParams: typeParams,
 				Type: &goast.InterfaceType{
 					Methods: &goast.FieldList{
-						List: []*goast.Field{
-							{
-								Names: []*goast.Ident{goast.NewIdent(methodName)},
-								Type: &goast.FuncType{
-									Params:  &goast.FieldList{},
-									Results: &goast.FieldList{},
-								},
-							},
-						},
+						List: interfaceMethods,
 					},
 				},
 			},
 		},
 	})
 
+	// Variants
 	// Variants
 	for _, v := range decl.Variants {
 		variantName := v.Name.Name
@@ -1675,11 +2182,18 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 			})
 		}
 
+		// Re-generate type params for the struct (needs fresh identifiers)
+		variantTypeParams, err := g.genTypeParams(decl.TypeParams)
+		if err != nil {
+			return nil, err
+		}
+
 		decls = append(decls, &goast.GenDecl{
 			Tok: token.TYPE,
 			Specs: []goast.Spec{
 				&goast.TypeSpec{
-					Name: goast.NewIdent(variantName),
+					Name:       goast.NewIdent(variantName),
+					TypeParams: variantTypeParams,
 					Type: &goast.StructType{
 						Fields: &goast.FieldList{List: fields},
 					},
@@ -1688,12 +2202,43 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 		})
 
 		// Method implementation
+		// Receiver type must include type params: func (v Ok[T]) ...
+		recvTypeParams := []*goast.Expr{}
+		for _, tp := range decl.TypeParams {
+			if tParam, ok := tp.(*mast.TypeParam); ok {
+				var expr goast.Expr = goast.NewIdent(tParam.Name.Name)
+				recvTypeParams = append(recvTypeParams, &expr)
+			}
+		}
+
+		var recvType goast.Expr = goast.NewIdent(variantName)
+		if len(recvTypeParams) > 0 {
+			// Convert []*Expr to []Expr
+			indices := []goast.Expr{}
+			for _, e := range recvTypeParams {
+				indices = append(indices, *e)
+			}
+
+			if len(indices) == 1 {
+				recvType = &goast.IndexExpr{
+					X:     recvType,
+					Index: indices[0],
+				}
+			} else {
+				recvType = &goast.IndexListExpr{
+					X:       recvType,
+					Indices: indices,
+				}
+			}
+		}
+
+		// Method implementation: isEnumName
 		decls = append(decls, &goast.FuncDecl{
 			Recv: &goast.FieldList{
 				List: []*goast.Field{
 					{
 						Names: []*goast.Ident{goast.NewIdent("v")},
-						Type:  goast.NewIdent(variantName),
+						Type:  &goast.StarExpr{X: recvType}, // Pointer receiver
 					},
 				},
 			},
@@ -1704,6 +2249,74 @@ func (g *Generator) genEnumDecl(decl *mast.EnumDecl) ([]goast.Decl, error) {
 			},
 			Body: &goast.BlockStmt{},
 		})
+
+		// Implement As<Variant> methods
+		for _, otherV := range decl.Variants {
+			otherVariantName := otherV.Name.Name
+			asMethodName := "As" + otherVariantName
+
+			// Return type: *OtherVariantName[T, U...]
+			var returnType goast.Expr = goast.NewIdent(otherVariantName)
+
+			// Add type params to return type
+			typeParamExprs := []goast.Expr{}
+			for _, tp := range decl.TypeParams {
+				if tParam, ok := tp.(*mast.TypeParam); ok {
+					typeParamExprs = append(typeParamExprs, goast.NewIdent(tParam.Name.Name))
+				}
+			}
+
+			if len(typeParamExprs) > 0 {
+				if len(typeParamExprs) == 1 {
+					returnType = &goast.IndexExpr{
+						X:     returnType,
+						Index: typeParamExprs[0],
+					}
+				} else {
+					returnType = &goast.IndexListExpr{
+						X:       returnType,
+						Indices: typeParamExprs,
+					}
+				}
+			}
+
+			// Body: return v or return nil
+			var bodyStmt goast.Stmt
+			if otherVariantName == variantName {
+				// return v (v is already pointer)
+				bodyStmt = &goast.ReturnStmt{
+					Results: []goast.Expr{goast.NewIdent("v")},
+				}
+			} else {
+				// return nil
+				bodyStmt = &goast.ReturnStmt{
+					Results: []goast.Expr{goast.NewIdent("nil")},
+				}
+			}
+
+			decls = append(decls, &goast.FuncDecl{
+				Recv: &goast.FieldList{
+					List: []*goast.Field{
+						{
+							Names: []*goast.Ident{goast.NewIdent("v")},
+							Type:  &goast.StarExpr{X: recvType}, // Pointer receiver
+						},
+					},
+				},
+				Name: goast.NewIdent(asMethodName),
+				Type: &goast.FuncType{
+					Params: &goast.FieldList{},
+					Results: &goast.FieldList{
+						List: []*goast.Field{
+							{Type: &goast.StarExpr{X: returnType}},
+						},
+					},
+				},
+				Body: &goast.BlockStmt{
+					List: []goast.Stmt{bodyStmt},
+				},
+			})
+		}
 	}
 
 	return decls, nil
@@ -1833,11 +2446,10 @@ func (g *Generator) genMatchExpr(expr *mast.MatchExpr) (goast.Expr, error) {
 	return g.genPrimitiveMatch(expr, subject)
 }
 
-// genEnumMatch generates match expression for enums using if-else with type assertions
+// genEnumMatch generates match expression for enums using if-else with AsVariant methods
 func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goast.Expr, error) {
-	// Use if-else chain with type assertions on interface{}
-	// Convert subject to interface{} first, then use type assertions
-	subjectVar := "_subject_any"
+	// Use if-else chain with AsVariant methods
+	subjectVar := "_subject"
 
 	var ifStmt goast.Stmt
 	var currentElse goast.Stmt
@@ -1845,7 +2457,7 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 	// Build if-else chain from bottom up (right to left in AST)
 	for i := len(expr.Arms) - 1; i >= 0; i-- {
 		arm := expr.Arms[i]
-		body, err := g.genBlock(arm.Body)
+		body, err := g.genBlock(arm.Body, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1881,7 +2493,6 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 			}
 
 			varName := fmt.Sprintf("_v%d", i)
-			okVarName := fmt.Sprintf("_ok%d", i)
 			bodyStmts := []goast.Stmt{}
 
 			// Generate variable bindings for pattern variables
@@ -1902,22 +2513,37 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 			// Add body statements
 			bodyStmts = append(bodyStmts, body.List...)
 
-			// Generate: if _v, _ok := _subject_any.(Variant); _ok { ... }
+			// Ensure we return from the IIFE
+			hasReturn := false
+			if len(body.List) > 0 {
+				_, hasReturn = body.List[len(body.List)-1].(*goast.ReturnStmt)
+			}
+			if !hasReturn {
+				bodyStmts = append(bodyStmts, &goast.ReturnStmt{
+					Results: []goast.Expr{goast.NewIdent("nil")},
+				})
+			}
+
+			// Generate: if _v := _subject.AsVariant(); _v != nil { ... }
 			ifStmt = &goast.IfStmt{
 				Init: &goast.AssignStmt{
-					Lhs: []goast.Expr{
-						goast.NewIdent(varName),
-						goast.NewIdent(okVarName),
-					},
+					Lhs: []goast.Expr{goast.NewIdent(varName)},
 					Tok: token.DEFINE,
 					Rhs: []goast.Expr{
-						&goast.TypeAssertExpr{
-							X:    goast.NewIdent(subjectVar),
-							Type: goast.NewIdent(variantName),
+						&goast.CallExpr{
+							Fun: &goast.SelectorExpr{
+								X:   goast.NewIdent(subjectVar),
+								Sel: goast.NewIdent("As" + variantName),
+							},
+							Args: []goast.Expr{},
 						},
 					},
 				},
-				Cond: goast.NewIdent(okVarName),
+				Cond: &goast.BinaryExpr{
+					X:  goast.NewIdent(varName),
+					Op: token.NEQ,
+					Y:  goast.NewIdent("nil"),
+				},
 				Body: &goast.BlockStmt{List: bodyStmts},
 				Else: currentElse,
 			}
@@ -1936,7 +2562,7 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 		currentElse = ifStmt
 	}
 
-	// Wrap in IIFE with conversion to interface{}
+	// Wrap in IIFE
 	return &goast.CallExpr{
 		Fun: &goast.FuncLit{
 			Type: &goast.FuncType{
@@ -1955,7 +2581,6 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 							Specs: []goast.Spec{
 								&goast.ValueSpec{
 									Names:  []*goast.Ident{goast.NewIdent(subjectVar)},
-									Type:   goast.NewIdent("any"), // Explicitly type as interface{}
 									Values: []goast.Expr{subject},
 								},
 							},
@@ -1980,7 +2605,7 @@ func (g *Generator) genEnumMatch(expr *mast.MatchExpr, subject goast.Expr) (goas
 func (g *Generator) genPrimitiveMatch(expr *mast.MatchExpr, subject goast.Expr) (goast.Expr, error) {
 	cases := []goast.Stmt{}
 	for _, arm := range expr.Arms {
-		body, err := g.genBlock(arm.Body)
+		body, err := g.genBlock(arm.Body, true)
 		if err != nil {
 			return nil, err
 		}

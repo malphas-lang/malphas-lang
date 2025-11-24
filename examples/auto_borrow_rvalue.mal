@@ -1,0 +1,19 @@
+package main;
+
+struct Point {
+    x: int,
+    y: int
+}
+
+impl Point {
+    fn len(self: &Point) -> int {
+        self.x + self.y
+    }
+}
+
+fn main() {
+    // Calling method on r-value (struct literal)
+    // In Go, this fails for pointer receivers: Point{...}.Len()
+    let l = Point { x: 10, y: 20 }.len();
+    println(l);
+}

@@ -4,9 +4,11 @@
       "Name": "traits"
     }
   },
+  "Mods": null,
   "Uses": null,
   "Decls": [
     {
+      "Pub": false,
       "Name": {
         "Name": "Foo"
       },
@@ -14,6 +16,7 @@
       "Where": null,
       "Methods": [
         {
+          "Pub": false,
           "Unsafe": false,
           "Name": {
             "Name": "required"
@@ -40,6 +43,7 @@
           "Body": null
         },
         {
+          "Pub": false,
           "Unsafe": false,
           "Name": {
             "Name": "defaulted"
@@ -79,6 +83,7 @@
       ]
     },
     {
+      "Pub": false,
       "Name": {
         "Name": "Bar"
       },
@@ -93,6 +98,7 @@
       "Where": null,
       "Methods": [
         {
+          "Pub": false,
           "Unsafe": false,
           "Name": {
             "Name": "compute"
@@ -119,6 +125,7 @@
           "Body": null
         },
         {
+          "Pub": false,
           "Unsafe": false,
           "Name": {
             "Name": "fallback"

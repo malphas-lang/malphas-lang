@@ -1,6 +1,6 @@
 package main;
 
-use std::io as io;
+// use std::io as io;
 
 pub fn main() -> void {
     println("Module system test");

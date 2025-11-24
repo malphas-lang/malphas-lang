@@ -7,13 +7,12 @@ fn worker(c: IntChan) {
 }
 
 fn main() {
-    let c = make(IntChan);
+    let c = Channel[int]::new(0);
     spawn worker(c);
 
     select {
-        let _ = <-c => {
-            // print("Received: " + x); // String concatenation with int might fail if not handled
-            // For now just receive
+        case let v = <-c => {
+            println(v);
         }
     }
 }

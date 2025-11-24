@@ -46,7 +46,7 @@ func TestNullSafety(t *testing.T) {
 			}
 			`,
 			hasError: true,
-			errorMsg: "cannot access field name on nullable type User?",
+			errorMsg: "type User? has no field name",
 		},
 		{
 			name: "unwrap optional",

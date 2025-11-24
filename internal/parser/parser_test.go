@@ -2148,8 +2148,12 @@ fn main() {
 		t.Fatalf("expected index expression before handler access, got %T", calleeField.Target)
 	}
 
-	if idxLit, ok := indexExpr.Index.(*ast.IntegerLit); !ok || idxLit.Text != "0" {
-		t.Fatalf("expected index literal '0', got %#v", indexExpr.Index)
+	if len(indexExpr.Indices) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(indexExpr.Indices))
+	}
+
+	if idxLit, ok := indexExpr.Indices[0].(*ast.IntegerLit); !ok || idxLit.Text != "0" {
+		t.Fatalf("expected index literal '0', got %#v", indexExpr.Indices[0])
 	}
 
 	innerField, ok := indexExpr.Target.(*ast.FieldExpr)
@@ -2890,6 +2894,8 @@ fn main() {
 	assertNoErrors(t, errs)
 
 	fn := file.Decls[0].(*ast.FnDecl)
+
+	// If expression used as statement (not in value context) should be IfStmt
 	if len(fn.Body.Stmts) != 1 {
 		t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
 	}

@@ -11,6 +11,7 @@ fn main() {
     spawn worker(ch);
     
     let x = <-ch;
+    println(x);
     if x != 42 {
         // panic("expected 42");
     }

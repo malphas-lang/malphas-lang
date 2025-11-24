@@ -1,0 +1,45 @@
+package main;
+
+fn main() {
+    println("--- Test 1: Basic Literals ---");
+    let a = if true { 10 } else { 20 };
+    println(a);
+
+    println("--- Test 2: Identifiers ---");
+    let x = 100;
+    let y = 200;
+    let b = if true { x } else { y };
+    println(b);
+
+    println("--- Test 3: Binary Expressions ---");
+    let c = if false { x + 1 } else { y + 1 };
+    println(c);
+
+    println("--- Test 4: Nested If Expressions ---");
+    let d = if true {
+        if false { 1 } else { 2 }
+    } else {
+        3
+    };
+    println(d);
+
+    println("--- Test 5: Side effects ---");
+    let e = if true {
+        println("Executing true branch");
+        5
+    } else {
+        println("Executing false branch");
+        0
+    };
+    println(e);
+
+    println("--- Test 6: Type Safety (Literals) ---");
+    let f = if true { 10 } else { 20 };
+    let g = f + 5; // Should work if f is int
+    println(g);
+
+    println("--- Test 7: Type Safety (Identifiers) ---");
+    let h = if true { x } else { y }; // x, y are vars
+    let i = h + 5; // Should fail if h is any
+    println(i);
+}

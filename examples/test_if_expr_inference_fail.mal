@@ -1,0 +1,15 @@
+package main;
+
+fn get_int() -> int {
+    return 5;
+}
+
+fn main() {
+    println("Testing inference failure fallback to 'any'");
+    // get_int() returns int, but inferExprType returns nil for CallExpr
+    // So if-expr return type defaults to 'any'
+    // Assigning 'any' to 'int' should fail in Go
+    let z: int = if true { get_int() } else { 0 };
+    println(z);
+}
+

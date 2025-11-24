@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
@@ -32,6 +33,8 @@ type Checker struct {
 	CurrentFile string
 	// LoadingModules tracks modules currently being loaded (for cycle detection)
 	LoadingModules map[string]bool
+	// ExprTypes maps AST expressions to their resolved types
+	ExprTypes map[ast.Expr]Type
 }
 
 // NewChecker creates a new type checker.
@@ -43,6 +46,7 @@ func NewChecker() *Checker {
 		MethodTable:    make(map[string]map[string]*Function),
 		Modules:        make(map[string]*ModuleInfo),
 		LoadingModules: make(map[string]bool),
+		ExprTypes:      make(map[ast.Expr]Type),
 	}
 
 	// Add built-in types
@@ -196,6 +200,22 @@ func (c *Checker) resolveType(typ ast.TypeExpr) Type {
 	case *ast.OptionalType:
 		elem := c.resolveType(t.Elem)
 		return &Optional{Elem: elem}
+	case *ast.ArrayType:
+		elem := c.resolveType(t.Elem)
+		var length int64 = 0
+		if intLit, ok := t.Len.(*ast.IntegerLit); ok {
+			if val, err := strconv.ParseInt(intLit.Text, 10, 64); err == nil {
+				length = val
+			} else {
+				c.reportError("invalid array length", t.Len.Span())
+			}
+		} else {
+			c.reportError("array length must be an integer literal", t.Len.Span())
+		}
+		return &Array{Elem: elem, Len: length}
+	case *ast.SliceType:
+		elem := c.resolveType(t.Elem)
+		return &Slice{Elem: elem}
 	default:
 		return TypeVoid
 	}
@@ -210,8 +230,11 @@ func (c *Checker) resolveTypeFromExpr(expr ast.Expr) Type {
 	case *ast.IndexExpr:
 		// Handle generic type instantiation in expression context: List[int]
 		base := c.resolveTypeFromExpr(e.Target)
-		arg := c.resolveTypeFromExpr(e.Index)
-		return &GenericInstance{Base: base, Args: []Type{arg}}
+		var args []Type
+		for _, idx := range e.Indices {
+			args = append(args, c.resolveTypeFromExpr(idx))
+		}
+		return &GenericInstance{Base: base, Args: args}
 	default:
 		c.reportError(fmt.Sprintf("expected type, got %T", expr), expr.Span())
 		return TypeVoid
@@ -586,6 +609,12 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 }
 
 func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
+	typ := c.checkExprInternal(expr, scope, inUnsafe)
+	c.ExprTypes[expr] = typ
+	return typ
+}
+
+func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 	switch e := expr.(type) {
 	case *ast.UnsafeBlock:
 		return c.checkBlock(e.Block, scope, true)
@@ -630,18 +659,20 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				if ident, ok := indexExpr.Target.(*ast.Ident); ok && ident.Name == "Channel" {
 					isChannel = true
 					// Resolve the type argument
-					if typeIdent, ok := indexExpr.Index.(*ast.Ident); ok {
-						sym := scope.Lookup(typeIdent.Name)
-						if sym != nil {
-							elemType = sym.Type
-						} else {
-							switch typeIdent.Name {
-							case "int":
-								elemType = TypeInt
-							case "string":
-								elemType = TypeString
-							case "bool":
-								elemType = TypeBool
+					if len(indexExpr.Indices) > 0 {
+						if typeIdent, ok := indexExpr.Indices[0].(*ast.Ident); ok {
+							sym := scope.Lookup(typeIdent.Name)
+							if sym != nil {
+								elemType = sym.Type
+							} else {
+								switch typeIdent.Name {
+								case "int":
+									elemType = TypeInt
+								case "string":
+									elemType = TypeString
+								case "bool":
+									elemType = TypeBool
+								}
 							}
 						}
 					}
@@ -654,6 +685,57 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 					return &Function{
 						Params: []Type{TypeInt},
 						Return: &Channel{Elem: elemType, Dir: SendRecv},
+					}
+				}
+			}
+
+			// Handle user-defined generic types: Result[int, string]::Ok
+			leftType := c.resolveTypeFromExpr(e.Left)
+			if genInst, ok := leftType.(*GenericInstance); ok {
+				if enumType, ok := genInst.Base.(*Enum); ok {
+					if rightIdent, ok := e.Right.(*ast.Ident); ok {
+						// Look for variant
+						for _, variant := range enumType.Variants {
+							if variant.Name == rightIdent.Name {
+								// Found variant. Construct constructor function type.
+								// Substitute type params with args from GenericInstance
+								subst := make(map[string]Type)
+								for i, tp := range enumType.TypeParams {
+									if i < len(genInst.Args) {
+										subst[tp.Name] = genInst.Args[i]
+									}
+								}
+
+								var params []Type
+								for _, p := range variant.Payload {
+									params = append(params, Substitute(p, subst))
+								}
+
+								return &Function{
+									Params: params,
+									Return: genInst, // Return the instantiated type
+								}
+							}
+						}
+					}
+				}
+			} else if enumType, ok := leftType.(*Enum); ok {
+				// Handle non-generic Enum::Variant
+				if rightIdent, ok := e.Right.(*ast.Ident); ok {
+					// Look for variant
+					for _, variant := range enumType.Variants {
+						if variant.Name == rightIdent.Name {
+							// Found variant. Construct constructor function type.
+							var params []Type
+							for _, p := range variant.Payload {
+								params = append(params, p)
+							}
+
+							return &Function{
+								Params: params,
+								Return: enumType, // Return the enum type
+							}
+						}
 					}
 				}
 			}
@@ -949,6 +1031,24 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			return TypeVoid
 		}
 
+		if genInst, ok := targetType.(*GenericInstance); ok {
+			if s, ok := genInst.Base.(*Struct); ok {
+				subst := make(map[string]Type)
+				for i, tp := range s.TypeParams {
+					if i < len(genInst.Args) {
+						subst[tp.Name] = genInst.Args[i]
+					}
+				}
+
+				for _, f := range s.Fields {
+					if f.Name == e.Field.Name {
+						return Substitute(f.Type, subst)
+					}
+				}
+				return TypeVoid
+			}
+		}
+
 		c.reportError(fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name), e.Span())
 		return TypeVoid
 	case *ast.BlockExpr:
@@ -956,22 +1056,55 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		return TypeVoid // Simplified
 	case *ast.ArrayLiteral:
 		// Check all elements
-		for _, elem := range e.Elements {
-			c.checkExpr(elem, scope, inUnsafe)
+		var elemType Type
+		if len(e.Elements) > 0 {
+			elemType = c.checkExpr(e.Elements[0], scope, inUnsafe)
+		} else {
+			elemType = TypeInt // Default to int for empty array
 		}
-		// Return TypeInt as placeholder for array type, consistent with IndexExpr logic
-		return TypeInt
+
+		for i, elem := range e.Elements {
+			t := c.checkExpr(elem, scope, inUnsafe)
+			if i > 0 && !c.assignableTo(t, elemType) {
+				// If the first element was int, and this is float, maybe upgrade?
+				// For now, just enforce homogeneity based on first element.
+				c.reportError(fmt.Sprintf("mixed types in array literal: %s vs %s", t, elemType), elem.Span())
+			}
+		}
+		// Return proper Array type with inferred length
+		return &Array{Elem: elemType, Len: int64(len(e.Elements))}
 	case *ast.StructLiteral:
-		sym := scope.Lookup(e.Name.Name)
-		if sym == nil {
-			c.reportError(fmt.Sprintf("undefined struct: %s", e.Name.Name), e.Name.Span())
+		// Resolve the type of the struct (could be generic instantiation)
+		targetType := c.resolveTypeFromExpr(e.Name)
+		if targetType == TypeVoid {
 			return TypeVoid
 		}
 
-		structType := c.resolveStruct(sym.Type)
+		structType := c.resolveStruct(targetType)
 		if structType == nil {
-			c.reportError(fmt.Sprintf("%s is not a struct", e.Name.Name), e.Name.Span())
+			c.reportError(fmt.Sprintf("%s is not a struct", targetType), e.Name.Span())
 			return TypeVoid
+		}
+
+		// Handle generics
+		var subst map[string]Type
+		if len(structType.TypeParams) > 0 {
+			if genInst, ok := targetType.(*GenericInstance); ok {
+				// Verify args count
+				if len(genInst.Args) != len(structType.TypeParams) {
+					c.reportError(fmt.Sprintf("type argument count mismatch: expected %d, got %d", len(structType.TypeParams), len(genInst.Args)), e.Name.Span())
+					return TypeVoid
+				}
+				subst = make(map[string]Type)
+				for i, tp := range structType.TypeParams {
+					subst[tp.Name] = genInst.Args[i]
+				}
+			} else {
+				// Missing type arguments
+				// TODO: Implement type inference for struct literals
+				c.reportError(fmt.Sprintf("generic struct %s requires type arguments", structType.Name), e.Name.Span())
+				return TypeVoid
+			}
 		}
 
 		// Check fields
@@ -987,6 +1120,11 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				continue
 			}
 
+			// Substitute type parameters in field type
+			if len(subst) > 0 {
+				expectedType = Substitute(expectedType, subst)
+			}
+
 			valType := c.checkExpr(f.Value, scope, inUnsafe)
 			if !c.assignableTo(valType, expectedType) {
 				c.reportError(fmt.Sprintf("cannot assign type %s to field %s of type %s", valType, f.Name.Name, expectedType), f.Value.Span())
@@ -999,7 +1137,8 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			c.reportError(fmt.Sprintf("missing field %s in struct literal", name), e.Span())
 		}
 
-		return structType
+		// Return the instantiated type (GenericInstance) if generic, otherwise Struct
+		return targetType
 	case *ast.IfExpr:
 		// Check all if clauses - all branches must return the same type
 		var resultType Type
@@ -1033,41 +1172,38 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		}
 		return resultType
 	case *ast.IndexExpr:
-		// If this is a type instantiation (generic), handle separately
-		if ident, ok := e.Target.(*ast.Ident); ok {
-			if sym := scope.Lookup(ident.Name); sym != nil {
-				if fnType, ok := sym.Type.(*Function); ok && len(fnType.TypeParams) > 0 {
-					// This is generic function instantiation
-					// Type argument is in e.Index
-					typeArg := c.resolveType(e.Index.(ast.TypeExpr))
+		// Evaluate target first to see what we are indexing
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
 
-					// Create substitution map
-					if len(fnType.TypeParams) != 1 {
-						c.reportError("type argument count mismatch", e.Span())
-						return TypeVoid
-					}
+		// 1. Check for generic function instantiation: fn[T](...)
+		if fnType, ok := targetType.(*Function); ok && len(fnType.TypeParams) > 0 {
+			if len(fnType.TypeParams) != len(e.Indices) {
+				c.reportError(fmt.Sprintf("type argument count mismatch: expected %d, got %d", len(fnType.TypeParams), len(e.Indices)), e.Span())
+				return TypeVoid
+			}
 
-					subst := make(map[string]Type)
-					subst[fnType.TypeParams[0].Name] = typeArg
+			subst := make(map[string]Type)
+			for i, tp := range fnType.TypeParams {
+				// Indices are type expressions here
+				typeArg := c.resolveTypeFromExpr(e.Indices[i])
+				subst[tp.Name] = typeArg
+			}
 
-					// Substitute in params and return type
-					var newParams []Type
-					for _, p := range fnType.Params {
-						newParams = append(newParams, Substitute(p, subst))
-					}
+			// Substitute in params and return type
+			var newParams []Type
+			for _, p := range fnType.Params {
+				newParams = append(newParams, Substitute(p, subst))
+			}
 
-					return &Function{
-						Unsafe:     fnType.Unsafe,
-						TypeParams: nil, // Instantiated
-						Params:     newParams,
-						Return:     Substitute(fnType.Return, subst),
-					}
-				}
+			return &Function{
+				Unsafe:     fnType.Unsafe,
+				TypeParams: nil, // Instantiated
+				Params:     newParams,
+				Return:     Substitute(fnType.Return, subst),
 			}
 		}
 
-		targetType := c.checkExpr(e.Target, scope, inUnsafe)
-
+		// 2. Standard array indexing logic (AUTO-DEREF)
 		// AUTO-DEREF: Unwrap references and pointers
 		for {
 			if ref, ok := targetType.(*Reference); ok {
@@ -1081,11 +1217,17 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			break
 		}
 
-		indexType := c.checkExpr(e.Index, scope, inUnsafe)
+		if len(e.Indices) == 0 {
+			c.reportError("index expression missing index", e.Span())
+			return TypeVoid
+		}
+
+		// For now, we assume single index for arrays
+		indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
 
 		// Index must be int
 		if indexType != TypeInt {
-			c.reportError(fmt.Sprintf("index must be int, got %s", indexType), e.Index.Span())
+			c.reportError(fmt.Sprintf("index must be int, got %s", indexType), e.Indices[0].Span())
 		}
 
 		// For now, we don't have array/slice types in the type system yet
@@ -1139,6 +1281,27 @@ func (c *Checker) assignableTo(src, dst Type) bool {
 		return false
 	}
 
+	// Handle Array assignment
+	if dstArr, ok := dst.(*Array); ok {
+		if srcArr, ok := src.(*Array); ok {
+			if dstArr.Len != srcArr.Len {
+				return false
+			}
+			return c.assignableTo(srcArr.Elem, dstArr.Elem)
+		}
+	}
+
+	// Handle Slice assignment
+	if dstSlice, ok := dst.(*Slice); ok {
+		// Allow Array to Slice assignment
+		if srcArr, ok := src.(*Array); ok {
+			return c.assignableTo(srcArr.Elem, dstSlice.Elem)
+		}
+		if srcSlice, ok := src.(*Slice); ok {
+			return c.assignableTo(srcSlice.Elem, dstSlice.Elem)
+		}
+	}
+
 	// Handle Channel types
 	if srcChan, ok := src.(*Channel); ok {
 		if dstChan, ok := dst.(*Channel); ok {
@@ -1174,6 +1337,7 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 
 	// Check if subject is Enum or Primitive or Optional
 	var enumType *Enum
+	var genericArgs []Type
 	var optionalType *Optional
 	isEnum := false
 	isOptional := false
@@ -1181,6 +1345,12 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 	if e, ok := resolvedType.(*Enum); ok {
 		enumType = e
 		isEnum = true
+	} else if g, ok := resolvedType.(*GenericInstance); ok {
+		if e, ok := g.Base.(*Enum); ok {
+			enumType = e
+			genericArgs = g.Args
+			isEnum = true
+		}
 	} else if o, ok := resolvedType.(*Optional); ok {
 		optionalType = o
 		isOptional = true
@@ -1264,13 +1434,29 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 				continue
 			}
 
+			// Prepare substitution map if generic
+			subst := make(map[string]Type)
+			if len(genericArgs) > 0 {
+				for i, tp := range enumType.TypeParams {
+					if i < len(genericArgs) {
+						subst[tp.Name] = genericArgs[i]
+					}
+				}
+			}
+
 			// Bind payload variables
 			for i, arg := range args {
 				if ident, ok := arg.(*ast.Ident); ok {
+					// Substitute type params in payload type
+					payloadType := variant.Payload[i]
+					if len(subst) > 0 {
+						payloadType = Substitute(payloadType, subst)
+					}
+
 					// Bind variable to payload type
 					armScope.Insert(ident.Name, &Symbol{
 						Name:    ident.Name,
-						Type:    variant.Payload[i],
+						Type:    payloadType,
 						DefNode: ident,
 					})
 				} else {
@@ -1370,6 +1556,9 @@ func (c *Checker) resolveStruct(t Type) *Struct {
 	}
 	if n, ok := t.(*Named); ok && n.Ref != nil {
 		return c.resolveStruct(n.Ref)
+	}
+	if g, ok := t.(*GenericInstance); ok {
+		return c.resolveStruct(g.Base)
 	}
 	return nil
 }

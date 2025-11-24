@@ -1,0 +1,11 @@
+package main;
+
+fn main() {
+    let x = if true { 42 } else { 0 };
+    println("x is: ");
+    println(x);
+
+    let y = if false { 10 } else { 20 };
+    println("y is: ");
+    println(y);
+}

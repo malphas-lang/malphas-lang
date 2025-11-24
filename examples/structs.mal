@@ -12,8 +12,8 @@ enum Shape {
 
 const PI: int = 3;
 
-fn consume(x: int) {}
-fn consumePoint(p: Point) {}
+fn consume(x: int) { println(x); }
+fn consumePoint(p: Point) { println(p.x); }
 
 fn main() {
     let x = PI;

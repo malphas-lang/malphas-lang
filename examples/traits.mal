@@ -10,7 +10,7 @@ struct Person {
 
 impl Greeter for Person {
     fn greet(name: string) {
-        // Do nothing
+        println("Hello " + name);
     }
 }
 

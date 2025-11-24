@@ -6,7 +6,7 @@ enum Shape {
 }
 
 fn main() {
-    let shape = Circle(5);
+    let shape = Shape::Circle(5);
     
     // This should bind 'radius' from the Circle variant
     let area = match shape {

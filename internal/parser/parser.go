@@ -1800,8 +1800,6 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseLetStmt()
 	case lexer.RETURN:
 		return p.parseReturnStmt()
-	case lexer.IF:
-		return p.parseIfStmt()
 	case lexer.WHILE:
 		return p.parseWhileStmt()
 	case lexer.FOR:
@@ -1924,6 +1922,24 @@ func (p *Parser) parseExprStmt() ast.Stmt {
 		return nil
 	}
 
+	// Special handling for if expressions
+	if ifExpr, ok := expr.(*ast.IfExpr); ok {
+		// Check if this should be a tail expression (at end of block)
+		if p.curTok.Type == lexer.RBRACE && p.allowBlockTail && p.peekTok.Type == lexer.RBRACE {
+			p.pendingTail = ifExpr
+			return nil
+		}
+
+		// Treat as statement
+		if p.curTok.Type == lexer.RBRACE {
+			p.nextToken()
+		} else if p.curTok.Type == lexer.SEMICOLON {
+			p.nextToken()
+		}
+
+		return ast.NewIfStmt(ifExpr.Clauses, ifExpr.Else, ifExpr.Span())
+	}
+
 	switch p.peekTok.Type {
 	case lexer.SEMICOLON:
 		if !p.expect(lexer.SEMICOLON) {
@@ -1993,7 +2009,7 @@ func (p *Parser) parseIfExpr() ast.Expr {
 			break
 		}
 
-		p.nextToken()
+		p.nextToken() // consume '}'
 		exprSpan = mergeSpan(exprSpan, p.curTok.Span)
 
 		if p.peekTok.Type == lexer.IF {
@@ -2027,25 +2043,6 @@ func (p *Parser) parseIfExpr() ast.Expr {
 	}
 
 	return ast.NewIfExpr(clauses, nil, exprSpan)
-}
-
-func (p *Parser) parseIfStmt() ast.Stmt {
-	expr := p.parseIfExpr()
-	if expr == nil {
-		return nil
-	}
-
-	ifExpr, ok := expr.(*ast.IfExpr)
-	if !ok {
-		p.reportError("expected if expression", expr.Span())
-		return nil
-	}
-
-	if p.curTok.Type == lexer.RBRACE {
-		p.nextToken()
-	}
-
-	return ast.NewIfStmt(ifExpr.Clauses, ifExpr.Else, ifExpr.Span())
 }
 
 func (p *Parser) parseWhileStmt() ast.Stmt {
@@ -2363,7 +2360,7 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	return ident
 }
 
-func (p *Parser) parseStructLiteral(name *ast.Ident) ast.Expr {
+func (p *Parser) parseStructLiteral(name ast.Expr) ast.Expr {
 	p.nextToken() // move to '{'
 
 	fields := make([]*ast.StructLiteralField, 0)
@@ -2574,9 +2571,25 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 
 	p.nextToken()
 
-	index := p.parseExpr()
-	if index == nil {
-		return nil
+	indices := []ast.Expr{}
+
+	if p.curTok.Type != lexer.RBRACKET {
+		index := p.parseExpr()
+		if index == nil {
+			return nil
+		}
+		indices = append(indices, index)
+
+		for p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // move to comma
+			p.nextToken() // move to next index start
+
+			index = p.parseExpr()
+			if index == nil {
+				return nil
+			}
+			indices = append(indices, index)
+		}
 	}
 
 	if !p.expect(lexer.RBRACKET) {
@@ -2584,10 +2597,32 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 	}
 
 	span := mergeSpan(target.Span(), openTok.Span)
-	span = mergeSpan(span, index.Span())
+	if len(indices) > 0 {
+		span = mergeSpan(span, indices[len(indices)-1].Span())
+	}
 	span = mergeSpan(span, p.curTok.Span)
 
-	return ast.NewIndexExpr(target, index, span)
+	idxExpr := ast.NewIndexExpr(target, indices, span)
+
+	// Check for struct literal with generic type: Ident[T] { ... }
+	if p.peekTok.Type == lexer.LBRACE {
+		// Disambiguate from block:
+		// 1. Empty struct: Ident[T] {} -> peekTokenAt(1) == RBRACE
+		// 2. Non-empty: Ident[T] { field: ... } -> peekTokenAt(1) == IDENT && peekTokenAt(2) == COLON
+
+		isStruct := false
+		if p.peekTokenAt(1).Type == lexer.RBRACE {
+			isStruct = true
+		} else if p.peekTokenAt(1).Type == lexer.IDENT && p.peekTokenAt(2).Type == lexer.COLON {
+			isStruct = true
+		}
+
+		if isStruct {
+			return p.parseStructLiteral(idxExpr)
+		}
+	}
+
+	return idxExpr
 }
 
 func (p *Parser) peekPrecedence() int {

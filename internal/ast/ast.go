@@ -1235,20 +1235,20 @@ func (*FieldExpr) exprNode() {}
 
 // IndexExpr represents an indexing operation (target[index]).
 type IndexExpr struct {
-	Target Expr
-	Index  Expr
-	span   lexer.Span
+	Target  Expr
+	Indices []Expr
+	span    lexer.Span
 }
 
 // Span returns the expression span.
 func (e *IndexExpr) Span() lexer.Span { return e.span }
 
 // NewIndexExpr constructs an index expression node.
-func NewIndexExpr(target, index Expr, span lexer.Span) *IndexExpr {
+func NewIndexExpr(target Expr, indices []Expr, span lexer.Span) *IndexExpr {
 	return &IndexExpr{
-		Target: target,
-		Index:  index,
-		span:   span,
+		Target:  target,
+		Indices: indices,
+		span:    span,
 	}
 }
 
@@ -1390,7 +1390,7 @@ func (f *StructLiteralField) SetSpan(span lexer.Span) {
 
 // StructLiteral represents a struct instantiation.
 type StructLiteral struct {
-	Name   *Ident
+	Name   Expr // Can be *Ident or *IndexExpr (for generics)
 	Fields []*StructLiteralField
 	span   lexer.Span
 }
@@ -1399,7 +1399,7 @@ type StructLiteral struct {
 func (l *StructLiteral) Span() lexer.Span { return l.span }
 
 // NewStructLiteral constructs a struct literal node.
-func NewStructLiteral(name *Ident, fields []*StructLiteralField, span lexer.Span) *StructLiteral {
+func NewStructLiteral(name Expr, fields []*StructLiteralField, span lexer.Span) *StructLiteral {
 	return &StructLiteral{
 		Name:   name,
 		Fields: fields,
@@ -1414,5 +1414,3 @@ func (l *StructLiteral) SetSpan(span lexer.Span) {
 
 // exprNode marks StructLiteral as an expression.
 func (*StructLiteral) exprNode() {}
-
-

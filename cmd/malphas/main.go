@@ -88,6 +88,9 @@ func compileToTemp(filename string) (string, error) {
 
 	// Code Generation
 	generator := codegen.NewGenerator()
+	// Pass type info to generator
+	generator.SetTypeInfo(checker.ExprTypes)
+	
 	// Extract loaded modules and pass to generator
 	moduleFiles := make(map[string]*ast.File)
 	for name, moduleInfo := range checker.Modules {

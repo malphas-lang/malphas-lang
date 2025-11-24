@@ -52,6 +52,11 @@ func Substitute(t Type, subst map[string]Type) Type {
 			return replacement
 		}
 		return t
+	case *Named:
+		if replacement, ok := subst[t.Name]; ok {
+			return replacement
+		}
+		return t
 	case *GenericInstance:
 		var newArgs []Type
 		changed := false

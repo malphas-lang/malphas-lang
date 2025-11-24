@@ -4,9 +4,11 @@
       "Name": "examples"
     }
   },
+  "Mods": null,
   "Uses": null,
   "Decls": [
     {
+      "Pub": false,
       "Unsafe": false,
       "Name": {
         "Name": "make_handler"

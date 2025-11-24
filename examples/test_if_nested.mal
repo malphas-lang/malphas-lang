@@ -1,0 +1,14 @@
+package main;
+
+fn main() {
+    let x = if true {
+        if false {
+            10
+        } else {
+            20
+        }
+    } else {
+        30
+    };
+    println(x);
+}

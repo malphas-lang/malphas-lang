@@ -1,0 +1,18 @@
+package main;
+
+enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+fn main() {
+    let r = Result[int, string]::Ok(42);
+    match r {
+        Ok(val) => {
+            println(val);
+        },
+        Err(e) => {
+            println(e);
+        }
+    }
+}

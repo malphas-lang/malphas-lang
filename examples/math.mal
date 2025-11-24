@@ -1,0 +1,5 @@
+package math;
+
+pub fn add_math(a: int, b: int) -> int {
+    a + b
+}
