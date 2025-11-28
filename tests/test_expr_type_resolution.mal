@@ -1,0 +1,14 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+fn main() {
+    // Test type resolution from IndexExpr (Channel::new[int])
+    // This uses resolveTypeFromExpr
+    let x: int = 42;
+    // The type resolution happens in expression context when parsing IndexExpr
+    let _: Box[int] = Box[int] { value: x };
+}
+

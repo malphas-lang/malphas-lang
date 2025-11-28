@@ -1,0 +1,24 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int)
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    
+    let radius = match s {
+        Shape::Circle(r) => r,
+        Shape::Rectangle(w, h) => 0
+    };
+    
+    println("Extracted radius: ", radius);
+    
+    let area = match Shape::Rectangle(5, 8) {
+        Shape::Circle(r) => 0,
+        Shape::Rectangle(w, h) => w * h
+    };
+    println("Extracted area: ", area);
+}
+

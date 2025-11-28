@@ -2,22 +2,44 @@ package types
 
 import "fmt"
 
-// Trait represents a trait that types can implement.
+// Method represents a method signature within a trait or implementation.
+type Method struct {
+	Name       string
+	TypeParams []TypeParam
+	Params     []Type
+	Return     Type
+}
+
+// AssociatedType represents an associated type declared in a trait.
+type AssociatedType struct {
+	Name   string
+	Bounds []Type // Trait bounds that the associated type must satisfy
+	Trait  *Trait // Reference to the trait containing this associated type
+}
+
+// Trait represents a trait.
 type Trait struct {
-	Name    string
-	Methods map[string]*Function
+	Name            string
+	TypeParams      []TypeParam
+	Methods         []Method
+	AssociatedTypes []AssociatedType // Associated types declared in this trait
 }
 
 func (t *Trait) String() string {
-	return t.Name
+	return "trait " + t.Name
 }
 
 func (t *Trait) IsType() {}
 
-// Satisfies checks if a type satisfies the given trait bounds.
-// This is used to verify that type arguments meet the constraints
-// specified for type parameters.
+// Satisfies checks if a type satisfies a set of trait bounds.
 func Satisfies(typ Type, bounds []Type, env *Environment) error {
+	// Resolve ProjectedType - for now, defer checking
+	// Full resolution requires looking up impl blocks during instantiation
+	if _, ok := typ.(*ProjectedType); ok {
+		// Projected types like T::Item will be checked during generic instantiation
+		return nil
+	}
+
 	for _, bound := range bounds {
 		if err := satisfiesSingle(typ, bound, env); err != nil {
 			return err
@@ -32,6 +54,14 @@ func satisfiesSingle(typ Type, bound Type, env *Environment) error {
 		// Look up trait implementations in the environment
 		if env != nil {
 			// Check if there's an impl for this trait and type
+			if env.HasImpl(trait.Name, typ) {
+				return nil
+			}
+		}
+		return fmt.Errorf("type %s does not implement trait %s", typ, trait.Name)
+	} else if trait, ok := bound.(*Trait); ok {
+		// Handle resolved Trait type
+		if env != nil {
 			if env.HasImpl(trait.Name, typ) {
 				return nil
 			}

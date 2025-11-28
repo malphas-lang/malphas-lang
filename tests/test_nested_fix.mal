@@ -1,0 +1,18 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+struct Vec[T] {
+    items: []T,
+}
+
+fn main() {
+    // This should work now (type annotation)
+    let v1: Vec[Box[int]] = Vec[int] { items: [] };
+    
+    // This still needs fixing (expression context)
+    // let v2 = Vec[Box[int]] { items: [] };
+}
+

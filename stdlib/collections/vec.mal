@@ -1,0 +1,44 @@
+pub struct Vec[T] {
+    data: []T,
+}
+
+impl[T] Vec[T] {
+    pub fn new() -> Vec[T] {
+        return Vec[T] {
+            data: []T{}
+        };
+    }
+
+    pub fn push(&mut self, item: T) -> void {
+        self.data = append(self.data, item);
+    }
+
+    pub fn get(&self, index: int) -> T {
+        return self.data[index];
+    }
+
+    pub fn set(&mut self, index: int, value: T) -> void {
+        self.data[index] = value;
+    }
+
+    pub fn len(&self) -> int {
+        // Note: len(self.data) should be handled by the builtin len() function
+        // which should map to runtime_slice_len for slices
+        // The codegen will extract self.data and call the runtime function
+        return len(self.data);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        return self.len() == 0;
+    }
+
+    pub fn pop(&mut self) -> T? {
+        if self.len() == 0 {
+            return nil;
+        }
+        let item = self.data[-1];
+        delete(self.data, -1);
+        return item;
+    }
+}
+

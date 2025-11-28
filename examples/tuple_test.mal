@@ -1,0 +1,14 @@
+ 
+
+fn main() {
+    let t1: (int, string) = (42, "hello");
+    println(t1.0);
+    println(t1.1);
+    
+    let t2 = (1, "test", true);
+    println(t2.0);
+    
+    let t3: (bool, float) = (true, 3.14);
+    println(t3.1);
+}
+

@@ -1,0 +1,18 @@
+package main;
+
+fn generic_print[T](val: T) {
+    println(val);
+}
+
+// This function expects a polymorphic function as an argument.
+// Currently, Malphas likely requires specifying type arguments for `f` here,
+// or treats `f` as a specific instance.
+// We want to express: f is a function that for all T, takes T and returns void.
+fn apply_twice(f: fn[T](T)) {
+    f(10);      // Instantiate T = int
+    f("hello"); // Instantiate T = string
+}
+
+fn main() {
+    apply_twice(generic_print);
+}

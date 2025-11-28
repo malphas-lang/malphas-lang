@@ -1,0 +1,7 @@
+ 
+
+fn main() {
+    let f = |x: int| x + 1;
+    println("test");
+}
+

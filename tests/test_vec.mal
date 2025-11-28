@@ -1,0 +1,13 @@
+ 
+
+use std::collections::Vec;
+
+fn main() {
+    let mut v = Vec[int]::new();
+    v.push(10);
+    v.push(20);
+    println(v.len());
+    let x = v.pop();
+    println(x);
+    println(v.is_empty());
+}

@@ -1,0 +1,26 @@
+package main;
+
+struct MyInt {
+    val: int
+}
+
+trait Display {
+    fn display(&self) -> string;
+}
+
+impl Display for MyInt {
+    fn display(&self) -> string {
+        return "MyInt";
+    }
+}
+
+fn print_anything(obj: Display) {
+    println(obj.display());
+}
+
+fn main() {
+    println("Start");
+    let i = MyInt { val: 42 };
+    print_anything(i);
+    println("End");
+}

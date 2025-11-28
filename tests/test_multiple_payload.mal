@@ -1,0 +1,13 @@
+ 
+
+enum Point {
+    Cartesian(int, int),
+    Polar(float, float),
+}
+
+fn main() {
+    let p = Point::Cartesian(10, 20);
+    // Just construct it - don't use println to avoid runtime issues
+    let _ = p;
+}
+

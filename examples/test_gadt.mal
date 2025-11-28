@@ -1,0 +1,28 @@
+
+enum Expr[T] {
+    Int(int): Expr[int],
+    Bool(bool): Expr[bool],
+    Add(Expr[int], Expr[int]): Expr[int],
+    Eq(Expr[int], Expr[int]): Expr[bool],
+}
+
+fn eval[T](e: Expr[T]) -> T {
+    match e {
+        Expr::Int(i) => { println(i); i },
+        Expr::Bool(b) => b,
+        Expr::Add(l, r) => eval(l) + eval(r),
+        Expr::Eq(l, r) => eval(l) == eval(r),
+    }
+}
+
+fn main() {
+    let i = Expr::Int(42);
+    let b = Expr::Bool(true);
+    let add = Expr::Add(Expr::Int(10), Expr::Int(20));
+    let eq = Expr::Eq(Expr::Int(10), Expr::Int(10));
+
+    println(eval(i));
+    println(eval(b));
+    println(eval(add));
+    println(eval(eq));
+}

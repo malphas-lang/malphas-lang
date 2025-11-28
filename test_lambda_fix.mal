@@ -1,0 +1,33 @@
+ 
+
+fn main() {
+    // Test 1: Single-expression lambda without braces
+    let add_one = |x: i32| x + 1;
+    println(add_one(5));      // Should print 6
+    
+    // Test 2: Lambda with type inference (should work with our improvements)
+    let add_two = |x| x + 2;  // Type inference from usage
+    println(add_two(5));      // Should print 7
+    
+    // Test 3: Lambda with function pointer type
+    let add: fn(i32) -> i32 = |x: i32| x + 3;
+    println(add(5));           // Should print 8
+    
+    // Test 4: Lambda with multiple parameters
+    let multiply = |x: i32, y: i32| x * y;
+    println(multiply(3, 4));   // Should print 12
+    
+    // Test 5: Lambda with no parameters
+    let get_five = || 5;
+    println(get_five());       // Should print 5
+    
+    // Test 6: Direct lambda call
+    let result = |x: i32| x * 2(7);
+    println(result);           // Should print 14
+    
+    // Test 7: Lambda that captures variables (closure)
+    let base = 10;
+    let add_base = |x: i32| x + base;
+    println(add_base(5));      // Should print 15
+}
+

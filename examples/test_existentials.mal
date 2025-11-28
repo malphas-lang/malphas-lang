@@ -1,0 +1,47 @@
+// Define a simple trait for display
+trait Display {
+    fn display(&self) -> string;
+}
+
+// Define a struct for integers
+struct MyInt {
+    value: int,
+}
+
+// Implement Display for MyInt
+impl Display for MyInt {
+    fn display(&self) -> string {
+        return "MyInt";
+    }
+}
+
+// Define another struct for strings
+struct MyString {
+    text: string,
+}
+
+// Implement Display for MyString
+impl Display for MyString {
+    fn display(&self) -> string {
+        return self.text;
+    }
+}
+
+// Function that takes an existential type
+fn print_anything(obj: exists T: Display. T) {
+    // This should call the display method through vtable
+    let msg = obj.display();
+    println(msg);
+}
+
+fn main() {
+    // Create instances
+    let num = MyInt{ value: 42 };
+    let text = MyString{ text: "Hello" };
+    
+    // Pack into existentials and call function
+    print_anything(num);
+    print_anything(text);
+    
+    println("Existential types test complete!");
+}

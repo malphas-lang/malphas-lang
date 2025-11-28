@@ -1,0 +1,34 @@
+ 
+
+fn main() {
+    // Array negative indexing
+    let arr = [10, 20, 30, 40, 50];
+    println(arr[-1]); // 50
+    println(arr[-2]); // 40
+
+    // Slice negative indexing
+    let slice: []int = [1, 2, 3, 4, 5];
+    println(slice[-1]); // 5
+    println(slice[-3]); // 3
+
+    // Negative slicing
+    let sub = arr[-3..-1]; // [30, 40]
+    println(len(sub)); // 2
+    println(sub[0]); // 30
+    println(sub[1]); // 40
+
+    let sub2 = arr[-2..]; // [40, 50]
+    println(sub2[0]); // 40
+
+    let sub3 = arr[..-2]; // [10, 20, 30]
+    println(len(sub3)); // 3
+    println(sub3[2]); // 30
+
+    // String negative slicing
+    let s = "hello world";
+    let lastWord = s[-5..];
+    println(lastWord); // world
+
+    let hello = s[..-6];
+    println(hello); // hello
+}

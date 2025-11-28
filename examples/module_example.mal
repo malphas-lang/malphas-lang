@@ -1,4 +1,4 @@
-package main;
+ 
 
 // Module declarations (for future file-based modules)
 mod utils;

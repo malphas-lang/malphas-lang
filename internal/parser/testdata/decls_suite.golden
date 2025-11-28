@@ -44,6 +44,7 @@
           "Name": "U"
         }
       },
+      "Effects": null,
       "Where": null,
       "Body": {
         "Stmts": [
@@ -118,13 +119,15 @@
                 "Name": "T"
               }
             }
-          ]
+          ],
+          "ReturnType": null
         },
         {
           "Name": {
             "Name": "None"
           },
-          "Payloads": []
+          "Payloads": [],
+          "ReturnType": null
         }
       ]
     },
@@ -206,6 +209,7 @@
             }
           ],
           "ReturnType": null,
+          "Effects": null,
           "Where": null,
           "Body": {
             "Stmts": [
@@ -270,6 +274,7 @@
             }
           ],
           "ReturnType": null,
+          "Effects": null,
           "Where": null,
           "Body": {
             "Stmts": [

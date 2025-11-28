@@ -1,0 +1,34 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    
+    match s {
+        Shape::Circle(r) => {
+            // Test that r is typed as int - this should compile
+            let x: int = r;  // Explicit type annotation to verify r is int
+            println(x);
+            
+            // Test arithmetic operations (only work on numeric types)
+            let sum = r + 5;  // Should work if r is int
+            println(sum);
+        },
+        Shape::Rectangle(w, h) => {
+            // Test that w and h are typed as int
+            let width: int = w;
+            let height: int = h;
+            println(width);
+            println(height);
+            
+            // Test arithmetic
+            let area = w * h;  // Should work if both are int
+            println(area);
+        },
+    }
+}
+

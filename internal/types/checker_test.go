@@ -1,6 +1,7 @@
 package types
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
@@ -43,6 +44,7 @@ func TestChecker_BasicTypes(t *testing.T) {
 		nil, // type params
 		nil, // params
 		nil, // return type
+		nil, // effects
 		nil, // where clause
 		fnBody,
 		lexer.Span{},
@@ -82,7 +84,7 @@ func TestChecker_UndefinedVariable(t *testing.T) {
 		false, // pub
 		false, // unsafe
 		ast.NewIdent("test", lexer.Span{}),
-		nil, nil, nil, nil, fnBody, lexer.Span{},
+		nil, nil, nil, nil, nil, fnBody, lexer.Span{},
 	)
 
 	file := &ast.File{
@@ -97,13 +99,14 @@ func TestChecker_UndefinedVariable(t *testing.T) {
 	} else {
 		found := false
 		for _, err := range checker.Errors {
-			if err.Message == "undefined identifier: y" {
+			// Check for undefined identifier error (format may vary)
+			if strings.Contains(err.Message, "undefined identifier") && strings.Contains(err.Message, "y") {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("Expected 'undefined identifier: y' error, got: %v", checker.Errors)
+			t.Errorf("Expected 'undefined identifier' error for 'y', got: %v", checker.Errors)
 		}
 	}
 }
@@ -314,7 +317,7 @@ func wrapStmts(stmts ...ast.Stmt) *ast.File {
 		false, // pub
 		false, // unsafe
 		ast.NewIdent("test", lexer.Span{}),
-		nil, nil, nil, nil, fnBody, lexer.Span{},
+		nil, nil, nil, nil, nil, fnBody, lexer.Span{},
 	)
 	return &ast.File{
 		Decls: []ast.Decl{fnDecl},

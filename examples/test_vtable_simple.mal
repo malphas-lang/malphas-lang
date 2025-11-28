@@ -1,0 +1,13 @@
+package test;
+
+trait Display {
+    fn display(&self) -> string;
+}
+
+struct MyInt {
+    value: int,
+}
+
+fn main() {
+    let x = MyInt{ value: 42 };
+}

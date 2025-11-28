@@ -1,0 +1,25 @@
+ 
+
+struct Box[T] {
+    val: T
+}
+
+impl[T] Box[T] {
+    fn new(val: T) -> Self {
+        return Box { val: val };
+    }
+    
+    fn get(self) -> T {
+        return self.val;
+    }
+    
+    fn identity(self) -> Self {
+        return self;
+    }
+}
+
+fn main() {
+    let b = Box[int]::new(42);
+    println(b.get());
+}
+

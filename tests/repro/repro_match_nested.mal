@@ -1,0 +1,20 @@
+ 
+
+enum Inner {
+    Val(int)
+}
+
+enum Outer {
+    Wrap(Inner)
+}
+
+fn main() {
+    let o = Outer::Wrap(Inner::Val(42));
+    match o {
+        Outer::Wrap(Inner::Val(x)) => {
+            println(x);
+        },
+        _ => println("fail"),
+    }
+}
+

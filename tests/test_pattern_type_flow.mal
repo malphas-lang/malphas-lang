@@ -1,0 +1,24 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    
+    match s {
+        Shape::Circle(r) => {
+            // r should be available and typed as int
+            let x = r;  // This should work if type info flows correctly
+            println(x);
+        },
+        Shape::Rectangle(w, h) => {
+            // w and h should be available and typed as int
+            let sum = w + h;  // This should work if type info flows correctly
+            println(sum);
+        },
+    }
+}
+

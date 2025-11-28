@@ -1,0 +1,30 @@
+
+
+enum Option[T] {
+    Some(T),
+    None,
+}
+
+fn unused_param(x: int, y: int) -> int {
+    // y is unused
+    return x;
+}
+
+fn main() {
+    // Test 1: Unused let binding
+    let unused = 42;
+    
+    // Test 2: Match with unused pattern variables
+    let opt = Option[int]::Some(10);
+    let result = match opt {
+        Option::Some(value) => { 5 },  // value is extracted but not used
+        Option::None => { 0 }
+    };
+    
+    // Test 3: Shadowed variable
+    let x = 1;
+    let x = 2;
+    
+    println(result);
+    println(x);
+}

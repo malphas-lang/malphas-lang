@@ -1,4 +1,4 @@
-package main;
+ 
 
 fn main() {
     // Array type with explicit length - should work now

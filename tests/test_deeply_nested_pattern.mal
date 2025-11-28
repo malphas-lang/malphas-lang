@@ -1,0 +1,33 @@
+ 
+
+enum Option {
+    Some(int),
+    None,
+}
+
+enum Result {
+    Ok(Option),
+    Err(string),
+}
+
+fn main() {
+    let opt = Option::Some(42);
+    let res = Result::Ok(opt);
+    
+    // Test deeply nested pattern in single match arm
+    // This should extract both the Option and the int value
+    match res {
+        Result::Ok(Option::Some(value)) => {
+            // value should be int, extracted from nested pattern
+            println("Deeply nested value:");
+            println(value);  // Should print 42
+        },
+        Result::Ok(Option::None) => {
+            println("Ok with None");
+        },
+        Result::Err(msg) => {
+            println(msg);
+        },
+    };
+}
+

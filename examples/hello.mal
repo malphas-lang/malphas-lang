@@ -1,8 +1,24 @@
-package main;
+ 
+
+use std::collections::HashMap;
+use std::collections::Vec;
 
 fn main() {
-    let x: int = 10;
-    let y: int = 20;
-    let z = x + y;
-    println(z);
+    let mut hashmap = HashMap[string, string]::new();
+
+    let mut people = Vec[string]::new();
+
+    people.push("Miles");
+    people.push("Davis");
+
+    println(people[0]);
+
+    println(people.get(1));
+
+    people[1] = "Warbrton";
+    println(people[1]); // Should print "Warbrton"
+
+    hashmap.put("hello", "world");
+
+    println(hashmap.get("hello"));
 }

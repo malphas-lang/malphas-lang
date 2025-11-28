@@ -1,0 +1,19 @@
+ 
+
+enum Option[T] {
+    Some(T),
+    None
+}
+
+fn main() {
+    let o = Option[int]::Some(42);
+    match o {
+        Option::Some(v) => {
+            println(v + 1);
+        },
+        Option::None => {
+            println("None");
+        }
+    }
+}
+

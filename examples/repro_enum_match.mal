@@ -1,0 +1,20 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+}
+
+fn main() {
+    let c = Shape::Circle(10);
+    match c {
+        Shape::Circle(r) => {
+            println("Circle radius + 1:");
+            println(r + 1);
+        },
+        Shape::Rectangle(w, h) => {
+            println("Rectangle area:");
+            println(w * h);
+        },
+    }
+}

@@ -1,0 +1,22 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+struct Vec[T] {
+    items: []T,
+}
+
+fn main() {
+    // Test Vec[Box[int]] - using empty array literal
+    let v: Vec[Box[int]] = Vec[Box[int]] { items: [] };
+    
+    // Access the items field - type should be []Box[int]
+    let items = v.items;
+    println(len(items));
+    
+    // Test Box[Box[int]] - this already worked
+    let b: Box[Box[int]] = Box[Box[int]] { value: Box[int] { value: 42 } };
+    println(b.value.value);
+}

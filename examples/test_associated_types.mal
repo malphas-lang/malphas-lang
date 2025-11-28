@@ -1,0 +1,26 @@
+// Test file for associated types with Self::Item syntax
+trait Iterator {
+    type Item;
+    fn next(&mut self) -> Option[Self::Item];
+}
+
+trait Display {
+    fn display(&self) -> string;
+}
+
+trait Container {
+    type Item: Display;  // Associated type with bound
+    fn get(&self, i: int) -> Self::Item;
+}
+
+// Simple impl
+impl Iterator for Vec[int] {
+    type Item = int;
+    fn next(&mut self) -> Option[int] {
+        None
+    }
+}
+
+fn main() {
+    println("Associated types with Self::Item test");
+}

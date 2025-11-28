@@ -1,0 +1,78 @@
+{
+  "name": "malphas-language",
+  "displayName": "Malphas Language Support",
+  "description": "Syntax highlighting and language support for Malphas with LSP",
+  "version": "0.1.0",
+  "publisher": "malphas",
+  "engines": {
+    "vscode": "^1.67.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:malphas",
+    "*"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "malphas",
+        "aliases": [
+          "Malphas",
+          "malphas"
+        ],
+        "extensions": [
+          ".mal"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "malphas",
+        "scopeName": "source.malphas",
+        "path": "./syntaxes/malphas.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "keyword.control.flow.malphas",
+              "keyword.control.import.malphas",
+              "keyword.other.malphas",
+              "storage.type.declaration.malphas"
+            ],
+            "settings": {
+              "foreground": "#EA2264"
+            }
+          },
+          {
+            "scope": [
+              "entity.name.function.malphas"
+            ],
+            "settings": {
+              "foreground": "#64ea22"
+            }
+          },
+          {
+            "scope": [
+              "variable.other.malphas",
+              "variable.other.constant.malphas"
+            ],
+            "settings": {
+              "foreground": "#F78D60"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+

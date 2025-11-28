@@ -1,0 +1,8 @@
+ 
+
+fn main() {
+    // Basic tuple
+    let t = (42, "hello");
+    println(t.0);
+    println(t.1);
+}

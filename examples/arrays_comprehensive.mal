@@ -1,4 +1,4 @@
-package main;
+ 
 
 fn main() {
     // Basic array literal (slice)

@@ -1,0 +1,9 @@
+ 
+
+use std::collections::Vec;
+
+fn main() {
+    let v = Vec[int]::new();
+    println(v.len());
+}
+

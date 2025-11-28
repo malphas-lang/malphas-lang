@@ -1,0 +1,7 @@
+ 
+
+fn main() {
+    // Test empty array literal
+    let arr = [];
+    println(len(arr));
+}

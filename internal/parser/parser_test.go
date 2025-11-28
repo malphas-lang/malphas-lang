@@ -229,6 +229,33 @@ fn main() {}
 	}
 }
 
+func TestParseExistentialParam(t *testing.T) {
+	input := `
+fn print_anything(obj: exists T: Display. T) {
+}
+`
+	f, errs := parseFile(t, input)
+	assertNoErrors(t, errs)
+
+	if len(f.Decls) != 1 {
+		t.Fatalf("expected 1 decl, got %d", len(f.Decls))
+	}
+
+	fnDecl, ok := f.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("expected FnDecl, got %T", f.Decls[0])
+	}
+
+	if len(fnDecl.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(fnDecl.Params))
+	}
+
+	param := fnDecl.Params[0]
+	if _, ok := param.Type.(*ast.ExistentialType); !ok {
+		t.Fatalf("expected ExistentialType, got %T", param.Type)
+	}
+}
+
 func TestParseLetStmt(t *testing.T) {
 	const src = `
 package foo;
@@ -694,6 +721,75 @@ fn main() {
 	base, ok := ret.Base.(*ast.NamedType)
 	if !ok || base.Name == nil || base.Name.Name != "Result" {
 		t.Fatalf("expected return base type 'Result', got %#v (type %T)", ret.Base, ret.Base)
+	}
+}
+
+func TestParseHigherRankFunctionType(t *testing.T) {
+	const src = `
+package foo;
+
+fn foo(f: fn[T](T) -> void) {}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	if len(fn.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(fn.Params))
+	}
+
+	param := fn.Params[0]
+	fnType, ok := param.Type.(*ast.FunctionType)
+	if !ok {
+		t.Fatalf("expected type *ast.FunctionType, got %T", param.Type)
+	}
+
+	if len(fnType.TypeParams) != 1 {
+		t.Fatalf("expected 1 type param, got %d", len(fnType.TypeParams))
+	}
+
+	tp := fnType.TypeParams[0].(*ast.TypeParam)
+	if tp.Name.Name != "T" {
+		t.Fatalf("expected type param 'T', got %s", tp.Name.Name)
+	}
+
+	if len(fnType.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(fnType.Params))
+	}
+
+	paramType, ok := fnType.Params[0].(*ast.NamedType)
+	if !ok || paramType.Name.Name != "T" {
+		t.Fatalf("expected param type 'T', got %v", fnType.Params[0])
+	}
+}
+
+func TestParseLetStmtWithFunctionLiteral(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let add_one = |x: i32| { x + 1 };
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+
+	fnLit, ok := letStmt.Value.(*ast.FunctionLiteral)
+	if !ok {
+		t.Fatalf("expected value type *ast.FunctionLiteral, got %T", letStmt.Value)
+	}
+
+	if len(fnLit.Params) != 1 {
+		t.Fatalf("expected 1 function literal param, got %d", len(fnLit.Params))
+	}
+
+	if fnLit.Params[0].Name.Name != "x" {
+		t.Fatalf("expected param name 'x', got %s", fnLit.Params[0].Name.Name)
 	}
 }
 
@@ -3425,6 +3521,60 @@ fn main() {
 
 			if len(errs) > 0 {
 				t.Fatalf("unexpected parse errors: %v", errs)
+			}
+		})
+	}
+}
+
+func TestParseSliceLiteral(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name: "empty slice literal",
+			input: `package main;
+fn main() {
+    let x = []int{};
+}`,
+		},
+		{
+			name: "slice literal with elements",
+			input: `package main;
+fn main() {
+    let x = []int{1, 2, 3};
+}`,
+		},
+		{
+			name: "slice literal with pointers",
+			input: `package main;
+fn main() {
+    let x = []*int{};
+}`,
+		},
+		{
+			name: "slice literal with generic type",
+			input: `package main;
+fn main() {
+    let x = []Vec[T]{};
+}`,
+		},
+		{
+			name: "slice literal in struct",
+			input: `package main;
+fn main() {
+    let s = S {
+        data: []T{}
+    };
+}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errs := parseFile(t, tt.input)
+			if len(errs) > 0 {
+				t.Errorf("parser reported errors: %v", errs)
 			}
 		})
 	}

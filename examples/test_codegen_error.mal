@@ -1,0 +1,15 @@
+// Test that will pass type checking but might hit codegen-specific errors
+// This tests our improved error messages in the LLVM codegen
+
+fn test_undefined_in_codegen() {
+    // This should be caught by type checker, but let's see what happens
+    // if we have a variable that's defined but codegen can't find it
+    let x = 10;
+    // x should be found, but if codegen has an issue, we'll see improved error
+    println(x);
+}
+
+fn main() {
+    test_undefined_in_codegen();
+}
+

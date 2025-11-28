@@ -67,6 +67,7 @@
           "Name": "i32"
         }
       },
+      "Effects": null,
       "Where": null,
       "Body": {
         "Stmts": [
@@ -160,33 +161,35 @@
                         "Name": "items"
                       },
                       "Body": {
-                        "Stmts": null,
-                        "Tail": {
-                          "Clauses": [
-                            {
-                              "Condition": {
-                                "Op": "\u003e",
-                                "Left": {
-                                  "Name": "item"
-                                },
-                                "Right": {
-                                  "Name": "base"
-                                }
-                              },
-                              "Body": {
-                                "Stmts": [
-                                  {
-                                    "Value": {
-                                      "Name": "item"
-                                    }
+                        "Stmts": [
+                          {
+                            "Clauses": [
+                              {
+                                "Condition": {
+                                  "Op": "\u003e",
+                                  "Left": {
+                                    "Name": "item"
+                                  },
+                                  "Right": {
+                                    "Name": "base"
                                   }
-                                ],
-                                "Tail": null
+                                },
+                                "Body": {
+                                  "Stmts": [
+                                    {
+                                      "Value": {
+                                        "Name": "item"
+                                      }
+                                    }
+                                  ],
+                                  "Tail": null
+                                }
                               }
-                            }
-                          ],
-                          "Else": null
-                        }
+                            ],
+                            "Else": null
+                          }
+                        ],
+                        "Tail": null
                       }
                     }
                   ],

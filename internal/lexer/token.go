@@ -45,6 +45,7 @@ const (
 	SLASH     TokenType = "/"
 	AND       TokenType = "&&"
 	OR        TokenType = "||"
+	PIPE      TokenType = "|"
 	QUESTION  TokenType = "?"
 
 	LT     TokenType = "<"
@@ -58,8 +59,10 @@ const (
 	COMMA        TokenType = ","
 	SEMICOLON    TokenType = ";"
 	COLON        TokenType = ":"
+	COLONCOLON   TokenType = "::" // For Self::Item syntax
 	DOUBLE_COLON TokenType = "::"
 	DOT          TokenType = "."
+	DOT_DOT      TokenType = ".."
 
 	LPAREN   TokenType = "("
 	RPAREN   TokenType = ")"
@@ -104,6 +107,8 @@ const (
 	CASE     TokenType = "CASE"
 	WHERE    TokenType = "WHERE"
 	UNSAFE   TokenType = "UNSAFE"
+	EXISTS   TokenType = "EXISTS"
+	FORALL   TokenType = "FORALL"
 
 	// Trivia tokens (comments, whitespace, newlines)
 	LINE_COMMENT  TokenType = "LINE_COMMENT"  // //
@@ -145,6 +150,8 @@ var keywords = map[string]TokenType{
 	"case":     CASE,
 	"where":    WHERE,
 	"unsafe":   UNSAFE,
+	"exists":   EXISTS,
+	"forall":   FORALL,
 }
 
 // LookupIdent checks if the identifier is a keyword

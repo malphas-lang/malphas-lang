@@ -1,0 +1,9 @@
+// Test function call error
+fn main() {
+    let x = 10;
+    
+    // This should suggest correct function call syntax
+    let result = (x + 5)();  // Can't call a non-function
+    println(result);
+}
+

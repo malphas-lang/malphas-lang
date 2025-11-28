@@ -1,0 +1,40 @@
+ 
+
+enum Option {
+    Some(int),
+    None,
+}
+
+enum Result {
+    Ok(int),
+    Err(string),
+}
+
+fn main() {
+    let opt = Option::Some(42);
+    let res = Result::Ok(100);
+    
+    match opt {
+        Option::Some(value) => {
+            // value should be int
+            let x: int = value;
+            println(x);
+        },
+        Option::None => {
+            println("None");
+        },
+    };
+    
+    match res {
+        Result::Ok(num) => {
+            // num should be int
+            let sum = num + 10;
+            println(sum);
+        },
+        Result::Err(msg) => {
+            // msg should be string
+            println(msg);
+        },
+    };
+}
+

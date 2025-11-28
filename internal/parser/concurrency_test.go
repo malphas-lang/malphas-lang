@@ -32,6 +32,38 @@ fn main() {
 	}
 }
 
+func TestParseSpawnBlockStmt(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	spawn {
+		println("hello");
+	};
+}
+`
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	if len(fn.Body.Stmts) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(fn.Body.Stmts))
+	}
+
+	spawnStmt, ok := fn.Body.Stmts[0].(*ast.SpawnStmt)
+	if !ok {
+		t.Fatalf("expected *ast.SpawnStmt, got %T", fn.Body.Stmts[0])
+	}
+
+	if spawnStmt.Block == nil {
+		t.Fatal("expected spawn block to be populated")
+	}
+
+	if spawnStmt.Call != nil {
+		t.Fatal("expected spawn call to be nil for block syntax")
+	}
+}
+
 func TestParseSelectStmt(t *testing.T) {
 	const src = `
 package foo;

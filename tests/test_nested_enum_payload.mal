@@ -1,0 +1,37 @@
+ 
+
+enum Option {
+    Some(int),
+    None,
+}
+
+enum Result {
+    Ok(Option),
+    Err(string),
+}
+
+fn main() {
+    let opt = Option::Some(42);
+    let res = Result::Ok(opt);
+    
+    // Test nested enum pattern extraction
+    match res {
+        Result::Ok(inner) => {
+            // inner should be Option type
+            match inner {
+                Option::Some(value) => {
+                    // value should be int
+                    println("Nested value:");
+                    println(value);  // Should print 42
+                },
+                Option::None => {
+                    println("None");
+                },
+            };
+        },
+        Result::Err(msg) => {
+            println(msg);
+        },
+    };
+}
+

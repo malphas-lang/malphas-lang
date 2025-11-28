@@ -1,0 +1,540 @@
+ 
+
+// ============================================================================
+// Test 1: Basic Channel Send/Receive
+// ============================================================================
+fn test_basic_channel() {
+    let ch = Channel[int]::new(1);
+    ch <- 42;
+    let x = <-ch;
+    println(x);  // Should print 42
+    if x != 42 {
+        panic("expected 42");
+    }
+}
+
+// ============================================================================
+// Test 2: Spawn with Function Call
+// ============================================================================
+fn worker_simple(ch: chan int) {
+    ch <- 100;
+}
+
+fn test_spawn_function() {
+    let ch = Channel[int]::new(0);
+    spawn worker_simple(ch);
+    let x = <-ch;
+    println(x);  // Should print 100
+    if x != 100 {
+        panic("expected 100");
+    }
+}
+
+// ============================================================================
+// Test 3: Spawn with Block Syntax
+// ============================================================================
+fn test_spawn_block() {
+    let ch = Channel[int]::new(0);
+    let value = 200;
+    
+    spawn {
+        ch <- value * 2;
+    };
+    
+    let x = <-ch;
+    println(x);  // Should print 400
+    if x != 400 {
+        panic("expected 400");
+    }
+}
+
+// ============================================================================
+// Test 4: Spawn with Captured Variables
+// ============================================================================
+fn test_spawn_capture() {
+    let ch = Channel[int]::new(0);
+    let a = 10;
+    let b = 20;
+    
+    spawn {
+        ch <- a + b;
+    };
+    
+    let x = <-ch;
+    println(x);  // Should print 30
+    if x != 30 {
+        panic("expected 30");
+    }
+}
+
+// ============================================================================
+// Test 5: Select with Single Case (Receive)
+// ============================================================================
+fn test_select_single_receive() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        ch <- 300;
+    };
+    
+    select {
+        case let v = <-ch => {
+            println(v);  // Should print 300
+            if v != 300 {
+                panic("expected 300");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Test 6: Select with Single Case (Send)
+// ============================================================================
+fn test_select_single_send() {
+    let ch = Channel[int]::new(1);
+    
+    select {
+        case ch <- 400 => {
+            println(400);  // Should print 400
+        }
+    }
+    
+    let x = <-ch;
+    if x != 400 {
+        panic("expected 400");
+    }
+}
+
+// ============================================================================
+// Test 7: Select with Multiple Cases
+// ============================================================================
+fn test_select_multiple() {
+    let ch1 = Channel[int]::new(0);
+    let ch2 = Channel[int]::new(0);
+    
+    spawn {
+        ch1 <- 500;
+    };
+    
+    select {
+        case let v = <-ch1 => {
+            println(v);  // Should print 500
+            if v != 500 {
+                panic("expected 500");
+            }
+        },
+        case let v = <-ch2 => {
+            panic("should not receive from ch2");
+        }
+    }
+}
+
+// ============================================================================
+// Test 8: Buffered Channel (Multiple Values)
+// ============================================================================
+fn test_buffered_channel() {
+    let ch = Channel[int]::new(5);
+    
+    // Send multiple values without blocking
+    ch <- 1;
+    ch <- 2;
+    ch <- 3;
+    ch <- 4;
+    ch <- 5;
+    
+    // Receive all values
+    let sum = 0;
+    let x1 = <-ch;
+    let x2 = <-ch;
+    let x3 = <-ch;
+    let x4 = <-ch;
+    let x5 = <-ch;
+    
+    sum = x1 + x2 + x3 + x4 + x5;
+    println(sum);  // Should print 15
+    if sum != 15 {
+        panic("expected sum 15");
+    }
+}
+
+// ============================================================================
+// Test 9: Unbuffered Channel (Synchronous)
+// ============================================================================
+fn test_unbuffered_channel() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        let x = <-ch;
+        println(x);  // Should print 600
+        if x != 600 {
+            panic("expected 600");
+        }
+    };
+    
+    // This will block until receiver is ready
+    ch <- 600;
+}
+
+// ============================================================================
+// Test 10: Multiple Goroutines
+// ============================================================================
+fn test_multiple_goroutines() {
+    let ch = Channel[int]::new(10);
+    
+    // Spawn 5 workers
+    spawn {
+        ch <- 1;
+    };
+    spawn {
+        ch <- 2;
+    };
+    spawn {
+        ch <- 3;
+    };
+    spawn {
+        ch <- 4;
+    };
+    spawn {
+        ch <- 5;
+    };
+    
+    // Collect results
+    let sum = 0;
+    let v1 = <-ch;
+    let v2 = <-ch;
+    let v3 = <-ch;
+    let v4 = <-ch;
+    let v5 = <-ch;
+    
+    sum = v1 + v2 + v3 + v4 + v5;
+    println(sum);  // Should print 15
+    if sum != 15 {
+        panic("expected sum 15");
+    }
+}
+
+// ============================================================================
+// Test 11: Producer-Consumer Pattern
+// ============================================================================
+fn test_producer_consumer() {
+    let ch = Channel[int]::new(5);
+    
+    // Producer
+    spawn {
+        for i in 0..5 {
+            ch <- i;
+        }
+    };
+    
+    // Consumer
+    let sum = 0;
+    for _ in 0..5 {
+        let x = <-ch;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 10 (0+1+2+3+4)
+    if sum != 10 {
+        panic("expected sum 10");
+    }
+}
+
+// ============================================================================
+// Test 12: Fan-Out Pattern (One Producer, Multiple Consumers)
+// ============================================================================
+fn test_fan_out() {
+    let input = Channel[int]::new(10);
+    let output1 = Channel[int]::new(10);
+    let output2 = Channel[int]::new(10);
+    
+    // Producer
+    spawn {
+        for i in 0..5 {
+            input <- i;
+        }
+    };
+    
+    // Consumer 1
+    spawn {
+        for _ in 0..5 {
+            let x = <-input;
+            output1 <- x * 2;
+        }
+    };
+    
+    // Consumer 2
+    spawn {
+        for _ in 0..5 {
+            let x = <-input;
+            output2 <- x * 3;
+        }
+    };
+    
+    // Note: This test demonstrates fan-out but may have race conditions
+    // In practice, you'd need proper synchronization
+    println("fan-out test completed");
+}
+
+// ============================================================================
+// Test 13: Fan-In Pattern (Multiple Producers, One Consumer)
+// ============================================================================
+fn test_fan_in() {
+    let output = Channel[int]::new(10);
+    
+    // Producer 1
+    spawn {
+        for i in 0..3 {
+            output <- i;
+        }
+    };
+    
+    // Producer 2
+    spawn {
+        for i in 3..6 {
+            output <- i;
+        }
+    };
+    
+    // Consumer
+    let sum = 0;
+    for _ in 0..6 {
+        let x = <-output;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 15 (0+1+2+3+4+5)
+    if sum != 15 {
+        panic("expected sum 15");
+    }
+}
+
+// ============================================================================
+// Test 14: Select with Both Send and Receive
+// ============================================================================
+fn test_select_send_receive() {
+    let ch1 = Channel[int]::new(1);
+    let ch2 = Channel[int]::new(0);
+    
+    spawn {
+        ch2 <- 700;
+    };
+    
+    select {
+        case ch1 <- 600 => {
+            println(600);
+        },
+        case let v = <-ch2 => {
+            println(v);  // Should print 700
+            if v != 700 {
+                panic("expected 700");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Test 15: Spawn with Arguments
+// ============================================================================
+fn worker_with_args(ch: chan int, multiplier: int) {
+    ch <- 10 * multiplier;
+}
+
+fn test_spawn_with_args() {
+    let ch = Channel[int]::new(0);
+    spawn worker_with_args(ch, 8);
+    
+    let x = <-ch;
+    println(x);  // Should print 80
+    if x != 80 {
+        panic("expected 80");
+    }
+}
+
+// ============================================================================
+// Test 16: Nested Spawn
+// ============================================================================
+fn test_nested_spawn() {
+    let ch1 = Channel[int]::new(0);
+    let ch2 = Channel[int]::new(0);
+    
+    spawn {
+        spawn {
+            ch2 <- 900;
+        };
+        ch1 <- 800;
+    };
+    
+    let x1 = <-ch1;
+    let x2 = <-ch2;
+    
+    println(x1);  // Should print 800
+    println(x2);  // Should print 900
+    
+    if x1 != 800 || x2 != 900 {
+        panic("expected 800 and 900");
+    }
+}
+
+// ============================================================================
+// Test 17: Channel with Different Types
+// ============================================================================
+fn test_channel_string() {
+    let ch = Channel[string]::new(0);
+    
+    spawn {
+        ch <- "hello";
+    };
+    
+    let s = <-ch;
+    println(s);  // Should print "hello"
+}
+
+// ============================================================================
+// Test 18: Multiple Select Cases with Different Channels
+// ============================================================================
+fn test_select_multiple_channels() {
+    let ch1 = Channel[int]::new(0);
+    let ch2 = Channel[int]::new(0);
+    let ch3 = Channel[int]::new(0);
+    
+    spawn {
+        ch2 <- 1000;
+    };
+    
+    select {
+        case let v = <-ch1 => {
+            panic("should not receive from ch1");
+        },
+        case let v = <-ch2 => {
+            println(v);  // Should print 1000
+            if v != 1000 {
+                panic("expected 1000");
+            }
+        },
+        case let v = <-ch3 => {
+            panic("should not receive from ch3");
+        }
+    }
+}
+
+// ============================================================================
+// Test 19: Sequential Spawns
+// ============================================================================
+fn test_sequential_spawns() {
+    let ch = Channel[int]::new(10);
+    
+    spawn {
+        ch <- 1;
+    };
+    
+    spawn {
+        ch <- 2;
+    };
+    
+    spawn {
+        ch <- 3;
+    };
+    
+    let sum = 0;
+    let v1 = <-ch;
+    let v2 = <-ch;
+    let v3 = <-ch;
+    
+    sum = v1 + v2 + v3;
+    println(sum);  // Should print 6
+    if sum != 6 {
+        panic("expected sum 6");
+    }
+}
+
+// ============================================================================
+// Test 20: Spawn with Loop
+// ============================================================================
+fn test_spawn_with_loop() {
+    let ch = Channel[int]::new(10);
+    
+    spawn {
+        for i in 0..5 {
+            ch <- i;
+        }
+    };
+    
+    let sum = 0;
+    for _ in 0..5 {
+        let x = <-ch;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 10 (0+1+2+3+4)
+    if sum != 10 {
+        panic("expected sum 10");
+    }
+}
+
+// ============================================================================
+// Main function to run all tests
+// ============================================================================
+fn main() {
+    println("=== Test 1: Basic Channel ===");
+    test_basic_channel();
+    
+    println("=== Test 2: Spawn Function ===");
+    test_spawn_function();
+    
+    println("=== Test 3: Spawn Block ===");
+    test_spawn_block();
+    
+    println("=== Test 4: Spawn Capture ===");
+    test_spawn_capture();
+    
+    println("=== Test 5: Select Single Receive ===");
+    test_select_single_receive();
+    
+    println("=== Test 6: Select Single Send ===");
+    test_select_single_send();
+    
+    println("=== Test 7: Select Multiple ===");
+    test_select_multiple();
+    
+    println("=== Test 8: Buffered Channel ===");
+    test_buffered_channel();
+    
+    println("=== Test 9: Unbuffered Channel ===");
+    test_unbuffered_channel();
+    
+    println("=== Test 10: Multiple Goroutines ===");
+    test_multiple_goroutines();
+    
+    println("=== Test 11: Producer-Consumer ===");
+    test_producer_consumer();
+    
+    println("=== Test 12: Fan-Out ===");
+    test_fan_out();
+    
+    println("=== Test 13: Fan-In ===");
+    test_fan_in();
+    
+    println("=== Test 14: Select Send/Receive ===");
+    test_select_send_receive();
+    
+    println("=== Test 15: Spawn with Args ===");
+    test_spawn_with_args();
+    
+    println("=== Test 16: Nested Spawn ===");
+    test_nested_spawn();
+    
+    println("=== Test 17: Channel String ===");
+    test_channel_string();
+    
+    println("=== Test 18: Select Multiple Channels ===");
+    test_select_multiple_channels();
+    
+    println("=== Test 19: Sequential Spawns ===");
+    test_sequential_spawns();
+    
+    println("=== Test 20: Spawn with Loop ===");
+    test_spawn_with_loop();
+    
+    println("=== All concurrency tests completed! ===");
+}
+

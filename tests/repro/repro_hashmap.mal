@@ -1,0 +1,22 @@
+ 
+
+pub struct MyMap[K, V] {
+    data: map[K, V],
+}
+
+impl[K, V] MyMap[K, V] {
+    pub fn new() -> MyMap[K, V] {
+        return MyMap[K, V] {
+            data: map[K, V]{}
+        };
+    }
+
+    pub fn put(&mut self, key: K, value: V) {
+        self.data[key] = value;
+    }
+}
+
+fn main() {
+    let m = MyMap[int, int]::new();
+    m.put(1, 2);
+}

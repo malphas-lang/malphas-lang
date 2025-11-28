@@ -1,0 +1,19 @@
+ 
+
+fn main() {
+    let arr = [10, 20, 30, 40, 50];
+    
+    // 1. Accessing last element manually
+    let last = arr[len(arr) - 1];
+    println(last); // 50
+
+    // 2. Slicing to the end (includes last element)
+    let tail = arr[3..]; // [40, 50]
+    println(tail[0]); // 40
+    println(tail[1]); // 50
+    
+    // 3. Explicit length (standard half-open range)
+    let tail2 = arr[3..len(arr)];
+    println(tail2[1]); // 50
+}
+

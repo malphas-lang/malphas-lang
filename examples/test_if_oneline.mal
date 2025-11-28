@@ -1,4 +1,4 @@
-package main;
+ 
 
 fn main() {
     // This simpler form should work

@@ -1,0 +1,10 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+fn main() {
+    let v: Box[Box[int]] = Box[Box[int]] { value: Box[int] { value: 42 } };
+}
+

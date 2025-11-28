@@ -1,0 +1,24 @@
+// GADT Test
+
+enum Expr[T] {
+    IntLit(int): Expr[int],
+    BoolLit(bool): Expr[bool],
+    Add(Expr[int], Expr[int]): Expr[int],
+    Eq(Expr[int], Expr[int]): Expr[bool]
+}
+
+fn eval_int(e: Expr[int]) -> int {
+    match e {
+        Expr::IntLit(i) => i,
+        Expr::Add(l, r) => eval_int(l) + eval_int(r),
+        _ => 0
+    }
+}
+
+fn main() {
+    let i = Expr::IntLit(10);
+    let j = Expr::IntLit(20);
+    let sum = Expr::Add(i, j);
+    let res = eval_int(sum);
+}
+

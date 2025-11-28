@@ -1,0 +1,26 @@
+ 
+
+fn main() {
+    // Test 1: Simple lambda expression
+    let add_one = |x: i32| { x + 1 };
+    
+    // Test 2: Lambda with function pointer type
+    let add: fn(i32) -> i32 = |x: i32| { x + 2 };
+    
+    // Test 3: Lambda with multiple parameters
+    let multiply = |x: i32, y: i32| { x * y };
+    
+    // Test 4: Lambda with no parameters
+    let get_five = || { 5 };
+    
+    // Test 5: Lambda that captures variables (closure)
+    let base = 10;
+    let add_base = |x: i32| { x + base };
+    
+    println(add_one(5));      // Should print 6
+    println(add(5));           // Should print 7
+    println(multiply(3, 4));   // Should print 12
+    println(get_five());       // Should print 5
+    println(add_base(5));      // Should print 15
+}
+

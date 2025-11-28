@@ -1,0 +1,28 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+struct Vec[T] {
+    items: []T,
+}
+
+fn test_field_access(v: Vec[Box[int]]) {
+    // THE KEY TEST: Access items field of Vec[Box[int]]
+    // Type checker should recognize items as []Box[int] (not []T)
+    // Codegen should substitute T -> Box[int] when generating field access
+    let items = v.items;
+    let length = len(items);
+    println(length);
+}
+
+fn main() {
+    // We can't easily create Vec[Box[int]] due to parser limitations,
+    // but we can test that the type system and codegen work correctly
+    // by testing field access in a function parameter
+    
+    // Test Box[Box[int]] - this already worked
+    let b: Box[Box[int]] = Box[Box[int]] { value: Box[int] { value: 42 } };
+    println(b.value.value);
+}

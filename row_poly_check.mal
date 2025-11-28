@@ -1,0 +1,13 @@
+
+fn getName[R](r: { name: string | R }) -> string {
+    return r.name;
+}
+
+fn main() {
+    let r1 = { name: "Alice", age: 30 };
+    let r2 = { name: "Bob", active: true };
+    
+    print(getName(r1));
+    print(getName(r2));
+}
+

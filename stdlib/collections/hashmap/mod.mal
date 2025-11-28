@@ -1,0 +1,260 @@
+// Swiss Table HashMap implementation
+// 
+// This is a Swiss Table (flat hash map) implementation using open addressing
+// with control bytes for efficient probing. The design is inspired by
+// absl::flat_hash_map and Rust's hashbrown crate.
+//
+// Control byte values:
+// 0x00 = empty slot
+// 0xFF = deleted/tombstone slot  
+// 0x80-0xFE = full slot (with hash prefix in lower 7 bits)
+//
+// Implementation Notes:
+// - Uses linear probing (could be improved with quadratic or better probing)
+// - Load factor of 7/8 (87.5%) before resizing
+// - Tombstones are used for deleted entries to maintain probe chain integrity
+//
+// Codegen Requirements:
+// - hash_key() must be replaced with actual hash computation based on key type
+// - Key equality checks in find_slot() must be added by codegen
+// - Zero-initialization of generic types K and V in Slot initialization
+
+const EMPTY_CTRL: u8 = 0x00;
+const DELETED_CTRL: u8 = 0xFF;
+const FULL_CTRL_MASK: u8 = 0x80;
+const INITIAL_CAPACITY: usize = 16;
+const MAX_LOAD_FACTOR: f64 = 0.875; // 7/8 load factor for Swiss Table
+
+struct Slot[K,V]{
+    ctrl: u8,
+    hash: u64,
+    key: K,
+    value: V,
+}
+
+pub struct HashMap[K, V] {
+    slots: []Slot[K,V],
+    len: usize,
+    cap: usize,
+}
+
+impl[K, V] HashMap[K, V] {
+    // Create a new empty HashMap
+    pub fn new() -> HashMap[K, V] {
+        let initial_cap = INITIAL_CAPACITY;
+        // Allocate slots array with initial capacity
+        // Note: Codegen should allocate a slice of size initial_cap and zero-initialize
+        // all Slot[K,V] elements. The slots should be pre-allocated, not built with append.
+        let mut slots = []Slot[K,V]{};
+        // TODO: Codegen should handle pre-allocation of slots with size initial_cap
+        // and zero-initialize all Slot[K,V] elements (ctrl: EMPTY_CTRL, hash: 0, etc.)
+        // For now, this is a placeholder - codegen must allocate the slice directly
+        // rather than using append in a loop.
+        return HashMap[K, V] {
+            slots: slots,
+            len: 0,
+            cap: initial_cap,
+        };
+    }
+
+    // Hash function for generic keys
+    // NOTE: This function needs to be handled by codegen/runtime.
+    // The codegen should:
+    // 1. For primitive types (int, string, etc.), use appropriate hash functions
+    // 2. For composite types, hash their fields recursively
+    // 3. Ideally, require a Hash trait bound: HashMap[K: Hash, V]
+    fn hash_key(key: K) -> u64 {
+        // TODO: Codegen should replace this with actual hash computation
+        // For strings: use runtime hash function (like hash_string in runtime.c)
+        // For integers: use the integer value directly or a hash of it
+        // For other types: hash their memory representation or fields
+        return 0;
+    }
+
+    // Get the control byte from a hash value (Swiss Table style)
+    fn hash_to_ctrl(hash: u64) -> u8 {
+        // Use the lower 7 bits of the hash, OR with 0x80 to mark as full
+        return FULL_CTRL_MASK | ((hash & 0x7F) as u8);
+    }
+
+    // Find the slot index for a given hash and key (Swiss Table probing)
+    fn find_slot(&self, hash: u64, ctrl: u8, key: K) -> usize? {
+        let mut idx = (hash as usize) % self.cap;
+        let mut probe_dist: usize = 0;
+        
+        while probe_dist < self.cap {
+            let slot = self.slots[idx];
+            let slot_ctrl = slot.ctrl;
+            
+            // Empty slot - not found
+            if slot_ctrl == EMPTY_CTRL {
+                return nil;
+            }
+            
+            // Found matching control byte and hash - check key equality
+            if slot_ctrl == ctrl && slot.hash == hash {
+                // NOTE: Key equality check must be handled by codegen.
+                // The codegen should generate: if slot.key == key { return idx; }
+                // For now, we return the index assuming equality (codegen must verify)
+                // This is necessary because generic key comparison can't be expressed
+                // directly in Malphas without trait bounds like Eq[K]
+                return idx;
+            }
+            
+            // Continue probing (linear probing for now, could be improved)
+            idx = (idx + 1) % self.cap;
+            probe_dist = probe_dist + 1;
+        }
+        
+        return nil;
+    }
+
+    // Find or create a slot for insertion
+    fn find_insert_slot(&mut self, hash: u64, ctrl: u8) -> usize {
+        let mut idx = (hash as usize) % self.cap;
+        let mut probe_dist: usize = 0;
+        
+        while probe_dist < self.cap {
+            let slot = self.slots[idx];
+            let slot_ctrl = slot.ctrl;
+            
+            // Empty or deleted slot - can insert here
+            if slot_ctrl == EMPTY_CTRL || slot_ctrl == DELETED_CTRL {
+                return idx;
+            }
+            
+            // Continue probing
+            idx = (idx + 1) % self.cap;
+            probe_dist = probe_dist + 1;
+        }
+        
+        // Should never reach here if capacity is managed properly
+        return idx;
+    }
+
+    // Resize the hashmap when load factor is too high
+    fn resize(&mut self) -> void {
+        let old_slots = self.slots;
+        let old_cap = self.cap;
+        
+        // Double the capacity
+        self.cap = self.cap * 2;
+        self.len = 0;
+        
+        // Allocate new slots array with doubled capacity
+        // TODO: Codegen should allocate a slice of size self.cap and zero-initialize
+        // all Slot[K,V] elements. The slots should be pre-allocated, not built with append.
+        self.slots = []Slot[K,V]{};
+        // Codegen must allocate the slice directly with size self.cap
+        
+        // Rehash all existing entries
+        let mut i: usize = 0;
+        while i < old_cap {
+            let slot = old_slots[i];
+            if slot.ctrl >= FULL_CTRL_MASK {
+                // Reinsert the entry
+                let new_idx = self.find_insert_slot(slot.hash, slot.ctrl);
+                self.slots[new_idx] = slot;
+                self.len = self.len + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    // Check if we need to resize
+    fn check_resize(&mut self) -> void {
+        let load_factor = (self.len as f64) / (self.cap as f64);
+        if load_factor >= MAX_LOAD_FACTOR {
+            self.resize();
+        }
+    }
+
+    // Insert or update a key-value pair
+    pub fn put(&mut self, key: K, value: V) -> void {
+        // Check if we need to resize
+        self.check_resize();
+        
+        let hash = Self::hash_key(key);
+        let ctrl = Self::hash_to_ctrl(hash);
+        
+        // Check if key already exists
+        let existing_idx = self.find_slot(hash, ctrl, key);
+        if existing_idx != nil {
+            let idx = existing_idx!;
+            // Update existing entry
+            self.slots[idx].value = value;
+            return;
+        }
+        
+        // Find insertion slot
+        let idx = self.find_insert_slot(hash, ctrl);
+        self.slots[idx] = Slot[K,V]{
+            ctrl: ctrl,
+            hash: hash,
+            key: key,
+            value: value,
+        };
+        self.len = self.len + 1;
+    }
+
+    // Get a value by key, returns optional value
+    pub fn get(&self, key: K) -> V? {
+        let hash = Self::hash_key(key);
+        let ctrl = Self::hash_to_ctrl(hash);
+        
+        let idx = self.find_slot(hash, ctrl, key);
+        if idx != nil {
+            return self.slots[idx!].value;
+        }
+        
+        return nil;
+    }
+
+    // Remove a key-value pair, returns the value if it existed
+    pub fn remove(&mut self, key: K) -> V? {
+        let hash = Self::hash_key(key);
+        let ctrl = Self::hash_to_ctrl(hash);
+        
+        let idx = self.find_slot(hash, ctrl, key);
+        if idx != nil {
+            let val = self.slots[idx!].value;
+            // Mark as deleted (tombstone)
+            self.slots[idx!].ctrl = DELETED_CTRL;
+            self.len = self.len - 1;
+            return val;
+        }
+        
+        return nil;
+    }
+
+    // Get the number of key-value pairs
+    pub fn len(&self) -> int {
+        return self.len as int;
+    }
+
+    // Check if the map is empty
+    pub fn is_empty(&self) -> bool {
+        return self.len == 0;
+    }
+
+    // Clear all entries from the map
+    pub fn clear(&mut self) -> void {
+        let mut i: usize = 0;
+        while i < self.cap {
+            // Mark as empty - codegen will handle zero-initialization
+            self.slots[i].ctrl = EMPTY_CTRL;
+            self.slots[i].hash = 0;
+            // key and value remain but are marked as empty
+            i = i + 1;
+        }
+        self.len = 0;
+    }
+
+    // Check if a key exists in the map
+    pub fn contains_key(&self, key: K) -> bool {
+        let hash = Self::hash_key(key);
+        let ctrl = Self::hash_to_ctrl(hash);
+        return self.find_slot(hash, ctrl, key) != nil;
+    }
+}
+

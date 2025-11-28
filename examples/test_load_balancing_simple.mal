@@ -1,0 +1,51 @@
+ 
+
+// Simple test to verify load-aware load balancing works
+// Spawns multiple workers and collects their results
+
+fn worker(id: int, result_ch: chan int) {
+    let value = id * 2;
+    result_ch <- value;
+}
+
+fn main() {
+    let ch = Channel[int]::new(10);
+    
+    // Spawn 10 workers
+    spawn worker(0, ch);
+    spawn worker(1, ch);
+    spawn worker(2, ch);
+    spawn worker(3, ch);
+    spawn worker(4, ch);
+    spawn worker(5, ch);
+    spawn worker(6, ch);
+    spawn worker(7, ch);
+    spawn worker(8, ch);
+    spawn worker(9, ch);
+    
+    // Collect results
+    let r1 = <-ch;
+    let r2 = <-ch;
+    let r3 = <-ch;
+    let r4 = <-ch;
+    let r5 = <-ch;
+    let r6 = <-ch;
+    let r7 = <-ch;
+    let r8 = <-ch;
+    let r9 = <-ch;
+    let r10 = <-ch;
+    
+    println(r1);
+    println(r2);
+    println(r3);
+    println(r4);
+    println(r5);
+    println(r6);
+    println(r7);
+    println(r8);
+    println(r9);
+    println(r10);
+    
+    println("Load balancing test completed!");
+}
+

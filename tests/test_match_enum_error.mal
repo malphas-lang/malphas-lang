@@ -1,0 +1,18 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int)
+}
+
+fn main() {
+    let c = Shape::Circle(10);
+    
+    match c {
+        Shape::Circle(r, extra) => { // Should fail
+            println("Oops");
+        },
+        _ => {}
+    };
+}
+

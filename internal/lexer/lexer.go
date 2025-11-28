@@ -515,13 +515,7 @@ func (l *Lexer) NextToken() Token {
 
 			raw := string(l.ch)
 			l.read()
-			tok := l.makeToken(ILLEGAL, startLine, startColumn, startPos, l.pos, raw, raw)
-			l.addError(
-				ErrIllegalRune,
-				"illegal character "+strconv.Quote(raw),
-				tok.Span,
-			)
-			return tok
+			return l.makeToken(PIPE, startLine, startColumn, startPos, l.pos, raw, raw)
 
 		case '<':
 			startLine, startColumn, startPos := l.currentSpanStart()
@@ -584,6 +578,13 @@ func (l *Lexer) NextToken() Token {
 
 		case '.':
 			startLine, startColumn, startPos := l.currentSpanStart()
+			if l.peek() == '.' {
+				ch := l.ch
+				l.read()
+				raw := string(ch) + string(l.ch)
+				l.read()
+				return l.makeToken(DOT_DOT, startLine, startColumn, startPos, l.pos, raw, raw)
+			}
 			raw := string(l.ch)
 			l.read()
 			return l.makeToken(DOT, startLine, startColumn, startPos, l.pos, raw, raw)

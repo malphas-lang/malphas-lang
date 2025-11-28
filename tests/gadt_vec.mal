@@ -1,0 +1,34 @@
+struct Z {}
+struct S[N] {}
+
+// Length-indexed Vector (Peano numbers)
+enum Vec[N, T] {
+    Nil: Vec[Z, T],
+    // Cons takes a head of type T and a tail of type Vec[N, T]
+    // and produces a Vec[S[N], T]
+    Cons(T, Vec[N, T]): Vec[S[N], T]
+}
+
+fn head[N, T](v: Vec[S[N], T]) -> T {
+    match v {
+        // This pattern match is valid because v is Vec[S[N], T]
+        // Nil returns Vec[Z, T], which does not unify with Vec[S[N], T] (assuming Z != S[N])
+        // So Nil is unreachable/impossible here.
+        // Cons(h, t) returns Vec[S[M], T]. Unifying S[M] with S[N] gives M=N.
+        Vec::Cons(h, t) => h
+    }
+}
+
+fn main() {
+    let nil: Vec[Z, int] = Vec[Z, int]::Nil;
+    let v1: Vec[S[Z], int] = Vec::Cons(1, nil);
+    let v2: Vec[S[S[Z]], int] = Vec::Cons(2, v1);
+
+    let h1 = head(v1); // Should be 1
+    println(h1);
+    let h2 = head(v2); // Should be 2
+    println(h2);
+    
+    // let err = head(nil); // Should fail compilation if uncommented
+}
+

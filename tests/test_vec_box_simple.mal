@@ -1,0 +1,26 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+struct Vec[T] {
+    items: []T,
+}
+
+fn main() {
+    // Test Vec[Box[int]] - the key test is that field access works
+    // The type of v.items should be []Box[int] (not []T)
+    // We'll just test that we can declare it and access the field
+    let v: Vec[Box[int]];
+    
+    // This should work - accessing items field of Vec[Box[int]]
+    // The type checker should recognize items as []Box[int]
+    let items = v.items;
+    println(len(items));
+    
+    // Test Box[Box[int]] - this already worked
+    let b: Box[Box[int]] = Box[Box[int]] { value: Box[int] { value: 42 } };
+    println(b.value.value);
+}
+

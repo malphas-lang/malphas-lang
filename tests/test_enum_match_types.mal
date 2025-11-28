@@ -1,0 +1,25 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+    Point
+}
+
+fn main() {
+    let r = Shape::Rectangle(20, 30);
+    
+    match r {
+        Shape::Circle(rad) => {
+            println(rad * rad);
+        },
+        Shape::Rectangle(w, h) => {
+            let area = w * h;
+            println(area);
+        },
+        Shape::Point => {
+            println("Point");
+        }
+    }
+}
+

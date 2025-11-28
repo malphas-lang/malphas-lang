@@ -1,0 +1,351 @@
+ 
+
+// ============================================================================
+// Edge Case Tests for Concurrency
+// ============================================================================
+
+// Test 1: Empty Select (should compile but do nothing)
+fn test_empty_select() {
+    select {
+    }
+    println("empty select completed");
+}
+
+// Test 2: Select with Only Send Cases
+fn test_select_only_sends() {
+    let ch1 = Channel[int]::new(1);
+    let ch2 = Channel[int]::new(1);
+    
+    select {
+        case ch1 <- 1 => {
+            println("sent to ch1");
+        },
+        case ch2 <- 2 => {
+            println("sent to ch2");
+        }
+    }
+    
+    let v1 = <-ch1;
+    let v2 = <-ch2;
+    println(v1);
+    println(v2);
+}
+
+// Test 3: Select with Only Receive Cases
+fn test_select_only_receives() {
+    let ch1 = Channel[int]::new(0);
+    let ch2 = Channel[int]::new(0);
+    
+    spawn {
+        ch1 <- 100;
+    };
+    
+    select {
+        case let v = <-ch1 => {
+            println(v);
+        },
+        case let v = <-ch2 => {
+            println(v);
+        }
+    }
+}
+
+// Test 4: Large Number of Goroutines
+fn test_many_goroutines() {
+    let ch = Channel[int]::new(100);
+    
+    // Spawn 50 goroutines
+    for i in 0..50 {
+        let id = i;
+        spawn {
+            ch <- id;
+        };
+    }
+    
+    let sum = 0;
+    for _ in 0..50 {
+        let x = <-ch;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 1225 (0+1+2+...+49)
+    // Expected sum: n*(n-1)/2 = 50*49/2 = 1225
+}
+
+// Test 5: Deeply Nested Spawns
+fn test_deep_nesting() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        spawn {
+            spawn {
+                spawn {
+                    ch <- 42;
+                };
+            };
+        };
+    };
+    
+    let x = <-ch;
+    println(x);
+    if x != 42 {
+        panic("expected 42");
+    }
+}
+
+// Test 6: Channel with Zero Capacity
+fn test_zero_capacity() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        ch <- 999;
+    };
+    
+    let x = <-ch;
+    println(x);
+    if x != 999 {
+        panic("expected 999");
+    }
+}
+
+// Test 7: Multiple Selects in Sequence
+fn test_multiple_selects() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        ch <- 1;
+    };
+    
+    select {
+        case let v = <-ch => {
+            println(v);
+        }
+    }
+    
+    spawn {
+        ch <- 2;
+    };
+    
+    select {
+        case let v = <-ch => {
+            println(v);
+        }
+    }
+}
+
+// Test 8: Spawn with Complex Expression
+fn test_spawn_complex_expr() {
+    let ch = Channel[int]::new(0);
+    let a = 5;
+    let b = 10;
+    
+    spawn {
+        ch <- (a + b) * 2;
+    };
+    
+    let x = <-ch;
+    println(x);  // Should print 30
+    if x != 30 {
+        panic("expected 30");
+    }
+}
+
+// Test 9: Select with Same Channel Multiple Times
+fn test_select_same_channel() {
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        ch <- 111;
+    };
+    
+    select {
+        case let v = <-ch => {
+            println(v);
+        },
+        case let v = <-ch => {
+            println(v);
+        }
+    }
+}
+
+// Test 10: Spawn in Loop with Variable Capture
+fn test_spawn_loop_capture() {
+    let ch = Channel[int]::new(10);
+    
+    for i in 0..5 {
+        let id = i;
+        spawn {
+            ch <- id * 2;
+        };
+    }
+    
+    let sum = 0;
+    for _ in 0..5 {
+        let x = <-ch;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 20 (0+2+4+6+8)
+    if sum != 20 {
+        panic("expected sum 20");
+    }
+}
+
+// Test 11: Channel Communication Between Multiple Functions
+fn sender(ch: chan int, value: int) {
+    ch <- value;
+}
+
+fn receiver(ch: chan int) -> int {
+    return <-ch;
+}
+
+fn test_function_channels() {
+    let ch = Channel[int]::new(0);
+    
+    spawn sender(ch, 555);
+    
+    let x = receiver(ch);
+    println(x);
+    if x != 555 {
+        panic("expected 555");
+    }
+}
+
+// Test 12: Select with Immediate Send
+fn test_select_immediate_send() {
+    let ch = Channel[int]::new(1);
+    
+    // This should immediately succeed
+    select {
+        case ch <- 666 => {
+            println("sent 666");
+        }
+    }
+    
+    let x = <-ch;
+    if x != 666 {
+        panic("expected 666");
+    }
+}
+
+// Test 13: Multiple Producers, Multiple Consumers
+fn test_multi_producer_consumer() {
+    let ch = Channel[int]::new(20);
+    
+    // 3 producers
+    spawn {
+        for i in 0..5 {
+            ch <- i;
+        }
+    };
+    spawn {
+        for i in 5..10 {
+            ch <- i;
+        }
+    };
+    spawn {
+        for i in 10..15 {
+            ch <- i;
+        }
+    };
+    
+    // Collect all
+    let sum = 0;
+    for _ in 0..15 {
+        let x = <-ch;
+        sum = sum + x;
+    }
+    
+    println(sum);  // Should print 105 (0+1+...+14)
+    if sum != 105 {
+        panic("expected sum 105");
+    }
+}
+
+// Test 14: Spawn with Conditional Logic
+fn test_spawn_conditional() {
+    let ch = Channel[int]::new(0);
+    let flag = true;
+    
+    spawn {
+        if flag {
+            ch <- 777;
+        } else {
+            ch <- 888;
+        }
+    };
+    
+    let x = <-ch;
+    println(x);
+    if x != 777 {
+        panic("expected 777");
+    }
+}
+
+// Test 15: Channel as Function Parameter
+fn process_channel(ch: chan int) {
+    ch <- 999;
+}
+
+fn test_channel_parameter() {
+    let ch = Channel[int]::new(0);
+    
+    spawn process_channel(ch);
+    
+    let x = <-ch;
+    println(x);
+    if x != 999 {
+        panic("expected 999");
+    }
+}
+
+fn main() {
+    println("=== Edge Case Test 1: Empty Select ===");
+    test_empty_select();
+    
+    println("=== Edge Case Test 2: Select Only Sends ===");
+    test_select_only_sends();
+    
+    println("=== Edge Case Test 3: Select Only Receives ===");
+    test_select_only_receives();
+    
+    println("=== Edge Case Test 4: Many Goroutines ===");
+    test_many_goroutines();
+    
+    println("=== Edge Case Test 5: Deep Nesting ===");
+    test_deep_nesting();
+    
+    println("=== Edge Case Test 6: Zero Capacity ===");
+    test_zero_capacity();
+    
+    println("=== Edge Case Test 7: Multiple Selects ===");
+    test_multiple_selects();
+    
+    println("=== Edge Case Test 8: Spawn Complex Expr ===");
+    test_spawn_complex_expr();
+    
+    println("=== Edge Case Test 9: Select Same Channel ===");
+    test_select_same_channel();
+    
+    println("=== Edge Case Test 10: Spawn Loop Capture ===");
+    test_spawn_loop_capture();
+    
+    println("=== Edge Case Test 11: Function Channels ===");
+    test_function_channels();
+    
+    println("=== Edge Case Test 12: Select Immediate Send ===");
+    test_select_immediate_send();
+    
+    println("=== Edge Case Test 13: Multi Producer Consumer ===");
+    test_multi_producer_consumer();
+    
+    println("=== Edge Case Test 14: Spawn Conditional ===");
+    test_spawn_conditional();
+    
+    println("=== Edge Case Test 15: Channel Parameter ===");
+    test_channel_parameter();
+    
+    println("=== All edge case tests completed! ===");
+}
+

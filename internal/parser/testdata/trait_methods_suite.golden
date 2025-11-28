@@ -39,6 +39,7 @@
               "Name": "i32"
             }
           },
+          "Effects": null,
           "Where": null,
           "Body": null
         },
@@ -66,6 +67,7 @@
               "Name": "i32"
             }
           },
+          "Effects": null,
           "Where": null,
           "Body": {
             "Stmts": null,
@@ -121,6 +123,7 @@
               "Name": "T"
             }
           },
+          "Effects": null,
           "Where": null,
           "Body": null
         },
@@ -148,6 +151,7 @@
               "Name": "T"
             }
           },
+          "Effects": null,
           "Where": null,
           "Body": {
             "Stmts": null,

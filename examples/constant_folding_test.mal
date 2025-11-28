@@ -1,0 +1,63 @@
+// Test constant folding optimizations
+fn main() {
+    // Integer arithmetic - should be folded at compile time
+    let a = 2 + 3;           // → 5
+    let b = 10 - 4;           // → 6
+    let c = 3 * 4;            // → 12
+    let d = 20 / 4;           // → 5
+    
+    // Float arithmetic - should be folded
+    let e = 1.5 + 2.5;        // → 4.0
+    let f = 10.0 - 3.5;       // → 6.5
+    let g = 2.0 * 3.0;        // → 6.0
+    let h = 15.0 / 3.0;       // → 5.0
+    
+    // Note: Mixed int/float requires explicit conversion in Malphas
+    // Pure int and float operations are folded
+    
+    // Boolean operations - should be folded
+    let k = true && false;    // → false
+    let l = true || false;    // → true
+    let m = !true;            // → false
+    let n = !false;           // → true
+    
+    // Comparisons - should be folded
+    let o = 5 == 5;           // → true
+    let p = 3 != 4;           // → true
+    let q = 2 < 5;            // → true
+    let r = 10 > 7;           // → true
+    let s = 4 <= 4;           // → true
+    let t = 6 >= 5;           // → true
+    
+    // Float comparisons - should be folded
+    let u = 1.5 == 1.5;       // → true
+    let v = 2.0 < 3.0;        // → true
+    
+    // Negation - should be folded
+    let w = -5;               // → -5
+    let x = -(-3);            // → 3
+    
+    println(a);
+    println(b);
+    println(c);
+    println(d);
+    println(e);
+    println(f);
+    println(g);
+    println(h);
+    println(k);
+    println(l);
+    println(m);
+    println(n);
+    println(o);
+    println(p);
+    println(q);
+    println(r);
+    println(s);
+    println(t);
+    println(u);
+    println(v);
+    println(w);
+    println(x);
+}
+

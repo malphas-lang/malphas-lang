@@ -1,0 +1,10 @@
+// Test undefined variable error with suggestions
+fn main() {
+    let x = 10;
+    let y = 20;
+    let z = 30;
+    
+    // This should suggest "did you mean `x`? (or `y`?)"
+    println(xyz);  // undefined variable
+}
+

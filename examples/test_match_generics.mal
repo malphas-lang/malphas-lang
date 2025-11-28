@@ -1,0 +1,29 @@
+ 
+
+enum Box[T] {
+    Item(T),
+    Empty
+}
+
+fn main() {
+    let b = Box[int]::Item(42);
+    
+    match b {
+        Box::Item(val) => {
+            println("Item: ", val);
+            let x: int = val; // Should pass
+            // let y: string = val; // Should fail
+        },
+        Box::Empty => println("Empty")
+    };
+
+    let b2 = Box[string]::Item("hello");
+    match b2 {
+        Box::Item(val) => {
+            println("Item: ", val);
+            let x: string = val; // Should pass
+        },
+        _ => {}
+    }
+}
+

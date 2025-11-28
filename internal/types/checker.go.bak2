@@ -1,0 +1,1468 @@
+package types
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/diag"
+	"github.com/malphas-lang/malphas-lang/internal/lexer"
+	"github.com/malphas-lang/malphas-lang/internal/parser"
+)
+
+// ModuleInfo represents information about a loaded module.
+type ModuleInfo struct {
+	Name     string    // Module name (e.g., "utils")
+	File     *ast.File // Parsed AST of the module file
+	FilePath string    // Full path to the module file
+	Scope    *Scope    // Scope containing ONLY public symbols
+}
+
+// Checker performs semantic analysis on the AST.
+type Checker struct {
+	GlobalScope *Scope
+	Env         *Environment // Tracks trait implementations
+	Errors      []diag.Diagnostic
+	// MethodTable maps type names to their methods
+	MethodTable map[string]map[string]*Function // typename -> methodname -> function
+	// Modules tracks loaded modules by their name
+	Modules map[string]*ModuleInfo
+	// CurrentFile tracks the current file being checked (for relative path resolution)
+	CurrentFile string
+	// LoadingModules tracks modules currently being loaded (for cycle detection)
+	LoadingModules map[string]bool
+	// ExprTypes maps AST nodes to their resolved types
+	ExprTypes map[ast.Node]Type
+}
+
+// NewChecker creates a new type checker.
+func NewChecker() *Checker {
+	c := &Checker{
+		GlobalScope:    NewScope(nil),
+		Env:            NewEnvironment(),
+		Errors:         []diag.Diagnostic{},
+		MethodTable:    make(map[string]map[string]*Function),
+		Modules:        make(map[string]*ModuleInfo),
+		LoadingModules: make(map[string]bool),
+		ExprTypes:      make(map[ast.Node]Type),
+	}
+
+	// Add built-in types
+	c.GlobalScope.Insert("int", &Symbol{Name: "int", Type: TypeInt})
+	c.GlobalScope.Insert("float", &Symbol{Name: "float", Type: TypeFloat})
+	c.GlobalScope.Insert("bool", &Symbol{Name: "bool", Type: TypeBool})
+	c.GlobalScope.Insert("string", &Symbol{Name: "string", Type: TypeString})
+	c.GlobalScope.Insert("nil", &Symbol{Name: "nil", Type: TypeNil})
+
+	// Add built-in functions
+	// println: fn(any) -> void
+	c.GlobalScope.Insert("println", &Symbol{
+		Name: "println",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}}, // Placeholder for any type
+			Return: TypeVoid,
+		},
+	})
+
+	// format: fn(string, any...) -> string
+	// Takes a format string and variable number of arguments, returns formatted string
+	c.GlobalScope.Insert("format", &Symbol{
+		Name: "format",
+		Type: &Function{
+			Params: []Type{TypeString, &Named{Name: "any"}, &Named{Name: "any"}, &Named{Name: "any"}, &Named{Name: "any"}}, // format string + up to 4 args
+			Return: TypeString,
+		},
+	})
+
+	// append: fn[T]([]T, T) -> []T
+	c.GlobalScope.Insert("append", &Symbol{
+		Name: "append",
+		Type: &Function{
+			TypeParams: []TypeParam{{Name: "T"}},
+			Params: []Type{
+				&Slice{Elem: &TypeParam{Name: "T"}},
+				&TypeParam{Name: "T"},
+			},
+			Return: &Slice{Elem: &TypeParam{Name: "T"}},
+		},
+	})
+
+	// delete: fn(map[K]V, K) -> void
+	c.GlobalScope.Insert("delete", &Symbol{
+		Name: "delete",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}, &Named{Name: "any"}}, // map, key
+			Return: TypeVoid,
+		},
+	})
+
+	// len: fn(any) -> int
+	c.GlobalScope.Insert("len", &Symbol{
+		Name: "len",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}}, // map, array, slice, string
+			Return: TypeInt,
+		},
+	})
+
+	// contains: fn(map[K]V, K) -> bool
+	c.GlobalScope.Insert("contains", &Symbol{
+		Name: "contains",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}, &Named{Name: "any"}}, // map, key
+			Return: TypeBool,
+		},
+	})
+
+	// comparable interface (marker for Go compatibility)
+	c.GlobalScope.Insert("comparable", &Symbol{
+		Name: "comparable",
+		Type: &Named{Name: "comparable"}, // Treat as named type for now
+	})
+
+	return c
+}
+
+// Check validates the types in the given file.
+func (c *Checker) Check(file *ast.File) {
+	c.CheckWithFilename(file, "")
+}
+
+// CheckWithFilename validates the types in the given file with a filename for module resolution.
+func (c *Checker) CheckWithFilename(file *ast.File, filename string) {
+	c.CurrentFile = filename
+	// Pass 1: Collect declarations (this will load modules)
+	c.collectDecls(file)
+
+	// Pass 2: Check bodies of the main file
+	c.checkBodies(file)
+
+	// Pass 2b: Check bodies of all loaded modules
+	// Note: iterate over a copy of keys to avoid concurrent map iteration issues if checkBodies loads more modules
+	// (though collectDecls should have loaded everything reachable)
+	// We use a simple loop because map iteration order is random
+	for _, modInfo := range c.Modules {
+		// Update CurrentFile for correct error reporting
+		oldFile := c.CurrentFile
+		c.CurrentFile = modInfo.FilePath
+		c.checkBodies(modInfo.File)
+		c.CurrentFile = oldFile
+	}
+}
+
+
+
+
+func (c *Checker) collectDecls(file *ast.File) {
+	// First, process all mod declarations (modules must be loaded before use)
+	for _, modDecl := range file.Mods {
+		c.processModDecl(modDecl, file)
+	}
+
+	// Then, process all use declarations (imports)
+	for _, useDecl := range file.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Finally, process regular declarations
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				// If the param type is a Named type matching a type parameter, replace it
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				// Same for return type
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			})
+		case *ast.StructDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+					typeParamMap[astTP.Name.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fieldType := c.resolveType(f.Type)
+				// Replace type parameters in the field type
+				fieldType = c.replaceTypeParamsInType(fieldType, typeParamMap)
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: fieldType,
+				})
+			}
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			})
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			})
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			})
+		case *ast.EnumDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			})
+		case *ast.TraitDecl:
+			// Add trait to scope
+			// TODO: Build trait type with methods
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name}, // Placeholder
+				DefNode: d,
+			})
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Extract type parameters from target type if it's a generic instance
+			// For example, from HashMap[K, V], extract K and V as type parameters
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								// For now, create a TypeParam that represents the parameter
+								// In a full implementation, we'd want to resolve the actual type arg
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
+						for i := 1; i < len(method.Params); i++ {
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
+		}
+	}
+}
+
+func (c *Checker) checkBodies(file *ast.File) {
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Create function scope
+			fnScope := NewScope(c.GlobalScope)
+			// Add params to scope
+			for _, param := range d.Params {
+				fnScope.Insert(param.Name.Name, &Symbol{
+					Name:    param.Name.Name,
+					Type:    c.resolveType(param.Type),
+					DefNode: param,
+				})
+			}
+			c.checkBlock(d.Body, fnScope, d.Unsafe)
+		case *ast.ImplDecl:
+			// Resolve target type
+			targetType := c.resolveType(d.Target)
+
+			// Create impl scope for type params
+			implScope := NewScope(c.GlobalScope)
+
+			// Add type params to scope if generic
+			if _, ok := targetType.(*GenericInstance); ok {
+				// Map type param names to TypeParam types?
+				// Or just ensure they are resolvable?
+				// Actually, impl Vec[T]. T is a type param.
+				// We need to add T to scope so it resolves to TypeParam.
+				// But resolveType already handled it?
+				// No, resolveType resolves T to Named("T").
+				// We need to bind "T" in scope.
+
+				// If d.Target is GenericType in AST
+				if genType, ok := d.Target.(*ast.GenericType); ok {
+					for _, arg := range genType.Args {
+						if named, ok := arg.(*ast.NamedType); ok {
+							// Add T to scope
+							implScope.Insert(named.Name.Name, &Symbol{
+								Name: named.Name.Name,
+								Type: &Named{Name: named.Name.Name}, // Placeholder for TypeParam
+							})
+						}
+					}
+				}
+			}
+
+			// Check methods
+			for _, method := range d.Methods {
+				// Create function scope
+				fnScope := NewScope(implScope)
+
+				// Add Self to scope
+				// Self is the target type
+				fnScope.Insert("Self", &Symbol{
+					Name: "Self",
+					Type: targetType,
+				})
+
+				// Build type parameter map for resolving method param types
+				typeParamMap := make(map[string]Type)
+				typeParamMap["Self"] = targetType
+
+				// If target is generic, map type params
+				if genType, ok := d.Target.(*ast.GenericType); ok {
+					if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+						baseTypeName := namedBase.Name.Name
+						if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+							var baseTypeParams []TypeParam
+							switch baseType := sym.Type.(type) {
+							case *Struct:
+								baseTypeParams = baseType.TypeParams
+							case *Enum:
+								baseTypeParams = baseType.TypeParams
+							}
+
+							for i, tp := range baseTypeParams {
+								if i < len(genType.Args) {
+									typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+								}
+							}
+						}
+					}
+				}
+
+				// Add params to scope with proper type substitution
+				for _, param := range method.Params {
+					paramType := c.resolveTypeWithContext(param.Type, typeParamMap)
+					fnScope.Insert(param.Name.Name, &Symbol{
+						Name:    param.Name.Name,
+						Type:    paramType,
+						DefNode: param,
+					})
+				}
+				c.checkBlock(method.Body, fnScope, method.Unsafe)
+			}
+		}
+	}
+}
+
+
+// processModDecl processes a module declaration and loads the module file.
+func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
+	moduleName := modDecl.Name.Name
+
+	// Check for circular dependencies
+	if c.LoadingModules[moduleName] {
+		c.reportError(fmt.Sprintf("circular module dependency detected: %s", moduleName), modDecl.Span())
+		return
+	}
+
+	// If module already loaded, skip
+	if _, exists := c.Modules[moduleName]; exists {
+		return
+	}
+
+	// Mark as loading
+	c.LoadingModules[moduleName] = true
+	defer delete(c.LoadingModules, moduleName)
+
+	// Resolve module file path
+	modulePath, err := c.resolveModuleFilePath(moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("cannot find module file for '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Read and parse the module file
+	moduleFile, err := c.loadModuleFile(modulePath, moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("failed to load module '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Create module info
+	moduleInfo := &ModuleInfo{
+		Name:     moduleName,
+		File:     moduleFile,
+		FilePath: modulePath,
+		Scope:    NewScope(nil),
+	}
+
+	// Store module info BEFORE processing (so sub-modules can reference it if needed)
+	// But mark as loading to prevent circular dependencies
+	c.Modules[moduleName] = moduleInfo
+
+	// Save current state
+	oldCurrentFile := c.CurrentFile
+	oldGlobalScope := c.GlobalScope
+	c.CurrentFile = modulePath
+
+	// Create a temporary scope for the module (child of global scope for built-ins)
+	moduleScope := NewScope(c.GlobalScope)
+	c.GlobalScope = moduleScope
+
+	// Process mod declarations in the module file (recursive)
+	for _, subModDecl := range moduleFile.Mods {
+		c.processModDecl(subModDecl, moduleFile)
+	}
+
+	// Process use declarations in the module file
+	for _, useDecl := range moduleFile.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Collect all declarations from the module file and extract public symbols immediately
+	for _, decl := range moduleFile.Decls {
+		var symbol *Symbol
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.StructDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: c.resolveType(f.Type),
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.EnumDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TraitDecl:
+			// Add trait to scope
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name}, // Placeholder
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Extract type parameters from target type if it's a generic instance
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
+						for i := 1; i < len(method.Params); i++ {
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
+		}
+	}
+
+	// Restore checker state
+	c.GlobalScope = oldGlobalScope
+	c.CurrentFile = oldCurrentFile
+
+	// Module info is already stored (we stored it before processing)
+	// Just make sure it's still there (it should be)
+	c.Modules[moduleName] = moduleInfo
+}
+
+// resolveModuleFilePath resolves a module name to a file path.
+// It looks for moduleName.mal or moduleName/mod.mal relative to the current file.
+func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
+	var baseDir string
+	if c.CurrentFile != "" {
+		baseDir = filepath.Dir(c.CurrentFile)
+	} else {
+		// If no current file, use current working directory
+		var err error
+		baseDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine base directory: %v", err)
+		}
+	}
+
+	// Try moduleName.mal
+	moduleFile := filepath.Join(baseDir, moduleName+".mal")
+	if _, err := os.Stat(moduleFile); err == nil {
+		return moduleFile, nil
+	}
+
+	// Try moduleName/mod.mal
+	moduleDirFile := filepath.Join(baseDir, moduleName, "mod.mal")
+	if _, err := os.Stat(moduleDirFile); err == nil {
+		return moduleDirFile, nil
+	}
+
+	return "", fmt.Errorf("module file not found: tried %s and %s", moduleFile, moduleDirFile)
+}
+
+// loadModuleFile reads and parses a module file.
+func (c *Checker) loadModuleFile(filePath string, moduleName string) (*ast.File, error) {
+	// Read file
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	// Parse file
+	p := parser.New(string(src), parser.WithFilename(filePath))
+	file := p.ParseFile()
+
+	if len(p.Errors()) > 0 {
+		var errMsgs []string
+		for _, parseErr := range p.Errors() {
+			errMsgs = append(errMsgs, parseErr.Message)
+		}
+		return nil, fmt.Errorf("parse errors: %v", errMsgs)
+	}
+
+	if file == nil {
+		return nil, fmt.Errorf("failed to parse file")
+	}
+
+	return file, nil
+}
+
+// processUseDecl processes a use declaration and brings the imported item into scope.
+func (c *Checker) processUseDecl(useDecl *ast.UseDecl) {
+	if len(useDecl.Path) == 0 {
+		c.reportError("use path cannot be empty", useDecl.Span())
+		return
+	}
+
+	// Build the module path string
+	pathParts := make([]string, len(useDecl.Path))
+	for i, ident := range useDecl.Path {
+		pathParts[i] = ident.Name
+	}
+
+	// Resolve the module path
+	resolvedType := c.resolveModulePath(pathParts, useDecl.Span())
+	if resolvedType == nil {
+		return // Error already reported
+	}
+
+	// Determine the name to use in scope
+	var name string
+	if useDecl.Alias != nil {
+		name = useDecl.Alias.Name
+	} else {
+		// Use the last component of the path
+		name = pathParts[len(pathParts)-1]
+	}
+
+	// Insert into global scope
+	c.GlobalScope.Insert(name, &Symbol{
+		Name:    name,
+		Type:    resolvedType,
+		DefNode: useDecl,
+	})
+}
+
+// resolveModulePath resolves a module path like ["std", "collections", "HashMap"] to a Type.
+// This handles both built-in standard library paths and user-defined modules.
+func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
+	if len(path) == 0 {
+		c.reportError("module path cannot be empty", span)
+		return nil
+	}
+
+	// Handle standard library paths
+	if path[0] == "std" {
+		// Try to load std module parts
+		// path = ["std", "collections", "hashmap", "HashMap"]
+
+		if len(path) < 2 {
+			return &Named{Name: "std"} // Namespace
+		}
+
+		// Try to load "std/collections"
+		modName := "std/" + path[1]
+		c.ensureStdModuleLoaded(modName, path[1])
+
+		if mod, ok := c.Modules[modName]; ok {
+			return c.resolveUserModulePath(path[2:], mod, span)
+		}
+
+		// If not found, maybe it's "std/collections/hashmap"
+		if len(path) >= 3 {
+			modName = "std/" + path[1] + "/" + path[2]
+			c.ensureStdModuleLoaded(modName, path[1]+"/"+path[2])
+			if mod, ok := c.Modules[modName]; ok {
+				return c.resolveUserModulePath(path[3:], mod, span)
+			}
+		}
+
+		c.reportError(fmt.Sprintf("could not resolve std path: %v", path), span)
+		return nil
+	}
+
+	// Handle user-defined modules
+	if moduleInfo, exists := c.Modules[path[0]]; exists {
+		return c.resolveUserModulePath(path[1:], moduleInfo, span)
+	}
+
+	c.reportError(fmt.Sprintf("unknown module: %s", path[0]), span)
+	return nil
+}
+
+// resolveUserModulePath resolves a path within a user-defined module.
+func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, span lexer.Span) Type {
+	if len(path) == 0 {
+		// Importing the module itself - return a placeholder namespace type
+		return &Named{Name: moduleInfo.Name}
+	}
+
+	// Look up the symbol in the module's scope (direct lookup, no parent search)
+	symbol, exists := moduleInfo.Scope.Symbols[path[0]]
+	if !exists || symbol == nil {
+		c.reportError(fmt.Sprintf("symbol '%s' not found in module '%s'", path[0], moduleInfo.Name), span)
+		return nil
+	}
+
+	// If there are more path components, it's not supported yet
+	// (e.g., utils::MyStruct::field - would need to resolve nested paths)
+	if len(path) > 1 {
+		c.reportError(fmt.Sprintf("nested paths in user modules not yet supported: %v", path), span)
+		return nil
+	}
+
+	return symbol.Type
+}
+
+// resolveStdFilePath resolves a path within the standard library to a file path.
+func (c *Checker) resolveStdFilePath(relPath string) (string, error) {
+	// Look for stdlib in CWD
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	stdlibDir := filepath.Join(cwd, "stdlib")
+
+	// Check if stdlib exists
+	if _, err := os.Stat(stdlibDir); err != nil {
+		// Try finding it relative to the executable or source?
+		// For development, let's try a few common locations
+		// 1. ../stdlib (if in examples)
+		stdlibDir = filepath.Join(cwd, "..", "stdlib")
+		if _, err := os.Stat(stdlibDir); err != nil {
+			// 2. ../../stdlib
+			stdlibDir = filepath.Join(cwd, "..", "..", "stdlib")
+			if _, err := os.Stat(stdlibDir); err != nil {
+				return "", fmt.Errorf("stdlib directory not found")
+			}
+		}
+	}
+
+	// Look for module in stdlib
+	// relPath is like "collections" or "collections/hashmap"
+
+	// Try stdlib/path.mal
+	moduleFile := filepath.Join(stdlibDir, relPath+".mal")
+	if _, err := os.Stat(moduleFile); err == nil {
+		return moduleFile, nil
+	}
+
+	// Try stdlib/path/mod.mal
+	moduleDirFile := filepath.Join(stdlibDir, relPath, "mod.mal")
+	if _, err := os.Stat(moduleDirFile); err == nil {
+		return moduleDirFile, nil
+	}
+
+	return "", fmt.Errorf("std module file not found for %s", relPath)
+}
+
+// ensureStdModuleLoaded attempts to load a standard library module.
+func (c *Checker) ensureStdModuleLoaded(fullModuleName string, relPath string) {
+	if _, ok := c.Modules[fullModuleName]; ok {
+		return
+	}
+
+	// Resolve file path
+	filePath, err := c.resolveStdFilePath(relPath)
+	if err != nil {
+		return // Not found
+	}
+
+	// Load it
+	file, err := c.loadModuleFile(filePath, fullModuleName)
+	if err != nil {
+		// We found the file but failed to load/parse it. This is a real error.
+		// Since we don't have a span here, we print to stderr or append to errors with dummy span.
+		// For now, let's append a generic error.
+		c.Errors = append(c.Errors, diag.Diagnostic{
+			Stage:    diag.StageTypeCheck,
+			Severity: diag.SeverityError,
+			Message:  fmt.Sprintf("failed to load std module '%s': %v", fullModuleName, err),
+		})
+		return
+	}
+
+	// Create module info
+	moduleInfo := &ModuleInfo{
+		Name:     fullModuleName,
+		File:     file,
+		FilePath: filePath,
+		Scope:    NewScope(nil),
+	}
+
+	// Store module info
+	c.Modules[fullModuleName] = moduleInfo
+
+	// Save current state
+	oldCurrentFile := c.CurrentFile
+	oldGlobalScope := c.GlobalScope
+	c.CurrentFile = filePath
+
+	// Create a temporary scope for the module
+	moduleScope := NewScope(c.GlobalScope)
+	c.GlobalScope = moduleScope
+
+	// Process mod declarations in the module file (recursive)
+	for _, subModDecl := range file.Mods {
+		c.processModDecl(subModDecl, file)
+	}
+
+	// Process use declarations in the module file
+	for _, useDecl := range file.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Collect all declarations from the module file and extract public symbols
+	// We reuse the logic from processModDecl, but we need to duplicate it or extract it.
+	// For now, let's duplicate the switch for simplicity as it's already quite long.
+	for _, decl := range file.Decls {
+		var symbol *Symbol
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.StructDecl:
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: c.resolveType(f.Type),
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.EnumDecl:
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TraitDecl:
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Extract type parameters from target type if it's a generic instance
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
+						for i := 1; i < len(method.Params); i++ {
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
+		}
+	}
+
+	// Restore checker state
+	c.GlobalScope = oldGlobalScope
+	c.CurrentFile = oldCurrentFile
+}

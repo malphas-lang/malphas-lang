@@ -1,0 +1,11 @@
+ 
+
+struct Box[T] {
+    value: T,
+}
+
+fn main() {
+    // Test improved error message when resolving type from expression
+    let b: UnknownType[int] = Box[int] { value: 42 };
+}
+

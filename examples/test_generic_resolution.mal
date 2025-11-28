@@ -1,0 +1,41 @@
+ 
+
+// Test generic type resolution improvements
+
+struct Box[T] {
+    value: T,
+}
+
+struct Vec[T] {
+    items: []T,
+}
+
+fn identity[T](x: T) -> T {
+    return x;
+}
+
+fn main() {
+    // Test 1: GenericInstance with explicit type args
+    let b1: Box[int] = Box[int] { value: 42 };
+    println(b1.value);
+
+    // Test 2: Type inference for struct literals
+    let b2 = Box { value: 100 };
+    println(b2.value);
+
+    // Test 3: Nested generics
+    let v = Vec[Box[int]] { items: [] };
+    println(len(v.items));
+
+    // Test 4: Generic function inference
+    let x = identity(42);
+    let y = identity("hello");
+    println(x);
+    println(y);
+
+    // Test 5: Method call on GenericInstance
+    // (This would require an impl block, but testing the type resolution)
+    let b3: Box[string] = Box[string] { value: "test" };
+    println(b3.value);
+}
+

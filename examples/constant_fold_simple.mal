@@ -1,0 +1,10 @@
+// Simple test to verify constant folding
+fn main() {
+    let x = 2 + 3;      // Should be folded to 5
+    let y = 10 * 2;     // Should be folded to 20
+    let z = true && false; // Should be folded to false
+    println(x);
+    println(y);
+    println(z);
+}
+

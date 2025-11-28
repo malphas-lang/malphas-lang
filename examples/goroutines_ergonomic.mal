@@ -1,0 +1,142 @@
+// Examples of ergonomic goroutine syntax (proposed design)
+// This file demonstrates the proposed improvements to spawn syntax
+
+ 
+
+// Example 1: Current syntax (keep as-is)
+fn worker(x: i32, ch: chan i32) {
+    ch <- x * 2;
+}
+
+fn example_current_syntax() {
+    let ch = Channel[i32]::new(0);
+    spawn worker(42, ch);  // ✅ Current - works today
+    let result = <-ch;
+    println(result);
+}
+
+// Example 2: Spawn with block literal (proposed)
+fn example_block_literal() {
+    let ch = Channel[i32]::new(0);
+    let x = 42;
+    
+    // Proposed: spawn { ... } syntax
+    spawn {
+        ch <- x * 2;
+    };
+    
+    let result = <-ch;
+    println(result);
+}
+
+// Example 3: Multiple goroutines with captured variables
+fn example_multiple_goroutines() {
+    let ch = Channel[i32]::new(10);
+    
+    // Spawn 5 workers
+    for i in 0..5 {
+        let id = i;  // Capture loop variable
+        spawn {
+            ch <- id * 2;
+        };
+    }
+    
+    // Collect results
+    for _ in 0..5 {
+        let result = <-ch;
+        println(result);
+    }
+}
+
+// Example 4: Fan-out pattern
+fn example_fan_out() {
+    let input = Channel[i32]::new(10);
+    let output = Channel[i32]::new(10);
+    
+    // Producer
+    spawn {
+        for i in 0..10 {
+            input <- i;
+        }
+    };
+    
+    // Multiple workers
+    for _ in 0..3 {
+        spawn {
+            loop {
+                select {
+                    case let x = <-input => {
+                        if x == nil {
+                            break;
+                        }
+                        output <- x * 2;
+                    }
+                }
+            }
+        };
+    }
+}
+
+// Example 5: Function literal syntax (optional - future consideration)
+fn example_function_literal() {
+    let ch = Channel[i32]::new(0);
+    
+    // Proposed: spawn |params| { ... }(args)
+    spawn |x: i32| {
+        ch <- x * 2;
+    }(42);
+    
+    let result = <-ch;
+    println(result);
+}
+
+// Example 6: Real-world example - HTTP request handler simulation
+fn example_http_handler() {
+    let requests = Channel[string]::new(10);
+    let responses = Channel[string]::new(10);
+    
+    // Simulate incoming requests
+    spawn {
+        requests <- "GET /users";
+        requests <- "GET /posts";
+        requests <- "POST /login";
+    };
+    
+    // Request handler
+    spawn {
+        loop {
+            select {
+                case let req = <-requests => {
+                    if req == nil {
+                        break;
+                    }
+                    // Simulate processing
+                    let response = format!("Response to {}", req);
+                    responses <- response;
+                }
+            }
+        }
+    };
+    
+    // Response collector
+    spawn {
+        loop {
+            select {
+                case let resp = <-responses => {
+                    if resp == nil {
+                        break;
+                    }
+                    println(resp);
+                }
+            }
+        }
+    };
+}
+
+fn main() {
+    example_current_syntax();
+    // example_block_literal();  // Proposed syntax
+    // example_multiple_goroutines();  // Proposed syntax
+    // example_fan_out();  // Proposed syntax
+}
+

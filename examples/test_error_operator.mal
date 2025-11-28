@@ -1,0 +1,10 @@
+// Test unsupported operator error
+fn main() {
+    let x = 5;
+    let y = 3;
+    
+    // This should suggest alternatives for unsupported operator
+    let z = x ** y;  // ** is not supported
+    println(z);
+}
+

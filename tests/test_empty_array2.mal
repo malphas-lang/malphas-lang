@@ -1,0 +1,11 @@
+ 
+
+fn test() {
+    return [];
+}
+
+fn main() {
+    let arr = [];
+    println(len(arr));
+}
+

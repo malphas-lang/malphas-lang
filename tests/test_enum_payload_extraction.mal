@@ -1,0 +1,43 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+    Point,
+}
+
+fn main() {
+    let c = Shape::Circle(42);
+    let r = Shape::Rectangle(10, 20);
+    let p = Shape::Point;
+    
+    // Test single payload extraction
+    match c {
+        Shape::Circle(radius) => {
+            println("Circle radius:");
+            println(radius);  // Should print 42
+        },
+        _ => {}
+    };
+    
+    // Test multiple payload extraction
+    match r {
+        Shape::Rectangle(width, height) => {
+            println("Rectangle:");
+            println(width);   // Should print 10
+            println(height);  // Should print 20
+            let area = width * height;  // Should be 200
+            println(area);
+        },
+        _ => {}
+    };
+    
+    // Test unit variant (no payload)
+    match p {
+        Shape::Point => {
+            println("Point");
+        },
+        _ => {}
+    };
+}
+

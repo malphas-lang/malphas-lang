@@ -1,0 +1,39 @@
+ 
+
+// Test program for GC integration
+// This program allocates various types of memory to verify GC is working
+
+fn main() {
+    // Test 1: Allocate strings (GC-managed)
+    let s1 = "Hello";
+    let s2 = "World";
+    let s3 = s1 + " " + s2;
+    
+    println(s1);
+    println(s2);
+    println(s3);
+    
+    // Test 2: Create multiple string allocations in a loop
+    let mut i = 0;
+    while i < 5 {
+        let msg = "Iteration";
+        println(msg);
+        i = i + 1;
+    }
+    
+    // Test 3: String operations that allocate
+    let msg1 = "Test";
+    let msg2 = "Message";
+    let combined = msg1 + " " + msg2;
+    println(combined);
+    
+    // Test 4: Nested string concatenation
+    let part1 = "GC";
+    let part2 = "test";
+    let part3 = "completed";
+    let full = part1 + " " + part2 + " " + part3;
+    println(full);
+    
+    println("GC test completed successfully!");
+}
+

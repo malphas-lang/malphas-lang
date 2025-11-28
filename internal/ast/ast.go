@@ -135,6 +135,7 @@ type FnDecl struct {
 	TypeParams []GenericParam
 	Params     []*Param
 	ReturnType TypeExpr
+	Effects    TypeExpr // Optional effect row
 	Where      *WhereClause
 	Body       *BlockExpr
 	span       lexer.Span
@@ -144,7 +145,7 @@ type FnDecl struct {
 func (d *FnDecl) Span() lexer.Span { return d.span }
 
 // NewFnDecl constructs a function declaration node.
-func NewFnDecl(isPub bool, isUnsafe bool, name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
+func NewFnDecl(isPub bool, isUnsafe bool, name *Ident, typeParams []GenericParam, params []*Param, returnType TypeExpr, effects TypeExpr, where *WhereClause, body *BlockExpr, span lexer.Span) *FnDecl {
 	return &FnDecl{
 		Pub:        isPub,
 		Unsafe:     isUnsafe,
@@ -152,6 +153,7 @@ func NewFnDecl(isPub bool, isUnsafe bool, name *Ident, typeParams []GenericParam
 		TypeParams: typeParams,
 		Params:     params,
 		ReturnType: returnType,
+		Effects:    effects,
 		Where:      where,
 		Body:       body,
 		span:       span,
@@ -173,10 +175,13 @@ type GenericParam interface {
 }
 
 // TypeParam represents a generic type parameter.
+// For HKTs, this can represent a type constructor parameter like F[_].
 type TypeParam struct {
-	Name   *Ident
-	Bounds []TypeExpr
-	span   lexer.Span
+	Name              *Ident
+	Bounds            []TypeExpr
+	IsTypeConstructor bool // true for F[_], false for T
+	Arity             int  // number of type arguments for constructor (0 for regular types)
+	span              lexer.Span
 }
 
 // Span returns the type parameter span.
@@ -185,9 +190,22 @@ func (p *TypeParam) Span() lexer.Span { return p.span }
 // NewTypeParam constructs a type parameter node.
 func NewTypeParam(name *Ident, bounds []TypeExpr, span lexer.Span) *TypeParam {
 	return &TypeParam{
-		Name:   name,
-		Bounds: bounds,
-		span:   span,
+		Name:              name,
+		Bounds:            bounds,
+		IsTypeConstructor: false,
+		Arity:             0,
+		span:              span,
+	}
+}
+
+// NewTypeConstructorParam constructs a type constructor parameter node (for F[_]).
+func NewTypeConstructorParam(name *Ident, arity int, bounds []TypeExpr, span lexer.Span) *TypeParam {
+	return &TypeParam{
+		Name:              name,
+		Bounds:            bounds,
+		IsTypeConstructor: true,
+		Arity:             arity,
+		span:              span,
 	}
 }
 
@@ -467,20 +485,22 @@ func (*EnumDecl) declNode() {}
 
 // EnumVariant represents a single enum variant.
 type EnumVariant struct {
-	Name     *Ident
-	Payloads []TypeExpr
-	span     lexer.Span
+	Name       *Ident
+	Payloads   []TypeExpr
+	ReturnType TypeExpr // nil for standard enum variants
+	span       lexer.Span
 }
 
 // Span returns the enum variant span.
 func (v *EnumVariant) Span() lexer.Span { return v.span }
 
 // NewEnumVariant constructs an enum variant node.
-func NewEnumVariant(name *Ident, payloads []TypeExpr, span lexer.Span) *EnumVariant {
+func NewEnumVariant(name *Ident, payloads []TypeExpr, returnType TypeExpr, span lexer.Span) *EnumVariant {
 	return &EnumVariant{
-		Name:     name,
-		Payloads: payloads,
-		span:     span,
+		Name:       name,
+		Payloads:   payloads,
+		ReturnType: returnType,
+		span:       span,
 	}
 }
 
@@ -555,26 +575,26 @@ func (*ConstDecl) declNode() {}
 
 // TraitDecl represents a trait declaration.
 type TraitDecl struct {
-	Pub        bool
-	Name       *Ident
-	TypeParams []GenericParam
-	Where      *WhereClause
-	Methods    []*FnDecl
-	span       lexer.Span
+	Pub             bool
+	Name            *Ident
+	TypeParams      []GenericParam
+	Methods         []*FnDecl
+	AssociatedTypes []*AssociatedType // Associated types declared in this trait
+	span            lexer.Span
 }
 
-// Span returns the trait declaration span.
+// Span returns the declaration span.
 func (d *TraitDecl) Span() lexer.Span { return d.span }
 
 // NewTraitDecl constructs a trait declaration node.
-func NewTraitDecl(isPub bool, name *Ident, typeParams []GenericParam, where *WhereClause, methods []*FnDecl, span lexer.Span) *TraitDecl {
+func NewTraitDecl(isPub bool, name *Ident, typeParams []GenericParam, methods []*FnDecl, associatedTypes []*AssociatedType, span lexer.Span) *TraitDecl {
 	return &TraitDecl{
-		Pub:        isPub,
-		Name:       name,
-		TypeParams: typeParams,
-		Where:      where,
-		Methods:    methods,
-		span:       span,
+		Pub:             isPub,
+		Name:            name,
+		TypeParams:      typeParams,
+		Methods:         methods,
+		AssociatedTypes: associatedTypes,
+		span:            span,
 	}
 }
 
@@ -588,30 +608,34 @@ func (*TraitDecl) declNode() {}
 
 // ImplDecl represents an impl block.
 type ImplDecl struct {
-	TypeParams []GenericParam
-	Trait      TypeExpr
-	Target     TypeExpr
-	Where      *WhereClause
-	Methods    []*FnDecl
-	span       lexer.Span
+	Pub             bool
+	TypeParams      []GenericParam
+	Trait           TypeExpr // if nil, this is an inherent impl (impl for Type)
+	Target          TypeExpr
+	Methods         []*FnDecl
+	TypeAssignments []*TypeAssignment // Associated type specifications
+	Where           *WhereClause
+	span            lexer.Span
 }
 
-// Span returns the impl declaration span.
+// Span returns the declaration span.
 func (d *ImplDecl) Span() lexer.Span { return d.span }
 
 // NewImplDecl constructs an impl declaration node.
-func NewImplDecl(typeParams []GenericParam, trait TypeExpr, target TypeExpr, where *WhereClause, methods []*FnDecl, span lexer.Span) *ImplDecl {
+func NewImplDecl(isPub bool, typeParams []GenericParam, trait TypeExpr, target TypeExpr, methods []*FnDecl, typeAssignments []*TypeAssignment, where *WhereClause, span lexer.Span) *ImplDecl {
 	return &ImplDecl{
-		TypeParams: typeParams,
-		Trait:      trait,
-		Target:     target,
-		Where:      where,
-		Methods:    methods,
-		span:       span,
+		Pub:             isPub,
+		TypeParams:      typeParams,
+		Trait:           trait,
+		Target:          target,
+		Methods:         methods,
+		TypeAssignments: typeAssignments,
+		Where:           where,
+		span:            span,
 	}
 }
 
-// SetSpan updates the impl declaration span.
+// SetSpan updates the declaration span.
 func (d *ImplDecl) SetSpan(span lexer.Span) {
 	d.span = span
 }
@@ -836,9 +860,14 @@ func NewContinueStmt(span lexer.Span) *ContinueStmt {
 func (*ContinueStmt) stmtNode() {}
 
 // SpawnStmt represents a spawn statement (goroutine).
+// Exactly one of Call, Block, or FunctionLiteral should be set.
+// When FunctionLiteral is set, Args contains the arguments to call it with.
 type SpawnStmt struct {
-	Call *CallExpr
-	span lexer.Span
+	Call            *CallExpr        // For: spawn worker(args);
+	Block           *BlockExpr       // For: spawn { ... };
+	FunctionLiteral *FunctionLiteral // For: spawn |x| { ... }(args);
+	Args            []Expr           // Arguments for function literal call (only used when FunctionLiteral is set)
+	span            lexer.Span
 }
 
 // Span returns the statement span.
@@ -847,11 +876,28 @@ func (s *SpawnStmt) Span() lexer.Span { return s.span }
 // SetSpan updates the statement span.
 func (s *SpawnStmt) SetSpan(span lexer.Span) { s.span = span }
 
-// NewSpawnStmt constructs a spawn statement node.
+// NewSpawnStmt constructs a spawn statement node with a function call.
 func NewSpawnStmt(call *CallExpr, span lexer.Span) *SpawnStmt {
 	return &SpawnStmt{
 		Call: call,
 		span: span,
+	}
+}
+
+// NewSpawnStmtWithBlock constructs a spawn statement node with a block literal.
+func NewSpawnStmtWithBlock(block *BlockExpr, span lexer.Span) *SpawnStmt {
+	return &SpawnStmt{
+		Block: block,
+		span:  span,
+	}
+}
+
+// NewSpawnStmtWithFunctionLiteral constructs a spawn statement node with a function literal.
+func NewSpawnStmtWithFunctionLiteral(fnLit *FunctionLiteral, args []Expr, span lexer.Span) *SpawnStmt {
+	return &SpawnStmt{
+		FunctionLiteral: fnLit,
+		Args:            args,
+		span:            span,
 	}
 }
 
@@ -1050,6 +1096,29 @@ func (l *BoolLit) SetSpan(span lexer.Span) {
 // exprNode marks BoolLit as an expression.
 func (*BoolLit) exprNode() {}
 
+// FloatLit represents a floating-point literal.
+type FloatLit struct {
+	Text string
+	span lexer.Span
+}
+
+// Span returns the literal span.
+func (l *FloatLit) Span() lexer.Span { return l.span }
+
+// SetSpan updates the literal span.
+func (l *FloatLit) SetSpan(span lexer.Span) { l.span = span }
+
+// NewFloatLit constructs a float literal node.
+func NewFloatLit(text string, span lexer.Span) *FloatLit {
+	return &FloatLit{
+		Text: text,
+		span: span,
+	}
+}
+
+// exprNode marks FloatLit as an expression.
+func (*FloatLit) exprNode() {}
+
 // NilLit represents the nil literal.
 type NilLit struct {
 	span lexer.Span
@@ -1071,8 +1140,9 @@ func (l *NilLit) SetSpan(span lexer.Span) {
 // exprNode marks NilLit as an expression.
 func (*NilLit) exprNode() {}
 
-// ArrayLiteral represents an array literal ([1, 2, 3]).
+// ArrayLiteral represents an array literal ([1, 2, 3]) or slice literal ([]T{1, 2}).
 type ArrayLiteral struct {
+	Type     TypeExpr // Optional explicit type (e.g. []T or [T;N])
 	Elements []Expr
 	span     lexer.Span
 }
@@ -1088,6 +1158,15 @@ func NewArrayLiteral(elements []Expr, span lexer.Span) *ArrayLiteral {
 	}
 }
 
+// NewTypedArrayLiteral constructs an array/slice literal node with explicit type.
+func NewTypedArrayLiteral(typ TypeExpr, elements []Expr, span lexer.Span) *ArrayLiteral {
+	return &ArrayLiteral{
+		Type:     typ,
+		Elements: elements,
+		span:     span,
+	}
+}
+
 // SetSpan updates the literal span.
 func (a *ArrayLiteral) SetSpan(span lexer.Span) {
 	a.span = span
@@ -1095,6 +1174,55 @@ func (a *ArrayLiteral) SetSpan(span lexer.Span) {
 
 // exprNode marks ArrayLiteral as an expression.
 func (*ArrayLiteral) exprNode() {}
+
+// MapLiteralEntry represents a key-value pair in a map literal.
+type MapLiteralEntry struct {
+	Key   Expr
+	Value Expr
+	span  lexer.Span
+}
+
+// Span returns the entry span.
+func (e *MapLiteralEntry) Span() lexer.Span { return e.span }
+
+// NewMapLiteralEntry constructs a map literal entry node.
+func NewMapLiteralEntry(key Expr, value Expr, span lexer.Span) *MapLiteralEntry {
+	return &MapLiteralEntry{
+		Key:   key,
+		Value: value,
+		span:  span,
+	}
+}
+
+// SetSpan updates the entry span.
+func (e *MapLiteralEntry) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
+// MapLiteral represents a map literal ({key => value, key2 => value2}).
+type MapLiteral struct {
+	Entries []*MapLiteralEntry
+	span    lexer.Span
+}
+
+// Span returns the literal span.
+func (m *MapLiteral) Span() lexer.Span { return m.span }
+
+// NewMapLiteral constructs a map literal node.
+func NewMapLiteral(entries []*MapLiteralEntry, span lexer.Span) *MapLiteral {
+	return &MapLiteral{
+		Entries: entries,
+		span:    span,
+	}
+}
+
+// SetSpan updates the literal span.
+func (m *MapLiteral) SetSpan(span lexer.Span) {
+	m.span = span
+}
+
+// exprNode marks MapLiteral as an expression.
+func (*MapLiteral) exprNode() {}
 
 // PrefixExpr represents a prefix expression.
 type PrefixExpr struct {
@@ -1205,6 +1333,33 @@ func (e *CallExpr) SetSpan(span lexer.Span) {
 
 // exprNode marks CallExpr as an expression.
 func (*CallExpr) exprNode() {}
+
+// FunctionLiteral represents a function literal expression: |params| { body }
+type FunctionLiteral struct {
+	Params []*Param
+	Body   *BlockExpr
+	span   lexer.Span
+}
+
+// Span returns the expression span.
+func (e *FunctionLiteral) Span() lexer.Span { return e.span }
+
+// NewFunctionLiteral constructs a function literal node.
+func NewFunctionLiteral(params []*Param, body *BlockExpr, span lexer.Span) *FunctionLiteral {
+	return &FunctionLiteral{
+		Params: params,
+		Body:   body,
+		span:   span,
+	}
+}
+
+// SetSpan updates the function literal span.
+func (e *FunctionLiteral) SetSpan(span lexer.Span) {
+	e.span = span
+}
+
+// exprNode marks FunctionLiteral as an expression.
+func (*FunctionLiteral) exprNode() {}
 
 // FieldExpr represents a field access expression.
 type FieldExpr struct {
@@ -1338,10 +1493,13 @@ func NewGenericType(base TypeExpr, args []TypeExpr, span lexer.Span) *GenericTyp
 }
 
 // FunctionType represents a function type annotation (fn(A, B) -> C).
+// FunctionType represents a function type signature (fn(A, B) -> C / E).
 type FunctionType struct {
-	Params []TypeExpr
-	Return TypeExpr
-	span   lexer.Span
+	TypeParams []GenericParam
+	Params     []TypeExpr
+	Return     TypeExpr
+	Effects    TypeExpr // Optional effect row
+	span       lexer.Span
 }
 
 // Span returns the function type span.
@@ -1356,11 +1514,40 @@ func (t *FunctionType) SetSpan(span lexer.Span) {
 func (*FunctionType) typeNode() {}
 
 // NewFunctionType constructs a function type node.
-func NewFunctionType(params []TypeExpr, ret TypeExpr, span lexer.Span) *FunctionType {
+func NewFunctionType(typeParams []GenericParam, params []TypeExpr, ret TypeExpr, effects TypeExpr, span lexer.Span) *FunctionType {
 	return &FunctionType{
-		Params: params,
-		Return: ret,
-		span:   span,
+		TypeParams: typeParams,
+		Params:     params,
+		Return:     ret,
+		Effects:    effects,
+		span:       span,
+	}
+}
+
+// EffectRowType represents an effect row { E1, E2 | Tail }.
+type EffectRowType struct {
+	Effects []TypeExpr
+	Tail    TypeExpr // Optional row variable
+	span    lexer.Span
+}
+
+// Span returns the effect row type span.
+func (t *EffectRowType) Span() lexer.Span { return t.span }
+
+// SetSpan updates the effect row type span.
+func (t *EffectRowType) SetSpan(span lexer.Span) {
+	t.span = span
+}
+
+// typeNode marks EffectRowType as a type expression.
+func (*EffectRowType) typeNode() {}
+
+// NewEffectRowType constructs an effect row type node.
+func NewEffectRowType(effects []TypeExpr, tail TypeExpr, span lexer.Span) *EffectRowType {
+	return &EffectRowType{
+		Effects: effects,
+		Tail:    tail,
+		span:    span,
 	}
 }
 
@@ -1414,3 +1601,92 @@ func (l *StructLiteral) SetSpan(span lexer.Span) {
 
 // exprNode marks StructLiteral as an expression.
 func (*StructLiteral) exprNode() {}
+
+// TupleType represents a tuple type annotation (T1, T2, ...).
+type TupleType struct {
+	Types []TypeExpr
+	span  lexer.Span
+}
+
+func (t *TupleType) Span() lexer.Span        { return t.span }
+func (t *TupleType) SetSpan(span lexer.Span) { t.span = span }
+func (*TupleType) typeNode()                 {}
+
+func NewTupleType(types []TypeExpr, span lexer.Span) *TupleType {
+	return &TupleType{
+		Types: types,
+		span:  span,
+	}
+}
+
+// TupleLiteral represents a tuple value (e1, e2, ...).
+type TupleLiteral struct {
+	Elements []Expr
+	span     lexer.Span
+}
+
+func (t *TupleLiteral) Span() lexer.Span        { return t.span }
+func (t *TupleLiteral) SetSpan(span lexer.Span) { t.span = span }
+func (*TupleLiteral) exprNode()                 {}
+
+func NewTupleLiteral(elements []Expr, span lexer.Span) *TupleLiteral {
+	return &TupleLiteral{
+		Elements: elements,
+		span:     span,
+	}
+}
+
+// RecordField represents a field in a record type definition.
+type RecordField struct {
+	Name *Ident
+	Type TypeExpr
+	span lexer.Span
+}
+
+func (f *RecordField) Span() lexer.Span        { return f.span }
+func (f *RecordField) SetSpan(span lexer.Span) { f.span = span }
+
+func NewRecordField(name *Ident, typ TypeExpr, span lexer.Span) *RecordField {
+	return &RecordField{
+		Name: name,
+		Type: typ,
+		span: span,
+	}
+}
+
+// RecordType represents an anonymous struct type / record type ({ x: int, y: bool }).
+// It supports row polymorphism via the optional Tail field ({ x: int | R }).
+type RecordType struct {
+	Fields []*RecordField
+	Tail   TypeExpr // Optional type variable for row polymorphism
+	span   lexer.Span
+}
+
+func (r *RecordType) Span() lexer.Span        { return r.span }
+func (r *RecordType) SetSpan(span lexer.Span) { r.span = span }
+func (*RecordType) typeNode()                 {}
+
+func NewRecordType(fields []*RecordField, tail TypeExpr, span lexer.Span) *RecordType {
+	return &RecordType{
+		Fields: fields,
+		Tail:   tail,
+		span:   span,
+	}
+}
+
+// RecordLiteral represents an anonymous struct / record value ({ x: 1, y: true }).
+type RecordLiteral struct {
+	Fields []*StructLiteralField // reusing StructLiteralField as it has Name and Value
+	span   lexer.Span
+}
+
+func (r *RecordLiteral) Span() lexer.Span        { return r.span }
+func (r *RecordLiteral) SetSpan(span lexer.Span) { r.span = span }
+func (*RecordLiteral) exprNode()                 {}
+
+func NewRecordLiteral(fields []*StructLiteralField, span lexer.Span) *RecordLiteral {
+	return &RecordLiteral{
+		Fields: fields,
+		span:   span,
+	}
+}

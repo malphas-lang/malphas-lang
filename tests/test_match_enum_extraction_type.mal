@@ -1,0 +1,16 @@
+ 
+
+enum Shape {
+    Circle(int),
+}
+
+fn main() {
+    let c = Shape::Circle(10);
+    match c {
+        Shape::Circle(r) => {
+            let area = r * r * 3;
+            println(area);
+        }
+    }
+}
+

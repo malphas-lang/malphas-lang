@@ -1,0 +1,36 @@
+// Test file for quantified types
+// Demonstrates forall and exists syntax
+
+trait Display {
+    fn display(&self) -> string;
+}
+
+trait Clone {
+    fn clone(&self) -> Self;
+}
+
+// Basic forall type: polymorphic identity function  
+type PolyId = forall[T] fn(T) -> T;
+
+// Forall with trait bounds
+type Shower = forall[T: Display] fn(T) -> string;
+
+// Forall with multiple bounds
+type Cloner = forall[T: Display + Clone] fn(T) -> T;
+
+// Demonstrating relationship with exists
+type ShowBox = exists T: Display. T;
+
+// Function using forall parameter
+fn apply_twice(f: forall[T] fn(T) -> T, x: int) -> int {
+    return f(f(x));
+}
+
+// Function using exists parameter
+fn show_anything(x: exists T: Display. T) -> string {
+    return x.display();
+}
+
+fn main() {
+    println("Quantified types test");
+}

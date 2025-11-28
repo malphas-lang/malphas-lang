@@ -1,0 +1,13 @@
+package test;
+
+pub struct Vec[T] {
+    data: int,
+}
+
+impl Vec[T] {
+    pub fn new() -> Vec[T] {
+        return Vec[T] {
+            data: 0
+        };
+    }
+}

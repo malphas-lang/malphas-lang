@@ -1,0 +1,11 @@
+ 
+
+use std::collections::HashMap;
+
+fn main() {
+    let mut m = HashMap[string, int]::new();
+    m.put("hello", 1);
+    println(m.len());
+    // println(m.get("hello")); // get might panic or return default if key missing in current impl logic?
+}
+

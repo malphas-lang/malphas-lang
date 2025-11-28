@@ -12,17 +12,25 @@ type TypeParam struct {
 }
 
 func (t *TypeParam) String() string {
-	if len(t.Bounds) == 0 {
-		return t.Name
+	if len(t.Bounds) > 0 {
+		var bounds []string
+		for _, b := range t.Bounds {
+			bounds = append(bounds, b.String())
+		}
+		return t.Name + ": " + strings.Join(bounds, " + ")
 	}
-	var bounds []string
-	for _, b := range t.Bounds {
-		bounds = append(bounds, b.String())
-	}
-	return t.Name + ": " + strings.Join(bounds, " + ")
+	return t.Name
 }
 
 func (t *TypeParam) IsType() {}
+
+// GetKind returns the kind of this type parameter.
+// By default, type parameters have kind * unless specified otherwise.
+func (t *TypeParam) GetKind() Kind {
+	// For now, all type parameters have kind *
+	// In the future, we might support kind annotations like T :: * -> *
+	return KindStar
+}
 
 // GenericInstance represents a concrete instantiation of a generic type (e.g. Box[int]).
 type GenericInstance struct {

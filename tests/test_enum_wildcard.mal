@@ -1,0 +1,13 @@
+ 
+
+enum Shape {
+    Circle(int)
+}
+
+fn main() {
+    let c = Shape::Circle(10);
+    match c {
+        Shape::Circle(_) => println("It's a circle"),
+    }
+}
+

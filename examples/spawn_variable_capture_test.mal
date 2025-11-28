@@ -1,0 +1,14 @@
+ 
+
+fn main() {
+    let x = 42;
+    let ch = Channel[int]::new(0);
+    
+    spawn {
+        ch <- x * 2;
+    }
+    
+    let result = <-ch;
+    println(result);  // Should print 84
+}
+

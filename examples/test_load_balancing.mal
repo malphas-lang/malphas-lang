@@ -1,0 +1,40 @@
+ 
+
+// Test program to verify load-aware load balancing
+// This spawns many legions to test that they are distributed
+// more evenly across threads compared to round-robin
+
+fn worker(id: int, result_ch: chan int) {
+    // Simulate some work
+    let value = id * 2;
+    result_ch <- value;
+}
+
+fn main() {
+    let num_workers = 50;
+    let result_ch = Channel[int]::new(num_workers);
+    
+    // Spawn many workers
+    let mut i = 0;
+    while i < num_workers {
+        let worker_id = i;
+        spawn worker(worker_id, result_ch);
+        i = i + 1;
+    }
+    
+    // Collect all results and print them
+    let mut count = 0;
+    let mut j = 0;
+    while j < num_workers {
+        let result = <-result_ch;
+        if count < 10 {
+            println(result);
+            count = count + 1;
+        }
+        j = j + 1;
+    }
+    
+    println("Load balancing test completed successfully!");
+    println("All 50 workers completed");
+}
+

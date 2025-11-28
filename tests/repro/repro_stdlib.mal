@@ -1,0 +1,23 @@
+ 
+
+struct MyBox[T] {
+    val: T
+}
+
+impl [T] MyBox[T] {
+    fn get(self: &Self) -> T {
+        return self.val;
+    }
+    
+    fn set(self: &mut Self, v: T) {
+        self.val = v;
+    }
+}
+
+fn main() {
+    let mut b = MyBox[int] { val: 10 };
+    let v = b.get();
+    println(v);
+    // b.set(20); // Type checker issue
+    // println(b.get());
+}

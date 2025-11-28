@@ -1,0 +1,27 @@
+// Test where clauses with associated types
+trait Iterator {
+    type Item;
+    fn next(&mut self) -> Option[Self::Item];
+}
+
+trait Display {
+    fn display(&self) -> string;
+}
+
+// Function with where clause using associated type
+fn print_items[I](iter: I) where I: Iterator, I::Item: Display {
+    // This function requires:
+    // 1. I implements Iterator
+    // 2. I::Item implements Display
+    let item = iter.next();
+    println("Item");
+}
+
+// Trait with where clause on associated type
+trait Container[C] where C::Item: Clone {
+    fn copy_all(&self) -> Vec[C::Item];
+}
+
+fn main() {
+    println("Where clause with associated types test");
+}

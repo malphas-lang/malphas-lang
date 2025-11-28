@@ -1,0 +1,64 @@
+ 
+
+fn main() {
+    // Test 1: Basic string literal concatenation
+    let s1 = "Hello" + "World";
+    println(s1); // Should print "HelloWorld"
+    
+    // Test 2: String variable + string literal
+    let s2 = "Hello";
+    let s3 = s2 + " World";
+    println(s3); // Should print "Hello World"
+    
+    // Test 3: String variable + string variable
+    let s4 = "foo";
+    let s5 = "bar";
+    let s6 = s4 + s5;
+    println(s6); // Should print "foobar"
+    
+    // Test 4: Multiple concatenations in a chain
+    let s7 = "a" + "b" + "c";
+    println(s7); // Should print "abc"
+    
+    let s8 = "x";
+    let s9 = s8 + "y" + "z";
+    println(s9); // Should print "xyz"
+    
+    // Test 5: Concatenation with spaces
+    let s10 = "Hello" + " " + "World";
+    println(s10); // Should print "Hello World"
+    
+    // Test 6: Empty string concatenation
+    let s11 = "" + "test";
+    println(s11); // Should print "test"
+    
+    let s12 = "test" + "";
+    println(s12); // Should print "test"
+    
+    // Test 7: Concatenation in expressions
+    let prefix = "Result: ";
+    let value = "42";
+    let result = prefix + value;
+    println(result); // Should print "Result: 42"
+    
+    // Test 8: Building longer strings
+    let part1 = "The";
+    let part2 = " quick";
+    let part3 = " brown";
+    let part4 = " fox";
+    let sentence = part1 + part2 + part3 + part4;
+    println(sentence); // Should print "The quick brown fox"
+    
+    // Test 9: Concatenation with numbers (as strings)
+    let num_str = "123";
+    let text = "Number: " + num_str;
+    println(text); // Should print "Number: 123"
+    
+    // Test 10: Nested concatenation
+    let a = "a";
+    let b = "b";
+    let c = "c";
+    let combined = (a + b) + c;
+    println(combined); // Should print "abc"
+}
+

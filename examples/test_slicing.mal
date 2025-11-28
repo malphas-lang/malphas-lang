@@ -1,0 +1,30 @@
+ 
+
+fn main() {
+    // Array slicing
+    let arr = [10, 20, 30, 40, 50];
+    let s1 = arr[1..4]; // [20, 30, 40]
+    println(s1[0]);
+    println(s1[1]);
+    println(s1[2]);
+    
+    let s2 = arr[2..]; // [30, 40, 50]
+    println(s2[0]);
+    
+    let s3 = arr[..3]; // [10, 20, 30]
+    println(s3[2]);
+    
+    let s4 = arr[..]; // Full slice
+    println(len(s4));
+
+    // Slice slicing
+    let slice: []int = [1, 2, 3, 4, 5];
+    let sub = slice[1..3];
+    println(len(sub));
+    
+    // String slicing
+    let str = "hello world";
+    let subStr = str[0..5];
+    println(subStr); // hello
+}
+

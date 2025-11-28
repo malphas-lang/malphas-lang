@@ -1,0 +1,29 @@
+ 
+
+// Test type resolution improvements
+
+struct Box[T] {
+    value: T,
+}
+
+enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+fn main() {
+    // Test 1: GenericInstance resolution from expression
+    let b: Box[int] = Box[int] { value: 42 };
+    println(b.value);
+    
+    // Test 2: Nested GenericInstance (if parser supports it)
+    // let r: Result[Box[int], string] = Result::Ok(b);
+    
+    // Test 3: Type resolution should find Box[int]
+    let b2 = Box[int] { value: 100 };
+    println(b2.value);
+    
+    // Test 4: Error message test - uncomment to test
+    // let b3: UnknownType[int] = Box[int] { value: 42 }; // Should suggest Box
+}
+

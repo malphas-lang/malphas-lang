@@ -1,4 +1,4 @@
-package main;
+ 
 
 type IntChan = chan int;
 

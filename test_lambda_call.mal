@@ -1,0 +1,7 @@
+ 
+
+fn main() {
+    let result = |x: i32| x + 1(5);
+    println("test");
+}
+

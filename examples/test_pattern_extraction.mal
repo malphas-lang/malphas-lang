@@ -1,0 +1,55 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int),
+    Triangle(int, int, int)
+}
+
+fn main() {
+    // Test Circle variant with pattern extraction
+    let shape1 = Shape::Circle(5);
+    let area1 = match shape1 {
+        Shape::Circle(radius) => {
+            radius * radius * 3  // Should be 75
+        },
+        Shape::Rectangle(width, height) => {
+            width * height
+        },
+        Shape::Triangle(a, b, c) => {
+            a + b + c
+        }
+    };
+    println(area1);
+    
+    // Test Rectangle variant
+    let shape2 = Shape::Rectangle(10, 20);
+    let area2 = match shape2 {
+        Shape::Circle(radius) => {
+            radius * radius * 3
+        },
+        Shape::Rectangle(width, height) => {
+            width * height  // Should be 200
+        },
+        Shape::Triangle(a, b, c) => {
+            a + b + c
+        }
+    };
+    println(area2);
+    
+    // Test Triangle variant
+    let shape3 = Shape::Triangle(3, 4, 5);
+    let perimeter = match shape3 {
+        Shape::Circle(radius) => {
+            radius * radius * 3
+        },
+        Shape::Rectangle(width, height) => {
+            width * height
+        },
+        Shape::Triangle(a, b, c) => {
+            a + b + c  // Should be 12
+        }
+    };
+    println(perimeter);
+}
+

@@ -1,0 +1,20 @@
+// GADT Error Test
+
+enum Expr[T] {
+    IntLit(int): Expr[int],
+    BoolLit(bool): Expr[bool]
+}
+
+fn test_fail() {
+    // Invalid construction
+    let e: Expr[int] = Expr::BoolLit(true); 
+}
+
+fn test_match_fail(e: Expr[int]) {
+    match e {
+        Expr::IntLit(i) => {},
+        // This should fail because Expr[bool] is not Expr[int]
+        Expr::BoolLit(b) => {} 
+    }
+}
+

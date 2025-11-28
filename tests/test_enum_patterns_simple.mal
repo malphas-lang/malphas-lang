@@ -1,0 +1,65 @@
+ 
+
+// Test enum with multiple payload types
+enum Result {
+    Ok(int),
+    Err(string),
+}
+
+// Test enum with multiple payload values
+enum Point {
+    Cartesian(int, int),
+    Polar(float, float),
+}
+
+fn main() {
+    // Test 1: Multiple payload values extraction
+    let p1 = Point::Cartesian(10, 20);
+    match p1 {
+        Point::Cartesian(x, y) => {
+            println("Cartesian coordinates:");
+            println(x);
+            println(y);
+        },
+        Point::Polar(r, theta) => {
+            println("Polar coordinates:");
+            println(r);
+            println(theta);
+        },
+    };
+
+    // Test 2: Different payload types
+    let r1 = Result::Ok(42);
+    let r2 = Result::Err("error message");
+    
+    match r1 {
+        Result::Ok(value) => {
+            println("Ok value:");
+            println(value);
+        },
+        Result::Err(msg) => {
+            println("Error:");
+            println(msg);
+        },
+    };
+
+    match r2 {
+        Result::Ok(value) => {
+            println("Ok value:");
+            println(value);
+        },
+        Result::Err(msg) => {
+            println("Error message:");
+            println(msg);
+        },
+    };
+
+    // Test 3: Match expression returning values
+    let result = match r1 {
+        Result::Ok(v) => v * 2,
+        Result::Err(_) => 0,
+    };
+    println("Doubled result:");
+    println(result);
+}
+

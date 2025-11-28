@@ -1,0 +1,14 @@
+ 
+
+fn main() {
+    let s = "hello";
+    
+    let result = match s {
+        "hello" => 1,
+        "world" => 2,
+        _ => 0,
+    };
+    
+    println(result);
+}
+

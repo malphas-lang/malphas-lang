@@ -1,0 +1,42 @@
+ 
+
+fn main() {
+    // Test string concatenation performance with many operations
+    // This helps verify the implementation handles multiple concatenations correctly
+    
+    let mut result = "";
+    let part = "x";
+    
+    // Build a string by concatenating many times
+    result = result + part;
+    result = result + part;
+    result = result + part;
+    result = result + part;
+    result = result + part;
+    
+    println(result); // Should print "xxxxx"
+    
+    // Test building a longer string
+    let mut long = "";
+    let word = "word";
+    let space = " ";
+    
+    long = long + word;
+    long = long + space;
+    long = long + word;
+    long = long + space;
+    long = long + word;
+    
+    println(long); // Should print "word word word"
+    
+    // Test chained concatenations
+    let a = "a";
+    let b = "b";
+    let c = "c";
+    let d = "d";
+    let e = "e";
+    
+    let chain = a + b + c + d + e;
+    println(chain); // Should print "abcde"
+}
+

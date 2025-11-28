@@ -1,0 +1,23 @@
+ 
+
+use std::collections::Vec;
+
+fn main() {
+    let mut v = Vec[int]::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+
+    println(v.len()); // 3
+
+    let last = v.pop();
+    println(last); // 30
+    println(v.len()); // 2
+
+    let second = v.pop();
+    println(second); // 20
+    println(v.len()); // 1
+
+    v.pop();
+    println(v.is_empty()); // true
+}

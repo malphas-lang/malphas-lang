@@ -1,0 +1,7 @@
+ 
+
+fn main() {
+    let mut v: []int = [1, 2, 3];
+    delete(v, -1);
+    println(v[-1]);
+}

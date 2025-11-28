@@ -1,0 +1,18 @@
+ 
+
+enum Shape {
+    Circle(int)
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    
+    match s {
+        Shape::Circle(r) => {
+            // r should be int. If we treat it as string (e.g. concat with +), it should fail.
+            // Note: println handles any, so it doesn't prove type safety.
+            let x: string = r; // Should fail
+        }
+    }
+}
+

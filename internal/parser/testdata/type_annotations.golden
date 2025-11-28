@@ -51,6 +51,7 @@
         }
       ],
       "ReturnType": {
+        "TypeParams": null,
         "Params": [
           {
             "Name": {
@@ -81,8 +82,10 @@
               }
             }
           ]
-        }
+        },
+        "Effects": null
       },
+      "Effects": null,
       "Where": null,
       "Body": {
         "Stmts": [
@@ -127,6 +130,7 @@
               "Name": "handler"
             },
             "Type": {
+              "TypeParams": null,
               "Params": [
                 {
                   "Name": {
@@ -157,7 +161,8 @@
                     }
                   }
                 ]
-              }
+              },
+              "Effects": null
             },
             "Value": {
               "Name": "select_handler"

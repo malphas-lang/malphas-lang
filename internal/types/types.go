@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Type represents a type in the Malphas type system.
 type Type interface {
@@ -14,13 +17,19 @@ type PrimitiveKind string
 
 const (
 	Int    PrimitiveKind = "int"
-	Int8   PrimitiveKind = "int8"
-	Int32  PrimitiveKind = "int32"
-	Int64  PrimitiveKind = "int64"
+	Int8   PrimitiveKind = "i8"
+	Int32  PrimitiveKind = "i32"
+	Int64  PrimitiveKind = "i64"
+	U8     PrimitiveKind = "u8"
+	U16    PrimitiveKind = "u16"
+	U32    PrimitiveKind = "u32"
+	U64    PrimitiveKind = "u64"
+	U128   PrimitiveKind = "u128"
+	Usize  PrimitiveKind = "usize"
 	Float  PrimitiveKind = "float"
 	Bool   PrimitiveKind = "bool"
 	String PrimitiveKind = "string"
-	Nil    PrimitiveKind = "null"
+	Nil    PrimitiveKind = "nil"
 	Void   PrimitiveKind = "void"
 )
 
@@ -38,6 +47,12 @@ var (
 	TypeInt8   = &Primitive{Kind: Int8}
 	TypeInt32  = &Primitive{Kind: Int32}
 	TypeInt64  = &Primitive{Kind: Int64}
+	TypeU8     = &Primitive{Kind: U8}
+	TypeU16    = &Primitive{Kind: U16}
+	TypeU32    = &Primitive{Kind: U32}
+	TypeU64    = &Primitive{Kind: U64}
+	TypeU128   = &Primitive{Kind: U128}
+	TypeUsize  = &Primitive{Kind: Usize}
 	TypeFloat  = &Primitive{Kind: Float}
 	TypeBool   = &Primitive{Kind: Bool}
 	TypeString = &Primitive{Kind: String}
@@ -60,6 +75,32 @@ type Field struct {
 func (s *Struct) String() string { return s.Name }
 func (s *Struct) IsType()        {}
 
+// Existential represents an existential type (exists a. T).
+type Existential struct {
+	TypeParam TypeParam
+	Body      Type // The type expression that uses the existential type parameter
+}
+
+func (e *Existential) String() string {
+	return fmt.Sprintf("exists %s. %s", e.TypeParam.Name, e.Body.String())
+}
+func (e *Existential) IsType() {}
+
+// Forall represents a universally quantified type (forall a. T).
+type Forall struct {
+	TypeParams []TypeParam
+	Body       Type
+}
+
+func (f *Forall) String() string {
+	var params []string
+	for _, tp := range f.TypeParams {
+		params = append(params, tp.String())
+	}
+	return fmt.Sprintf("forall %s. %s", strings.Join(params, ", "), f.Body)
+}
+func (f *Forall) IsType() {}
+
 // Enum represents an enum type.
 type Enum struct {
 	Name       string
@@ -68,8 +109,9 @@ type Enum struct {
 }
 
 type Variant struct {
-	Name    string
-	Payload []Type // Can be empty for unit variants
+	Name       string
+	Params     []Type // Can be empty for unit variants
+	ReturnType Type   // The type this variant constructs
 }
 
 func (e *Enum) String() string { return e.Name }
@@ -96,6 +138,31 @@ func (s *Slice) String() string {
 	return "[]" + s.Elem.String()
 }
 func (s *Slice) IsType() {}
+
+// Tuple represents a tuple type.
+type Tuple struct {
+	Elements []Type
+}
+
+func (t *Tuple) String() string {
+	var elements []string
+	for _, elem := range t.Elements {
+		elements = append(elements, elem.String())
+	}
+	return "(" + strings.Join(elements, ", ") + ")"
+}
+func (t *Tuple) IsType() {}
+
+// Map represents a map type.
+type Map struct {
+	Key   Type
+	Value Type
+}
+
+func (m *Map) String() string {
+	return fmt.Sprintf("map[%s, %s]", m.Key, m.Value)
+}
+func (m *Map) IsType() {}
 
 // Function represents a function type.
 type Function struct {
@@ -192,5 +259,19 @@ type Optional struct {
 	Elem Type
 }
 
-func (o *Optional) String() string { return o.Elem.String() + "?" }
+func (o *Optional) String() string { return "?" + o.Elem.String() }
 func (o *Optional) IsType()        {}
+
+// Range represents a range type.
+type Range struct {
+	Start Type
+	End   Type
+}
+
+func (r *Range) String() string {
+	if r.Start != nil && r.End != nil {
+		return r.Start.String() + ".." + r.End.String()
+	}
+	return "Range"
+}
+func (r *Range) IsType() {}

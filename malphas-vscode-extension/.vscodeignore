@@ -1,0 +1,7 @@
+.vscode/**
+.vscode-test/**
+*.vsix
+.gitignore
+install.sh
+README.md
+

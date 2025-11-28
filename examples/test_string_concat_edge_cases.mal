@@ -1,0 +1,51 @@
+ 
+
+fn main() {
+    // Test edge cases for string concatenation
+    
+    // Test 1: Very long strings
+    let long1 = "This is a very long string that should be concatenated properly";
+    let long2 = " with another long string to test memory handling";
+    let combined = long1 + long2;
+    println(combined);
+    
+    // Test 2: Special characters
+    let special1 = "Hello\n";
+    let special2 = "World\t";
+    let special3 = "Test";
+    let special_combined = special1 + special2 + special3;
+    println(special_combined);
+    
+    // Test 3: Unicode characters (if supported)
+    let unicode1 = "Hello";
+    let unicode2 = " 世界";
+    let unicode_combined = unicode1 + unicode2;
+    println(unicode_combined);
+    
+    // Test 4: Multiple empty strings
+    let empty1 = "";
+    let empty2 = "";
+    let empty3 = "";
+    let all_empty = empty1 + empty2 + empty3;
+    println("Empty result: [" + all_empty + "]");
+    
+    // Test 5: Single character strings
+    let char1 = "a";
+    let char2 = "b";
+    let char3 = "c";
+    let chars = char1 + char2 + char3;
+    println(chars); // Should print "abc"
+    
+    // Test 6: Concatenation in function calls
+    let msg1 = "Error: ";
+    let msg2 = "File not found";
+    println(msg1 + msg2);
+    
+    // Test 7: Building paths/URLs
+    let base = "https://";
+    let domain = "example.com";
+    let path = "/api/v1";
+    let url = base + domain + path;
+    println(url);
+}
+

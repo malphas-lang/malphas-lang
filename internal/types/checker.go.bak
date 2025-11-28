@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
@@ -17,8 +18,7 @@ type ModuleInfo struct {
 	Name     string    // Module name (e.g., "utils")
 	File     *ast.File // Parsed AST of the module file
 	FilePath string    // Full path to the module file
-	Scope    *Scope    // Scope containing public symbols from this module
-	Loading  bool      // Set to true during loading to detect cycles
+	Scope    *Scope    // Scope containing ONLY public symbols
 }
 
 // Checker performs semantic analysis on the AST.
@@ -34,6 +34,8 @@ type Checker struct {
 	CurrentFile string
 	// LoadingModules tracks modules currently being loaded (for cycle detection)
 	LoadingModules map[string]bool
+	// ExprTypes maps AST nodes to their resolved types
+	ExprTypes map[ast.Node]Type
 }
 
 // NewChecker creates a new type checker.
@@ -45,16 +47,15 @@ func NewChecker() *Checker {
 		MethodTable:    make(map[string]map[string]*Function),
 		Modules:        make(map[string]*ModuleInfo),
 		LoadingModules: make(map[string]bool),
+		ExprTypes:      make(map[ast.Node]Type),
 	}
 
 	// Add built-in types
 	c.GlobalScope.Insert("int", &Symbol{Name: "int", Type: TypeInt})
-	c.GlobalScope.Insert("int8", &Symbol{Name: "int8", Type: TypeInt8})
-	c.GlobalScope.Insert("int32", &Symbol{Name: "int32", Type: TypeInt32})
-	c.GlobalScope.Insert("int64", &Symbol{Name: "int64", Type: TypeInt64})
 	c.GlobalScope.Insert("float", &Symbol{Name: "float", Type: TypeFloat})
 	c.GlobalScope.Insert("bool", &Symbol{Name: "bool", Type: TypeBool})
 	c.GlobalScope.Insert("string", &Symbol{Name: "string", Type: TypeString})
+	c.GlobalScope.Insert("nil", &Symbol{Name: "nil", Type: TypeNil})
 
 	// Add built-in functions
 	// println: fn(any) -> void
@@ -64,6 +65,62 @@ func NewChecker() *Checker {
 			Params: []Type{&Named{Name: "any"}}, // Placeholder for any type
 			Return: TypeVoid,
 		},
+	})
+
+	// format: fn(string, any...) -> string
+	// Takes a format string and variable number of arguments, returns formatted string
+	c.GlobalScope.Insert("format", &Symbol{
+		Name: "format",
+		Type: &Function{
+			Params: []Type{TypeString, &Named{Name: "any"}, &Named{Name: "any"}, &Named{Name: "any"}, &Named{Name: "any"}}, // format string + up to 4 args
+			Return: TypeString,
+		},
+	})
+
+	// append: fn[T]([]T, T) -> []T
+	c.GlobalScope.Insert("append", &Symbol{
+		Name: "append",
+		Type: &Function{
+			TypeParams: []TypeParam{{Name: "T"}},
+			Params: []Type{
+				&Slice{Elem: &TypeParam{Name: "T"}},
+				&TypeParam{Name: "T"},
+			},
+			Return: &Slice{Elem: &TypeParam{Name: "T"}},
+		},
+	})
+
+	// delete: fn(map[K]V, K) -> void
+	c.GlobalScope.Insert("delete", &Symbol{
+		Name: "delete",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}, &Named{Name: "any"}}, // map, key
+			Return: TypeVoid,
+		},
+	})
+
+	// len: fn(any) -> int
+	c.GlobalScope.Insert("len", &Symbol{
+		Name: "len",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}}, // map, array, slice, string
+			Return: TypeInt,
+		},
+	})
+
+	// contains: fn(map[K]V, K) -> bool
+	c.GlobalScope.Insert("contains", &Symbol{
+		Name: "contains",
+		Type: &Function{
+			Params: []Type{&Named{Name: "any"}, &Named{Name: "any"}}, // map, key
+			Return: TypeBool,
+		},
+	})
+
+	// comparable interface (marker for Go compatibility)
+	c.GlobalScope.Insert("comparable", &Symbol{
+		Name: "comparable",
+		Type: &Named{Name: "comparable"}, // Treat as named type for now
 	})
 
 	return c
@@ -80,204 +137,37 @@ func (c *Checker) CheckWithFilename(file *ast.File, filename string) {
 	// Pass 1: Collect declarations (this will load modules)
 	c.collectDecls(file)
 
-	// Pass 2: Check bodies
+	// Pass 2: Check bodies of the main file
 	c.checkBodies(file)
-}
 
-// inferTypeArgs attempts to infer type arguments for a generic function
-// from the actual argument types provided in a function call.
-// It returns the inferred type arguments or an error if inference fails.
-func (c *Checker) inferTypeArgs(typeParams []TypeParam, paramTypes []Type, argTypes []Type) ([]Type, error) {
-	if len(paramTypes) != len(argTypes) {
-		return nil, fmt.Errorf("parameter count mismatch: expected %d, got %d", len(paramTypes), len(argTypes))
-	}
-
-	// Build a combined substitution by unifying each param type with its corresponding arg type
-	subst := make(map[string]Type)
-	for i := range paramTypes {
-		err := unify(paramTypes[i], argTypes[i], subst)
-		if err != nil {
-			return nil, fmt.Errorf("cannot infer type arguments: %v", err)
-		}
-	}
-
-	// Extract the inferred types for each type parameter in order
-	result := make([]Type, len(typeParams))
-	for i, tp := range typeParams {
-		inferred, ok := subst[tp.Name]
-		if !ok {
-			return nil, fmt.Errorf("cannot infer type for parameter %s", tp.Name)
-		}
-		result[i] = inferred
-	}
-
-	return result, nil
-}
-
-func (c *Checker) resolveType(typ ast.TypeExpr) Type {
-	switch t := typ.(type) {
-	case *ast.NamedType:
-		// Simple resolution for primitive types
-		switch t.Name.Name {
-		case "int":
-			return TypeInt
-		case "int8":
-			return TypeInt8
-		case "int32":
-			return TypeInt32
-		case "int64":
-			return TypeInt64
-		case "float":
-			return TypeFloat
-		case "bool":
-			return TypeBool
-		case "string":
-			return TypeString
-		case "void":
-			return TypeVoid
-		default:
-			// Look up in scope
-			sym := c.GlobalScope.Lookup(t.Name.Name)
-			if sym != nil {
-				// Check if the symbol is a type
-				// For now, assume yes if it's a struct/enum/typedef
-				return sym.Type
-			}
-			return &Named{Name: t.Name.Name}
-		}
-	case *ast.GenericType:
-		// Handle generic instantiation (e.g. Box[int])
-		baseType := c.resolveType(t.Base)
-		var args []Type
-		for _, arg := range t.Args {
-			args = append(args, c.resolveType(arg))
-		}
-
-		// Verify constraints if base type has type params
-		if baseType != nil {
-			switch base := baseType.(type) {
-			case *Struct:
-				// Check constraints for each arg
-				for i, arg := range args {
-					if i < len(base.TypeParams) {
-						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
-							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
-						}
-					}
-				}
-			case *Enum:
-				for i, arg := range args {
-					if i < len(base.TypeParams) {
-						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
-							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
-						}
-					}
-				}
-			case *Function:
-				for i, arg := range args {
-					if i < len(base.TypeParams) {
-						if err := Satisfies(arg, base.TypeParams[i].Bounds, c.Env); err != nil {
-							c.reportError(fmt.Sprintf("type argument %s does not satisfy constraints: %v", arg, err), t.Span())
-						}
-					}
-				}
-			}
-		}
-
-		return &GenericInstance{Base: baseType, Args: args}
-	case *ast.ChanType:
-		elem := c.resolveType(t.Elem)
-		return &Channel{Elem: elem, Dir: SendRecv}
-	case *ast.FunctionType:
-		var params []Type
-		for _, p := range t.Params {
-			params = append(params, c.resolveType(p))
-		}
-		var ret Type = TypeVoid
-		if t.Return != nil {
-			ret = c.resolveType(t.Return)
-		}
-		return &Function{Params: params, Return: ret}
-	case *ast.PointerType:
-		elem := c.resolveType(t.Elem)
-		return &Pointer{Elem: elem}
-	case *ast.ReferenceType:
-		elem := c.resolveType(t.Elem)
-		return &Reference{Mutable: t.Mutable, Elem: elem}
-	case *ast.OptionalType:
-		elem := c.resolveType(t.Elem)
-		return &Optional{Elem: elem}
-	case *ast.ArrayType:
-		elem := c.resolveType(t.Elem)
-		// Evaluate length expression - must be a constant integer
-		lenVal := int64(0)
-		if intLit, ok := t.Len.(*ast.IntegerLit); ok {
-			// Parse integer literal
-			var err error
-			lenVal, err = parseInt64(intLit.Text)
-			if err != nil {
-				c.reportError(fmt.Sprintf("invalid array length: %s", intLit.Text), t.Len.Span())
-				return TypeVoid
-			}
-			if lenVal < 0 {
-				c.reportError("array length must be non-negative", t.Len.Span())
-				return TypeVoid
-			}
-		} else {
-			c.reportError("array length must be a constant integer literal", t.Len.Span())
-			return TypeVoid
-		}
-		return &Array{Elem: elem, Len: lenVal}
-	case *ast.SliceType:
-		elem := c.resolveType(t.Elem)
-		return &Slice{Elem: elem}
-	default:
-		return TypeVoid
+	// Pass 2b: Check bodies of all loaded modules
+	// Note: iterate over a copy of keys to avoid concurrent map iteration issues if checkBodies loads more modules
+	// (though collectDecls should have loaded everything reachable)
+	// We use a simple loop because map iteration order is random
+	for _, modInfo := range c.Modules {
+		// Update CurrentFile for correct error reporting
+		oldFile := c.CurrentFile
+		c.CurrentFile = modInfo.FilePath
+		c.checkBodies(modInfo.File)
+		c.CurrentFile = oldFile
 	}
 }
 
-// resolveTypeFromExpr resolves a type from an expression AST node.
-// This is used when types appear in expression contexts, like Channel::new[int].
-func (c *Checker) resolveTypeFromExpr(expr ast.Expr) Type {
-	switch e := expr.(type) {
-	case *ast.Ident:
-		return c.resolveType(ast.NewNamedType(e, e.Span()))
-	case *ast.IndexExpr:
-		// Handle generic type instantiation in expression context: List[int]
-		base := c.resolveTypeFromExpr(e.Target)
-		arg := c.resolveTypeFromExpr(e.Index)
-		return &GenericInstance{Base: base, Args: []Type{arg}}
-	default:
-		c.reportError(fmt.Sprintf("expected type, got %T", expr), expr.Span())
-		return TypeVoid
-	}
-}
 
-func (c *Checker) reportError(msg string, span lexer.Span) {
-	c.Errors = append(c.Errors, diag.Diagnostic{
-		Severity: diag.SeverityError,
-		Message:  msg,
-		Span: diag.Span{
-			Filename: span.Filename,
-			Line:     span.Line,
-			Column:   span.Column,
-			Start:    span.Start,
-			End:      span.End,
-		},
-	})
-}
+
 
 func (c *Checker) collectDecls(file *ast.File) {
-	// Process mod declarations FIRST to load modules before use declarations
+	// First, process all mod declarations (modules must be loaded before use)
 	for _, modDecl := range file.Mods {
 		c.processModDecl(modDecl, file)
 	}
 
-	// Process use declarations to bring items into scope
+	// Then, process all use declarations (imports)
 	for _, useDecl := range file.Uses {
 		c.processUseDecl(useDecl)
 	}
 
+	// Finally, process regular declarations
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FnDecl:
@@ -322,7 +212,7 @@ func (c *Checker) collectDecls(file *ast.File) {
 				}
 			}
 
-			symbol := &Symbol{
+			c.GlobalScope.Insert(d.Name.Name, &Symbol{
 				Name: d.Name.Name,
 				Type: &Function{
 					Unsafe:     d.Unsafe,
@@ -331,11 +221,11 @@ func (c *Checker) collectDecls(file *ast.File) {
 					Return:     returnType,
 				},
 				DefNode: d,
-			}
-			c.GlobalScope.Insert(d.Name.Name, symbol)
+			})
 		case *ast.StructDecl:
 			// Build type params
 			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
 			for _, tp := range d.TypeParams {
 				if astTP, ok := tp.(*ast.TypeParam); ok {
 					var bounds []Type
@@ -346,14 +236,18 @@ func (c *Checker) collectDecls(file *ast.File) {
 						Name:   astTP.Name.Name,
 						Bounds: bounds,
 					})
+					typeParamMap[astTP.Name.Name] = &typeParams[len(typeParams)-1]
 				}
 			}
 
 			fields := []Field{}
 			for _, f := range d.Fields {
+				fieldType := c.resolveType(f.Type)
+				// Replace type parameters in the field type
+				fieldType = c.replaceTypeParamsInType(fieldType, typeParamMap)
 				fields = append(fields, Field{
 					Name: f.Name.Name,
-					Type: c.resolveType(f.Type),
+					Type: fieldType,
 				})
 			}
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
@@ -396,39 +290,23 @@ func (c *Checker) collectDecls(file *ast.File) {
 			}
 
 			variants := []Variant{}
-			enumType := &Enum{
-				Name:       d.Name.Name,
-				TypeParams: typeParams,
-				Variants:   variants,
-			}
-
 			for _, v := range d.Variants {
 				payload := []Type{}
 				for _, p := range v.Payloads {
 					payload = append(payload, c.resolveType(p))
 				}
-				variant := Variant{
+				variants = append(variants, Variant{
 					Name:    v.Name.Name,
 					Payload: payload,
-				}
-				variants = append(variants, variant)
-
-				// Add enum variant constructor to scope
-				// The constructor is a function that takes payload types and returns the enum type
-				c.GlobalScope.Insert(v.Name.Name, &Symbol{
-					Name: v.Name.Name,
-					Type: &Function{
-						Params: payload,
-						Return: enumType,
-					},
-					DefNode: v, // Store reference to variant for code generation
 				})
 			}
-
-			enumType.Variants = variants
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    enumType,
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
 				DefNode: d,
 			})
 		case *ast.TraitDecl:
@@ -455,6 +333,40 @@ func (c *Checker) collectDecls(file *ast.File) {
 			if targetName == "" {
 				continue // Skip if we can't determine type name
 			}
+
+			// Extract type parameters from target type if it's a generic instance
+			// For example, from HashMap[K, V], extract K and V as type parameters
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								// For now, create a TypeParam that represents the parameter
+								// In a full implementation, we'd want to resolve the actual type arg
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
 
 			// Initialize method map for this type if needed
 			if c.MethodTable[targetName] == nil {
@@ -495,13 +407,16 @@ func (c *Checker) collectDecls(file *ast.File) {
 						}
 
 						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
 						for i := 1; i < len(method.Params); i++ {
-							params = append(params, c.resolveType(method.Params[i].Type))
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
 						}
 					} else {
 						// Regular parameters (no receiver)
 						for _, p := range method.Params {
-							params = append(params, c.resolveType(p.Type))
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
 						}
 					}
 				} else {
@@ -515,7 +430,7 @@ func (c *Checker) collectDecls(file *ast.File) {
 
 				var returnType Type = TypeVoid
 				if method.ReturnType != nil {
-					returnType = c.resolveType(method.ReturnType)
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
 				}
 
 				c.MethodTable[targetName][method.Name.Name] = &Function{
@@ -529,622 +444,116 @@ func (c *Checker) collectDecls(file *ast.File) {
 	}
 }
 
-// processUseDecl processes a use declaration and brings the imported item into scope.
-func (c *Checker) processUseDecl(useDecl *ast.UseDecl) {
-	if len(useDecl.Path) == 0 {
-		c.reportError("use path cannot be empty", useDecl.Span())
-		return
-	}
-
-	// Build the module path string
-	pathParts := make([]string, len(useDecl.Path))
-	for i, ident := range useDecl.Path {
-		pathParts[i] = ident.Name
-	}
-
-	// Resolve the module path
-	resolvedType := c.resolveModulePath(pathParts, useDecl.Span())
-	if resolvedType == nil {
-		return // Error already reported
-	}
-
-	// Determine the name to use in scope
-	var name string
-	if useDecl.Alias != nil {
-		name = useDecl.Alias.Name
-	} else {
-		// Use the last component of the path
-		name = pathParts[len(pathParts)-1]
-	}
-
-	// Insert into global scope
-	c.GlobalScope.Insert(name, &Symbol{
-		Name:    name,
-		Type:    resolvedType,
-		DefNode: useDecl,
-	})
-}
-
-// processModDecl processes a module declaration and loads the module file.
-func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
-	moduleName := modDecl.Name.Name
-
-	// Check for circular dependencies
-	if c.LoadingModules[moduleName] {
-		c.reportError(fmt.Sprintf("circular module dependency detected: %s", moduleName), modDecl.Span())
-		return
-	}
-
-	// If module already loaded, skip
-	if _, exists := c.Modules[moduleName]; exists {
-		return
-	}
-
-	// Mark as loading
-	c.LoadingModules[moduleName] = true
-	defer delete(c.LoadingModules, moduleName)
-
-	// Resolve module file path
-	modulePath, err := c.resolveModuleFilePath(moduleName)
-	if err != nil {
-		c.reportError(fmt.Sprintf("cannot find module file for '%s': %v", moduleName, err), modDecl.Span())
-		return
-	}
-
-	// Read and parse the module file
-	moduleFile, err := c.loadModuleFile(modulePath, moduleName)
-	if err != nil {
-		c.reportError(fmt.Sprintf("failed to load module '%s': %v", moduleName, err), modDecl.Span())
-		return
-	}
-
-	// Create module info
-	moduleInfo := &ModuleInfo{
-		Name:     moduleName,
-		File:     moduleFile,
-		FilePath: modulePath,
-		Scope:    NewScope(nil),
-	}
-
-	// Process the module file to collect its declarations
-	// We need to create a temporary checker state to process this module
-	// Save current state
-	oldCurrentFile := c.CurrentFile
-	oldGlobalScope := c.GlobalScope
-	c.CurrentFile = modulePath
-
-	// Create a temporary scope for the module (child of global scope for built-ins)
-	moduleScope := NewScope(c.GlobalScope)
-	c.GlobalScope = moduleScope
-
-	// Process mod declarations in the module file (recursive)
-	for _, subModDecl := range moduleFile.Mods {
-		c.processModDecl(subModDecl, moduleFile)
-	}
-
-	// Process use declarations in the module file
-	for _, useDecl := range moduleFile.Uses {
-		c.processUseDecl(useDecl)
-	}
-
-	// Collect all declarations from the module file (this populates moduleScope)
-	for _, decl := range moduleFile.Decls {
-		switch d := decl.(type) {
-		case *ast.FnDecl:
-			// Build type params
-			var typeParams []TypeParam
-			typeParamMap := make(map[string]*TypeParam)
-			for _, tp := range d.TypeParams {
-				if astTP, ok := tp.(*ast.TypeParam); ok {
-					var bounds []Type
-					for _, b := range astTP.Bounds {
-						bounds = append(bounds, c.resolveType(b))
-					}
-					param := TypeParam{
-						Name:   astTP.Name.Name,
-						Bounds: bounds,
-					}
-					typeParams = append(typeParams, param)
-					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
-				}
-			}
-
-			// Build function type
-			var params []Type
-			for _, p := range d.Params {
-				paramType := c.resolveType(p.Type)
-				if namedType, ok := paramType.(*Named); ok {
-					if tpRef, exists := typeParamMap[namedType.Name]; exists {
-						paramType = tpRef
-					}
-				}
-				params = append(params, paramType)
-			}
-			var returnType Type
-			if d.ReturnType != nil {
-				returnType = c.resolveType(d.ReturnType)
-				if namedType, ok := returnType.(*Named); ok {
-					if tpRef, exists := typeParamMap[namedType.Name]; exists {
-						returnType = tpRef
-					}
-				}
-			}
-
-			symbol := &Symbol{
-				Name: d.Name.Name,
-				Type: &Function{
-					Unsafe:     d.Unsafe,
-					TypeParams: typeParams,
-					Params:     params,
-					Return:     returnType,
-				},
-				DefNode: d,
-			}
-			c.GlobalScope.Insert(d.Name.Name, symbol)
-			// Extract public symbols immediately
-			if d.Pub {
-				moduleInfo.Scope.Insert(d.Name.Name, symbol)
-			}
-		case *ast.StructDecl:
-			// Build type params
-			var typeParams []TypeParam
-			for _, tp := range d.TypeParams {
-				if astTP, ok := tp.(*ast.TypeParam); ok {
-					var bounds []Type
-					for _, b := range astTP.Bounds {
-						bounds = append(bounds, c.resolveType(b))
-					}
-					typeParams = append(typeParams, TypeParam{
-						Name:   astTP.Name.Name,
-						Bounds: bounds,
-					})
-				}
-			}
-
-			fields := []Field{}
-			for _, f := range d.Fields {
-				fields = append(fields, Field{
-					Name: f.Name.Name,
-					Type: c.resolveType(f.Type),
-				})
-			}
-			symbol := &Symbol{
-				Name: d.Name.Name,
-				Type: &Struct{
-					Name:       d.Name.Name,
-					TypeParams: typeParams,
-					Fields:     fields,
-				},
-				DefNode: d,
-			}
-			c.GlobalScope.Insert(d.Name.Name, symbol)
-			// Extract public symbols immediately
-			if d.Pub {
-				moduleInfo.Scope.Insert(d.Name.Name, symbol)
-			}
-		case *ast.TypeAliasDecl:
-			target := c.resolveType(d.Target)
-			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    target,
-				DefNode: d,
-			})
-		case *ast.ConstDecl:
-			typ := c.resolveType(d.Type)
-			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    typ,
-				DefNode: d,
-			})
-		case *ast.EnumDecl:
-			// Build type params
-			var typeParams []TypeParam
-			for _, tp := range d.TypeParams {
-				if astTP, ok := tp.(*ast.TypeParam); ok {
-					var bounds []Type
-					for _, b := range astTP.Bounds {
-						bounds = append(bounds, c.resolveType(b))
-					}
-					typeParams = append(typeParams, TypeParam{
-						Name:   astTP.Name.Name,
-						Bounds: bounds,
-					})
-				}
-			}
-
-			variants := []Variant{}
-			enumType := &Enum{
-				Name:       d.Name.Name,
-				TypeParams: typeParams,
-				Variants:   variants,
-			}
-
-			for _, v := range d.Variants {
-				payload := []Type{}
-				for _, p := range v.Payloads {
-					payload = append(payload, c.resolveType(p))
-				}
-				variant := Variant{
-					Name:    v.Name.Name,
-					Payload: payload,
-				}
-				variants = append(variants, variant)
-			}
-
-			enumType.Variants = variants
-			c.GlobalScope.Insert(d.Name.Name, &Symbol{
-				Name:    d.Name.Name,
-				Type:    enumType,
-				DefNode: d,
-			})
-		case *ast.TraitDecl:
-			// Add trait to scope
-			symbol := &Symbol{
-				Name:    d.Name.Name,
-				Type:    &Named{Name: d.Name.Name}, // Placeholder
-				DefNode: d,
-			}
-			c.GlobalScope.Insert(d.Name.Name, symbol)
-			// Extract public symbols immediately
-			if d.Pub {
-				moduleInfo.Scope.Insert(d.Name.Name, symbol)
-			}
-		}
-	}
-
-	// Symbols have already been extracted above as we processed each declaration
-
-	// Restore checker state
-	c.GlobalScope = oldGlobalScope
-	c.CurrentFile = oldCurrentFile
-
-	// Store module AFTER processing (so it has its scope populated)
-	c.Modules[moduleName] = moduleInfo
-}
-
-// resolveModuleFilePath resolves a module name to a file path.
-// It looks for moduleName.mal or moduleName/mod.mal relative to the current file.
-func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
-	var baseDir string
-	if c.CurrentFile != "" {
-		baseDir = filepath.Dir(c.CurrentFile)
-	} else {
-		// If no current file, use current working directory
-		var err error
-		baseDir, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("cannot determine base directory: %v", err)
-		}
-	}
-
-	// Try moduleName.mal
-	moduleFile := filepath.Join(baseDir, moduleName+".mal")
-	if _, err := os.Stat(moduleFile); err == nil {
-		return moduleFile, nil
-	}
-
-	// Try moduleName/mod.mal
-	moduleDirFile := filepath.Join(baseDir, moduleName, "mod.mal")
-	if _, err := os.Stat(moduleDirFile); err == nil {
-		return moduleDirFile, nil
-	}
-
-	return "", fmt.Errorf("module file not found: tried %s and %s", moduleFile, moduleDirFile)
-}
-
-// loadModuleFile reads and parses a module file.
-func (c *Checker) loadModuleFile(filePath string, moduleName string) (*ast.File, error) {
-	// Read file
-	src, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("error reading file: %v", err)
-	}
-
-	// Parse file
-	p := parser.New(string(src), parser.WithFilename(filePath))
-	file := p.ParseFile()
-
-	if len(p.Errors()) > 0 {
-		var errMsgs []string
-		for _, parseErr := range p.Errors() {
-			errMsgs = append(errMsgs, parseErr.Message)
-		}
-		return nil, fmt.Errorf("parse errors: %v", errMsgs)
-	}
-
-	if file == nil {
-		return nil, fmt.Errorf("failed to parse file")
-	}
-
-	return file, nil
-}
-
-// extractPathFromExpr extracts a path from nested InfixExpr nodes with DOUBLE_COLON operators.
-// Returns the path components in order (e.g., ["std", "collections", "HashMap"]) and true if successful.
-func (c *Checker) extractPathFromExpr(expr ast.Expr) ([]string, bool) {
-	switch e := expr.(type) {
-	case *ast.Ident:
-		return []string{e.Name}, true
-	case *ast.InfixExpr:
-		if e.Op != lexer.DOUBLE_COLON {
-			return nil, false
-		}
-		// Recursively extract path from left side
-		leftPath, ok := c.extractPathFromExpr(e.Left)
-		if !ok {
-			return nil, false
-		}
-		// Extract identifier from right side
-		if rightIdent, ok := e.Right.(*ast.Ident); ok {
-			return append(leftPath, rightIdent.Name), true
-		}
-		// Right side could also be a nested path
-		rightPath, ok := c.extractPathFromExpr(e.Right)
-		if !ok {
-			return nil, false
-		}
-		return append(leftPath, rightPath...), true
-	default:
-		return nil, false
-	}
-}
-
-// resolveModulePath resolves a module path like ["std", "collections", "HashMap"] to a Type.
-// This handles both built-in standard library paths and user-defined modules.
-func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
-	if len(path) == 0 {
-		c.reportError("module path cannot be empty", span)
-		return nil
-	}
-
-	// Handle standard library paths
-	if path[0] == "std" {
-		return c.resolveStdPath(path[1:], span)
-	}
-
-	// Handle user-defined modules
-	if moduleInfo, exists := c.Modules[path[0]]; exists {
-		return c.resolveUserModulePath(path[1:], moduleInfo, span)
-	}
-
-	c.reportError(fmt.Sprintf("unknown module: %s", path[0]), span)
-	return nil
-}
-
-// resolveUserModulePath resolves a path within a user-defined module.
-func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, span lexer.Span) Type {
-	if len(path) == 0 {
-		// Importing the module itself - return a placeholder namespace type
-		return &Named{Name: moduleInfo.Name}
-	}
-
-	// Look up the symbol in the module's scope (direct lookup, no parent search)
-	symbol, exists := moduleInfo.Scope.Symbols[path[0]]
-	if !exists || symbol == nil {
-		c.reportError(fmt.Sprintf("symbol '%s' not found in module '%s'", path[0], moduleInfo.Name), span)
-		return nil
-	}
-
-	// If there are more path components, it's not supported yet
-	// (e.g., utils::MyStruct::field - would need to resolve nested paths)
-	if len(path) > 1 {
-		c.reportError(fmt.Sprintf("nested paths in user modules not yet supported: %v", path), span)
-		return nil
-	}
-
-	return symbol.Type
-}
-
-// resolveStdPath resolves paths within the std module.
-func (c *Checker) resolveStdPath(path []string, span lexer.Span) Type {
-	if len(path) == 0 {
-		c.reportError("std module path cannot be empty", span)
-		return nil
-	}
-
-	// Handle std::collections
-	if path[0] == "collections" {
-		if len(path) == 1 {
-			// Importing the module itself - create a placeholder namespace type
-			// In a full implementation, this would be a module/namespace type
-			return &Named{Name: "collections"}
-		}
-		return c.resolveStdCollectionsPath(path[1:], span)
-	}
-
-	// Handle std::io
-	if path[0] == "io" {
-		if len(path) == 1 {
-			// Importing the module itself - create a placeholder namespace type
-			// In a full implementation, this would be a module/namespace type
-			return &Named{Name: "io"}
-		}
-		return c.resolveStdIoPath(path[1:], span)
-	}
-
-	c.reportError(fmt.Sprintf("unknown std module: %s", path[0]), span)
-	return nil
-}
-
-// resolveStdCollectionsPath resolves paths within std::collections.
-func (c *Checker) resolveStdCollectionsPath(path []string, span lexer.Span) Type {
-	if len(path) != 1 {
-		c.reportError(fmt.Sprintf("invalid path in std::collections: %v", path), span)
-		return nil
-	}
-
-	// For now, we'll create placeholder types for standard library types
-	// In a full implementation, these would be loaded from actual module files
-	switch path[0] {
-	case "HashMap":
-		// HashMap is a generic type, but for now return a placeholder
-		// TODO: Return proper generic HashMap type
-		return &Named{Name: "HashMap"}
-	case "Vec":
-		return &Named{Name: "Vec"}
-	default:
-		c.reportError(fmt.Sprintf("unknown type in std::collections: %s", path[0]), span)
-		return nil
-	}
-}
-
-// resolveStdIoPath resolves paths within std::io.
-func (c *Checker) resolveStdIoPath(path []string, span lexer.Span) Type {
-	if len(path) != 1 {
-		c.reportError(fmt.Sprintf("invalid path in std::io: %v", path), span)
-		return nil
-	}
-
-	switch path[0] {
-	case "Reader":
-		return &Named{Name: "Reader"}
-	case "Writer":
-		return &Named{Name: "Writer"}
-	default:
-		c.reportError(fmt.Sprintf("unknown type in std::io: %s", path[0]), span)
-		return nil
-	}
-}
-
 func (c *Checker) checkBodies(file *ast.File) {
 	for _, decl := range file.Decls {
-		if fn, ok := decl.(*ast.FnDecl); ok {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
 			// Create function scope
 			fnScope := NewScope(c.GlobalScope)
-			// Add params to scope (TODO: resolve types)
-			for _, param := range fn.Params {
+			// Add params to scope
+			for _, param := range d.Params {
 				fnScope.Insert(param.Name.Name, &Symbol{
 					Name:    param.Name.Name,
-					Type:    TypeInt, // Default to int if no type
+					Type:    c.resolveType(param.Type),
 					DefNode: param,
 				})
-				if param.Type != nil {
-					fnScope.Lookup(param.Name.Name).Type = c.resolveType(param.Type)
-				}
 			}
-			c.checkBlock(fn.Body, fnScope, fn.Unsafe)
-		}
-	}
-}
+			c.checkBlock(d.Body, fnScope, d.Unsafe)
+		case *ast.ImplDecl:
+			// Resolve target type
+			targetType := c.resolveType(d.Target)
 
-func (c *Checker) checkBlock(block *ast.BlockExpr, parent *Scope, inUnsafe bool) Type {
-	scope := NewScope(parent)
-	defer scope.Close() // Clean up borrows when scope ends
+			// Create impl scope for type params
+			implScope := NewScope(c.GlobalScope)
 
-	for _, stmt := range block.Stmts {
-		c.checkStmt(stmt, scope, inUnsafe)
-	}
-	if block.Tail != nil {
-		return c.checkExpr(block.Tail, scope, inUnsafe)
-	}
-	return TypeVoid
-}
+			// Add type params to scope if generic
+			if _, ok := targetType.(*GenericInstance); ok {
+				// Map type param names to TypeParam types?
+				// Or just ensure they are resolvable?
+				// Actually, impl Vec[T]. T is a type param.
+				// We need to add T to scope so it resolves to TypeParam.
+				// But resolveType already handled it?
+				// No, resolveType resolves T to Named("T").
+				// We need to bind "T" in scope.
 
-func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
-	switch s := stmt.(type) {
-	case *ast.LetStmt:
-		// Check initializer
-		initType := c.checkExpr(s.Value, scope, inUnsafe)
-		if s.Type != nil {
-			declType := c.resolveType(s.Type)
-
-			// Special case: allow slice-to-array conversion if lengths match
-			if arrType, ok := declType.(*Array); ok {
-				if sliceType, ok := initType.(*Slice); ok {
-					// Check if value is an array literal with known length
-					if arrLit, ok := s.Value.(*ast.ArrayLiteral); ok {
-						actualLen := int64(len(arrLit.Elements))
-						if actualLen == arrType.Len && c.assignableTo(sliceType.Elem, arrType.Elem) {
-							// Lengths match and element types are compatible - allow conversion
-							initType = arrType // Use array type instead of slice
-						} else if actualLen != arrType.Len {
-							c.reportError(fmt.Sprintf("array length mismatch: expected %d, got %d", arrType.Len, actualLen), s.Value.Span())
-						} else {
-							c.reportError(fmt.Sprintf("element type mismatch: expected %s, got %s", arrType.Elem, sliceType.Elem), s.Value.Span())
+				// If d.Target is GenericType in AST
+				if genType, ok := d.Target.(*ast.GenericType); ok {
+					for _, arg := range genType.Args {
+						if named, ok := arg.(*ast.NamedType); ok {
+							// Add T to scope
+							implScope.Insert(named.Name.Name, &Symbol{
+								Name: named.Name.Name,
+								Type: &Named{Name: named.Name.Name}, // Placeholder for TypeParam
+							})
 						}
-					} else {
-						// Not an array literal - can't convert slice to array
-						c.reportError(fmt.Sprintf("cannot assign slice to array type %s (use array literal)", declType), s.Value.Span())
 					}
-				} else if !c.assignableTo(initType, declType) {
-					c.reportError(fmt.Sprintf("cannot assign type %s to %s", initType, declType), s.Value.Span())
-				} else {
-					initType = declType
 				}
-			} else {
-				if !c.assignableTo(initType, declType) {
-					c.reportError(fmt.Sprintf("cannot assign type %s to %s", initType, declType), s.Value.Span())
+			}
+
+			// Check methods
+			for _, method := range d.Methods {
+				// Create function scope
+				fnScope := NewScope(implScope)
+
+				// Add Self to scope
+				// Self is the target type
+				fnScope.Insert("Self", &Symbol{
+					Name: "Self",
+					Type: targetType,
+				})
+
+				// Build type parameter map for resolving method param types
+				typeParamMap := make(map[string]Type)
+				typeParamMap["Self"] = targetType
+
+				// If target is generic, map type params
+				if genType, ok := d.Target.(*ast.GenericType); ok {
+					if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+						baseTypeName := namedBase.Name.Name
+						if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+							var baseTypeParams []TypeParam
+							switch baseType := sym.Type.(type) {
+							case *Struct:
+								baseTypeParams = baseType.TypeParams
+							case *Enum:
+								baseTypeParams = baseType.TypeParams
+							}
+
+							for i, tp := range baseTypeParams {
+								if i < len(genType.Args) {
+									typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+								}
+							}
+						}
+					}
 				}
-				initType = declType
+
+				// Add params to scope with proper type substitution
+				for _, param := range method.Params {
+					paramType := c.resolveTypeWithContext(param.Type, typeParamMap)
+					fnScope.Insert(param.Name.Name, &Symbol{
+						Name:    param.Name.Name,
+						Type:    paramType,
+						DefNode: param,
+					})
+				}
+				c.checkBlock(method.Body, fnScope, method.Unsafe)
 			}
 		}
-
-		// Add to scope
-		scope.Insert(s.Name.Name, &Symbol{
-			Name:    s.Name.Name,
-			Type:    initType,
-			DefNode: s,
-		})
-	case *ast.ExprStmt:
-		c.checkExpr(s.Expr, scope, inUnsafe)
-	case *ast.ReturnStmt:
-		if s.Value != nil {
-			c.checkExpr(s.Value, scope, inUnsafe)
-		}
-	case *ast.SpawnStmt:
-		c.checkExpr(s.Call, scope, inUnsafe)
-	case *ast.SelectStmt:
-		for _, case_ := range s.Cases {
-			c.checkStmt(case_.Comm, scope, inUnsafe)
-			c.checkBlock(case_.Body, scope, inUnsafe)
-		}
-	case *ast.IfStmt:
-		// Check all if clauses
-		for _, clause := range s.Clauses {
-			condType := c.checkExpr(clause.Condition, scope, inUnsafe)
-			if condType != TypeBool {
-				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
-			}
-			c.checkBlock(clause.Body, scope, inUnsafe)
-		}
-		if s.Else != nil {
-			c.checkBlock(s.Else, scope, inUnsafe)
-		}
-	case *ast.WhileStmt:
-		// Condition must be boolean
-		condType := c.checkExpr(s.Condition, scope, inUnsafe)
-		if condType != TypeBool {
-			c.reportError(fmt.Sprintf("while condition must be boolean, got %s", condType), s.Condition.Span())
-		}
-		c.checkBlock(s.Body, scope, inUnsafe)
-	case *ast.ForStmt:
-		// For now, we support range-based for loops: for item in iterable { }
-		// The iterable type checking would depend on what types are iterable
-		// For MVP, let's just check the body
-		iterableType := c.checkExpr(s.Iterable, scope, inUnsafe)
-		_ = iterableType // TODO: validate iterable type (arrays, slices)
-
-		// Create a new scope for the loop body with the iterator variable
-		loopScope := NewScope(scope)
-		loopScope.Insert(s.Iterator.Name, &Symbol{
-			Name:    s.Iterator.Name,
-			Type:    TypeInt, // TODO: infer from iterable element type
-			DefNode: s.Iterator,
-		})
-		c.checkBlock(s.Body, loopScope, inUnsafe)
-	case *ast.BreakStmt:
-		// Break is valid (no type checking needed)
-	case *ast.ContinueStmt:
-		// Continue is valid (no type checking needed)
 	}
 }
 
-func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
+
+// checkExpr and checkExprInternal moved to checker_expr.go
+
+func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 	switch e := expr.(type) {
 	case *ast.UnsafeBlock:
 		return c.checkBlock(e.Block, scope, true)
 	case *ast.IntegerLit:
 		return TypeInt
+	case *ast.FloatLit:
+		return TypeFloat
 	case *ast.StringLit:
 		return TypeString
 	case *ast.BoolLit:
@@ -1154,24 +563,13 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 	case *ast.Ident:
 		sym := scope.Lookup(e.Name)
 		if sym == nil {
-			c.reportError(fmt.Sprintf("undefined identifier: %s", e.Name), e.Span())
+			c.reportUndefinedIdentifier(e.Name, e.Span(), scope)
 			return TypeVoid
 		}
 		return sym.Type
 	case *ast.InfixExpr:
-		// Handle static method access: Type::Method or module paths: std::collections::HashMap
+		// Handle static method access: Type::Method
 		if e.Op == lexer.DOUBLE_COLON {
-			// First, try to extract a nested path (e.g., std::collections::HashMap)
-			path, isPath := c.extractPathFromExpr(e)
-			if isPath && len(path) > 1 {
-				// This is a module path - resolve it
-				resolved := c.resolveModulePath(path, e.Span())
-				if resolved != nil {
-					return resolved
-				}
-				// If resolution failed, continue to check for Channel::new
-			}
-
 			// Check for Channel::new or Channel[T]::new
 			// Left side can be Ident(Channel) or IndexExpr(Channel, [T])
 			var elemType Type = TypeInt // Default to int if not specified
@@ -1195,18 +593,20 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				if ident, ok := indexExpr.Target.(*ast.Ident); ok && ident.Name == "Channel" {
 					isChannel = true
 					// Resolve the type argument
-					if typeIdent, ok := indexExpr.Index.(*ast.Ident); ok {
-						sym := scope.Lookup(typeIdent.Name)
-						if sym != nil {
-							elemType = sym.Type
-						} else {
-							switch typeIdent.Name {
-							case "int":
-								elemType = TypeInt
-							case "string":
-								elemType = TypeString
-							case "bool":
-								elemType = TypeBool
+					if len(indexExpr.Indices) > 0 {
+						if typeIdent, ok := indexExpr.Indices[0].(*ast.Ident); ok {
+							sym := scope.Lookup(typeIdent.Name)
+							if sym != nil {
+								elemType = sym.Type
+							} else {
+								switch typeIdent.Name {
+								case "int":
+									elemType = TypeInt
+								case "string":
+									elemType = TypeString
+								case "bool":
+									elemType = TypeBool
+								}
 							}
 						}
 					}
@@ -1223,8 +623,115 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				}
 			}
 
-			c.reportError("unsupported static method call", e.Span())
-			return TypeVoid
+			// Handle user-defined generic types: Result[int, string]::Ok
+			leftType := c.resolveTypeFromExpr(e.Left)
+			c.ExprTypes[e.Left] = leftType
+
+			if genInst, ok := leftType.(*GenericInstance); ok {
+				// Normalize the GenericInstance first
+				normalized := c.normalizeGenericInstanceBase(genInst)
+				if enumType, ok := normalized.Base.(*Enum); ok {
+					if rightIdent, ok := e.Right.(*ast.Ident); ok {
+						// Look for variant
+						for _, variant := range enumType.Variants {
+							if variant.Name == rightIdent.Name {
+								// Found variant. Construct constructor function type.
+								// Substitute type params with args from GenericInstance
+								subst := make(map[string]Type)
+								for i, tp := range enumType.TypeParams {
+									if i < len(normalized.Args) {
+										subst[tp.Name] = genInst.Args[i]
+									}
+								}
+
+								var params []Type
+								for _, p := range variant.Payload {
+									params = append(params, Substitute(p, subst))
+								}
+
+								if len(params) == 0 {
+									// Unit variant is a value, not a function
+									return genInst
+								}
+
+								return &Function{
+									Params: params,
+									Return: genInst, // Return the instantiated type
+								}
+							}
+						}
+					}
+				} else if structType, ok := genInst.Base.(*Struct); ok {
+					// Handle generic struct static method: HashMap[int, int]::new
+					if rightIdent, ok := e.Right.(*ast.Ident); ok {
+						method := c.lookupMethod(structType, rightIdent.Name)
+						if method != nil {
+							// Substitute type params
+							subst := make(map[string]Type)
+							for i, tp := range structType.TypeParams {
+								if i < len(genInst.Args) {
+									subst[tp.Name] = genInst.Args[i]
+								}
+							}
+
+							// Return substituted function type
+							newParams := []Type{}
+							for _, p := range method.Params {
+								newParams = append(newParams, Substitute(p, subst))
+							}
+							newReturn := Substitute(method.Return, subst)
+
+							return &Function{
+								Unsafe:   method.Unsafe,
+								Params:   newParams,
+								Return:   newReturn,
+								Receiver: nil, // Static call
+							}
+						}
+					}
+				}
+			} else if enumType, ok := leftType.(*Enum); ok {
+				// Handle non-generic Enum::Variant
+				if rightIdent, ok := e.Right.(*ast.Ident); ok {
+					// Look for variant
+					for _, variant := range enumType.Variants {
+						if variant.Name == rightIdent.Name {
+							// Found variant. Construct constructor function type.
+							var params []Type
+							for _, p := range variant.Payload {
+								params = append(params, p)
+							}
+
+							if len(params) == 0 {
+								// Unit variant is a value, not a function
+								return enumType
+							}
+
+							return &Function{
+								Params: params,
+								Return: enumType, // Return the enum type
+							}
+						}
+					}
+				}
+			} else if structType, ok := leftType.(*Struct); ok {
+				// Handle non-generic Struct::Method
+				if rightIdent, ok := e.Right.(*ast.Ident); ok {
+					method := c.lookupMethod(structType, rightIdent.Name)
+					if method != nil {
+						return method
+					}
+				}
+			}
+
+		c.reportErrorWithCode(
+			"unsupported static method call",
+			e.Span(),
+			diag.CodeTypeInvalidOperation,
+			"static method calls are not yet supported in Malphas",
+			nil,
+		)
+		return TypeVoid
 		}
 
 		left := c.checkExpr(e.Left, scope, inUnsafe)
@@ -1234,14 +741,32 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			if e.Op == lexer.LARROW {
 				if ch, ok := left.(*Channel); ok {
 					if ch.Dir == RecvOnly {
-						c.reportError("cannot send to receive-only channel", e.Span())
+						c.reportErrorWithCode(
+							"cannot send to receive-only channel",
+							e.Span(),
+							diag.CodeTypeInvalidOperation,
+							"this channel is declared as receive-only (use `chan<- T` for send-only or `chan T` for bidirectional)",
+							nil,
+						)
 					}
 					if !c.assignableTo(right, ch.Elem) {
-						c.reportError(fmt.Sprintf("cannot send type %s to channel of type %s", right, ch.Elem), e.Right.Span())
+						c.reportErrorWithCode(
+							fmt.Sprintf("cannot send type %s to channel of type %s", right, ch.Elem),
+							e.Right.Span(),
+							diag.CodeTypeMismatch,
+							fmt.Sprintf("expected value of type %s, but got %s", ch.Elem, right),
+							nil,
+						)
 					}
 					return TypeVoid
 				}
-				c.reportError("cannot send to non-channel type", e.Left.Span())
+				c.reportErrorWithCode(
+					"cannot send to non-channel type",
+					e.Left.Span(),
+					diag.CodeTypeInvalidOperation,
+					fmt.Sprintf("left operand must be a channel type, but got %s", left),
+					nil,
+				)
 				return TypeVoid
 			}
 
@@ -1261,10 +786,10 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 
 			if isComparison || isArithmetic {
 				if !c.assignableTo(left, right) && !c.assignableTo(right, left) {
-					c.reportError(fmt.Sprintf("type mismatch in binary expression: %s vs %s", left, right), e.Span())
+					c.reportTypeMismatch(left, right, e.Span(), "binary expression")
 				}
 			} else {
-				c.reportError("type mismatch in binary expression", e.Span())
+				c.reportErrorWithCode("type mismatch in binary expression", e.Span(), diag.CodeTypeMismatch, "ensure both operands have compatible types", nil)
 			}
 		}
 
@@ -1283,11 +808,23 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			operand := c.checkExpr(e.Expr, scope, inUnsafe)
 			if ch, ok := operand.(*Channel); ok {
 				if ch.Dir == SendOnly {
-					c.reportError("cannot receive from send-only channel", e.Span())
+					c.reportErrorWithCode(
+				"cannot receive from send-only channel",
+				e.Span(),
+				diag.CodeTypeInvalidOperation,
+				"this channel is declared as send-only (use `<-chan T` for receive-only or `chan T` for bidirectional)",
+				nil,
+			)
 				}
 				return ch.Elem
 			}
-			c.reportError("cannot receive from non-channel type", e.Span())
+			c.reportErrorWithCode(
+				"cannot receive from non-channel type",
+				e.Span(),
+				diag.CodeTypeInvalidOperation,
+				fmt.Sprintf("expression must be a channel type, but got %s", operand),
+				nil,
+			)
 			return TypeVoid
 		} else if e.Op == lexer.AMPERSAND {
 			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
@@ -1296,7 +833,13 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			if sym := c.getSymbol(e.Expr, scope); sym != nil {
 				for _, b := range sym.Borrows {
 					if b.Kind == BorrowExclusive {
-						c.reportError(fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name), e.Span())
+						c.reportErrorWithCode(
+							fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name),
+							e.Span(),
+							diag.CodeTypeBorrowConflict,
+							"the mutable borrow must end before you can borrow immutably",
+							nil,
+						)
 					}
 				}
 				scope.AddBorrow(sym, BorrowShared, e.Span())
@@ -1310,18 +853,39 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 
 			// 2. Verify l-value (addressable)
 			if !c.isLValue(e.Expr) {
-				c.reportError("cannot take mutable reference of non-lvalue", e.Expr.Span())
+				help := "mutable references can only be taken from variables:\n  let mut x = 5;\n  let r = &mut x;  // OK\n  // Not allowed:\n  // let r = &mut (x + 1);  // expression, not a variable"
+				c.reportErrorWithCode(
+					"cannot take mutable reference of non-lvalue",
+					e.Expr.Span(),
+					diag.CodeTypeInvalidOperation,
+					help,
+					nil,
+				)
 			}
 
 			// 3. Verify mutability
 			if !c.isMutable(e.Expr, scope) {
-				c.reportError("cannot take mutable reference of immutable variable", e.Expr.Span())
+				help := "declare the variable as mutable:\n  let mut x = 5;\n  let r = &mut x;  // now this works"
+				c.reportErrorWithCode(
+					"cannot take mutable reference of immutable variable",
+					e.Expr.Span(),
+					diag.CodeTypeInvalidOperation,
+					help,
+					nil,
+				)
 			}
 
 			// 4. Borrow check: &mut x
 			if sym := c.getSymbol(e.Expr, scope); sym != nil {
 				if len(sym.Borrows) > 0 {
-					c.reportError(fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name), e.Span())
+					help := fmt.Sprintf("the existing borrow of `%s` must end before you can borrow mutably:\n  let mut x = ...;\n  let r1 = &mut x;  // first borrow\n  // use r1 here\n  // r1 goes out of scope here\n  let r2 = &mut x;  // now this is allowed", sym.Name)
+					c.reportErrorWithCode(
+						fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name),
+						e.Span(),
+						diag.CodeTypeBorrowConflict,
+						help,
+						nil,
+					)
 				}
 				scope.AddBorrow(sym, BorrowExclusive, e.Span())
 			}
@@ -1331,14 +895,28 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			elemType := c.checkExpr(e.Expr, scope, inUnsafe)
 			if ptr, ok := elemType.(*Pointer); ok {
 				if !inUnsafe {
-					c.reportError("dereference of raw pointer requires unsafe block", e.Span())
+					help := "wrap the dereference in an unsafe block:\n  unsafe {\n    let value = *ptr;\n  }"
+					c.reportErrorWithCode(
+						"dereference of raw pointer requires unsafe block",
+						e.Span(),
+						diag.CodeTypeUnsafeRequired,
+						help,
+						nil,
+					)
 				}
 				return ptr.Elem
 			}
 			if ref, ok := elemType.(*Reference); ok {
 				return ref.Elem
 			}
-			c.reportError(fmt.Sprintf("cannot dereference non-pointer type %s", elemType), e.Span())
+			help := fmt.Sprintf("dereference operator `*` can only be used on pointer or reference types:\n  let x = 5;\n  let p = &x;  // reference\n  let v = *p;  // OK - dereference reference\n  // Not allowed:\n  // let v = *x;  // x is type `%s`, not a pointer", elemType)
+			c.reportErrorWithCode(
+				fmt.Sprintf("cannot dereference non-pointer type %s", elemType),
+				e.Span(),
+				diag.CodeTypeInvalidOperation,
+				help,
+				nil,
+			)
 			return TypeVoid
 		}
 		return c.checkExpr(e.Expr, scope, inUnsafe)
@@ -1348,9 +926,31 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		// We peek into Callee to see if it's a FieldExpr on an Optional
 		if fieldExpr, ok := e.Callee.(*ast.FieldExpr); ok {
 			targetType := c.checkExpr(fieldExpr.Target, scope, inUnsafe)
+
+			// AUTO-DEREF: Unwrap references and pointers for method lookup
+			// Keep dereferencing until we reach a concrete type
+			for {
+				if ref, ok := targetType.(*Reference); ok {
+					targetType = ref.Elem
+					continue
+				}
+				if ptr, ok := targetType.(*Pointer); ok {
+					targetType = ptr.Elem
+					continue
+				}
+				break
+			}
+
 			// Unwrap named types
-			if named, ok := targetType.(*Named); ok && named.Ref != nil {
-				targetType = named.Ref
+			if named, ok := targetType.(*Named); ok {
+				if named.Ref != nil {
+					targetType = named.Ref
+				} else if named.Name == "Self" {
+					// Resolve Self from scope
+					if sym := scope.Lookup("Self"); sym != nil {
+						targetType = sym.Type
+					}
+				}
 			}
 
 			// Check for methods on Optional types first (special case)
@@ -1359,21 +959,56 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				switch fieldExpr.Field.Name {
 				case "unwrap":
 					if len(e.Args) != 0 {
-						c.reportError("unwrap takes no arguments", e.Span())
+						help := "use `unwrap()` without arguments:\n  value.unwrap()\n  // or use match to handle safely:\n  match value {\n    Some(v) => v,\n    None => { /* handle None */ }\n  }"
+						c.reportErrorWithCode(
+							"unwrap takes no arguments",
+							e.Span(),
+							diag.CodeTypeInvalidOperation,
+							help,
+							nil,
+						)
 					}
 					return opt.Elem
 				case "expect":
 					if len(e.Args) != 1 {
-						c.reportError("expect takes 1 argument", e.Span())
+						help := "use `expect()` with exactly one string argument:\n  value.expect(\"error message\")\n  // or use match to handle safely:\n  match value {\n    Some(v) => v,\n    None => { panic(\"error message\") }\n  }"
+						c.reportErrorWithCode(
+							"expect takes 1 argument",
+							e.Span(),
+							diag.CodeTypeInvalidOperation,
+							help,
+							nil,
+						)
 					} else {
 						argType := c.checkExpr(e.Args[0], scope, inUnsafe)
 						if argType != TypeString {
-							c.reportError(fmt.Sprintf("expect message must be string, got %s", argType), e.Args[0].Span())
+							help := fmt.Sprintf("the argument to `expect()` must be a string:\n  value.expect(\"error message\")\n  // but got type `%s`", argType)
+							c.reportErrorWithCode(
+								fmt.Sprintf("expect message must be string, got %s", argType),
+								e.Args[0].Span(),
+								diag.CodeTypeMismatch,
+								help,
+								nil,
+							)
 						}
 					}
 					return opt.Elem
 				default:
-					c.reportError(fmt.Sprintf("type %s has no method %s", targetType, fieldExpr.Field.Name), fieldExpr.Span())
+					// Try to find similar method name
+					suggestion := c.findSimilarMethodName(targetType, fieldExpr.Field.Name)
+					suggestionMsg := ""
+					if suggestion != "" {
+						suggestionMsg = fmt.Sprintf("did you mean `%s`?", suggestion)
+					} else {
+						suggestionMsg = fmt.Sprintf("type %s does not have a method named %s", targetType, fieldExpr.Field.Name)
+					}
+					c.reportErrorWithCode(
+						fmt.Sprintf("type %s has no method %s", targetType, fieldExpr.Field.Name),
+						fieldExpr.Span(),
+						diag.CodeTypeMissingField,
+						suggestionMsg,
+						nil,
+					)
 					return TypeVoid
 				}
 			}
@@ -1381,17 +1016,53 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			// AUTO-BORROWING: Check if this is a method call on a regular type
 			method := c.lookupMethod(targetType, fieldExpr.Field.Name)
 			if method != nil && method.Receiver != nil {
+				// Handle generic type substitution for methods
+				if genInst, ok := targetType.(*GenericInstance); ok {
+					// Normalize the GenericInstance first
+					normalized := c.normalizeGenericInstanceBase(genInst)
+					if s, ok := normalized.Base.(*Struct); ok {
+						subst := make(map[string]Type)
+						for i, tp := range s.TypeParams {
+							if i < len(normalized.Args) {
+								subst[tp.Name] = normalized.Args[i]
+							}
+						}
+						// Apply substitution to method signature
+						// Function type contains Params and Return which might use type parameters
+						// We need to clone the function to avoid modifying the original method in the table
+						// Note: Substitute returns a new Type, so we cast back to *Function
+						methodType := Substitute(method, subst)
+						if substitutedMethod, ok := methodType.(*Function); ok {
+							method = substitutedMethod
+						}
+					}
+				}
+
 				// This is a method call - perform auto-borrowing
-				if method.Receiver.IsMutable {
+				if method.Receiver != nil && method.Receiver.IsMutable {
 					// Method needs &mut receiver - check borrow rules
 					if sym := c.getSymbol(fieldExpr.Target, scope); sym != nil {
 						// Check if already borrowed
 						if len(sym.Borrows) > 0 {
-							c.reportError(fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name), fieldExpr.Target.Span())
+							help := fmt.Sprintf("the existing borrow of `%s` must end before you can borrow mutably:\n  let mut x = ...;\n  let r1 = &mut x;  // first borrow\n  // use r1 here\n  // r1 goes out of scope here\n  let r2 = &mut x;  // now this is allowed", sym.Name)
+							c.reportErrorWithCode(
+								fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", sym.Name),
+								fieldExpr.Target.Span(),
+								diag.CodeTypeBorrowConflict,
+								help,
+								nil,
+							)
 						}
 						// Check mutability
 						if !c.isMutable(fieldExpr.Target, scope) {
-							c.reportError("cannot call method requiring &mut on immutable value", fieldExpr.Target.Span())
+							help := fmt.Sprintf("declare the variable as mutable:\n  let mut %s = ...;\n  // then you can call methods requiring &mut", sym.Name)
+							c.reportErrorWithCode(
+								"cannot call method requiring &mut on immutable value",
+								fieldExpr.Target.Span(),
+								diag.CodeTypeInvalidOperation,
+								help,
+								nil,
+							)
 						}
 						// NOTE: Don't register borrow for method calls - they're temporary
 						// Method call borrows last only for the duration of the call
@@ -1402,7 +1073,14 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 						// Check if already mutably borrowed
 						for _, b := range sym.Borrows {
 							if b.Kind == BorrowExclusive {
-								c.reportError(fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name), fieldExpr.Target.Span())
+								help := fmt.Sprintf("the mutable borrow of `%s` must end before you can borrow immutably:\n  let mut x = ...;\n  let r1 = &mut x;  // mutable borrow\n  // use r1 here\n  // r1 goes out of scope here\n  let r2 = &x;  // now immutable borrow is allowed", sym.Name)
+								c.reportErrorWithCode(
+									fmt.Sprintf("cannot borrow %q as immutable because it is already borrowed as mutable", sym.Name),
+									fieldExpr.Target.Span(),
+									diag.CodeTypeBorrowConflict,
+									help,
+									nil,
+								)
 							}
 						}
 						// NOTE: Don't register borrow for method calls - they're temporary
@@ -1418,11 +1096,36 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 
 				// Verify argument count and types
 				if len(argTypes) != len(method.Params) {
-					c.reportError(fmt.Sprintf("method %s expects %d arguments, got %d", fieldExpr.Field.Name, len(method.Params), len(argTypes)), e.Span())
+					// Build method signature string for help text
+					paramStrs := make([]string, len(method.Params))
+					for i, p := range method.Params {
+						paramStrs[i] = p.String()
+					}
+					signature := fmt.Sprintf("%s(%s)", fieldExpr.Field.Name, strings.Join(paramStrs, ", "))
+					
+					help := fmt.Sprintf("method `%s` expects %d argument(s), but got %d\n", fieldExpr.Field.Name, len(method.Params), len(argTypes))
+					help += fmt.Sprintf("signature: fn %s", signature)
+					if len(argTypes) > len(method.Params) {
+						help += fmt.Sprintf("\nremove %d extra argument(s)", len(argTypes)-len(method.Params))
+					} else {
+						help += fmt.Sprintf("\nprovide %d more argument(s)", len(method.Params)-len(argTypes))
+					}
+					
+					c.reportErrorWithLabeledSpans(
+						fmt.Sprintf("method %s expects %d arguments, got %d", fieldExpr.Field.Name, len(method.Params), len(argTypes)),
+						diag.CodeTypeInvalidOperation,
+						e.Span(),
+						fmt.Sprintf("expected %d argument(s), got %d", len(method.Params), len(argTypes)),
+						[]struct {
+							span  lexer.Span
+							label string
+						}{},
+						help,
+					)
 				}
 				for i := 0; i < len(argTypes) && i < len(method.Params); i++ {
 					if !c.assignableTo(argTypes[i], method.Params[i]) {
-						c.reportError(fmt.Sprintf("argument %d has type %s, expected %s", i+1, argTypes[i], method.Params[i]), e.Args[i].Span())
+						c.reportTypeMismatch(method.Params[i], argTypes[i], e.Args[i].Span(), fmt.Sprintf("argument %d to method %s", i+1, fieldExpr.Field.Name))
 					}
 				}
 
@@ -1440,8 +1143,62 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		}
 
 		if fn, ok := calleeType.(*Function); ok {
+			// Try to get function name for better error messages
+			fnName := "function"
+			if ident, ok := e.Callee.(*ast.Ident); ok {
+				fnName = ident.Name
+			}
+			
 			if fn.Unsafe && !inUnsafe {
-				c.reportError("call to unsafe function requires unsafe block", e.Span())
+				help := fmt.Sprintf("wrap the call in an `unsafe { ... }` block:\n  unsafe {\n    %s(...);\n  }", fnName)
+				c.reportErrorWithCode(
+					"call to unsafe function requires unsafe block",
+					e.Span(),
+					diag.CodeTypeUnsafeRequired,
+					help,
+					nil,
+				)
+			}
+
+			// Check argument count for non-generic functions
+			if len(fn.TypeParams) == 0 {
+				if len(argTypes) != len(fn.Params) {
+					// Build function signature string for help text
+					paramStrs := make([]string, len(fn.Params))
+					for i, p := range fn.Params {
+						paramStrs[i] = p.String()
+					}
+					
+					signature := fmt.Sprintf("%s(%s)", fnName, strings.Join(paramStrs, ", "))
+					
+					help := fmt.Sprintf("function `%s` expects %d argument(s), but got %d\n", fnName, len(fn.Params), len(argTypes))
+					help += fmt.Sprintf("signature: fn %s", signature)
+					if len(argTypes) > len(fn.Params) {
+						help += fmt.Sprintf("\nremove %d extra argument(s)", len(argTypes)-len(fn.Params))
+					} else {
+						help += fmt.Sprintf("\nprovide %d more argument(s)", len(fn.Params)-len(argTypes))
+					}
+					
+					c.reportErrorWithLabeledSpans(
+						fmt.Sprintf("function %s expects %d arguments, got %d", fnName, len(fn.Params), len(argTypes)),
+						diag.CodeTypeInvalidOperation,
+						e.Span(),
+						fmt.Sprintf("expected %d argument(s), got %d", len(fn.Params), len(argTypes)),
+						[]struct {
+							span  lexer.Span
+							label string
+						}{},
+						help,
+					)
+					return TypeVoid
+				}
+				
+				// Check argument types
+				for i := 0; i < len(argTypes) && i < len(fn.Params); i++ {
+					if !c.assignableTo(argTypes[i], fn.Params[i]) {
+						c.reportTypeMismatch(fn.Params[i], argTypes[i], e.Args[i].Span(), fmt.Sprintf("argument %d to function %s", i+1, fnName))
+					}
+				}
 			}
 
 			// Check if function is generic and needs type inference
@@ -1457,7 +1214,51 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 				// Try to infer type arguments
 				inferredTypes, err := c.inferTypeArgs(fn.TypeParams, paramTypes, argTypes)
 				if err != nil {
-					c.reportError(fmt.Sprintf("type inference failed: %v", err), e.Span())
+					// Improve error message for argument count mismatch
+					if strings.Contains(err.Error(), "parameter count mismatch") {
+						// Build function signature
+						paramStrs := make([]string, len(paramTypes))
+						for i, p := range paramTypes {
+							paramStrs[i] = p.String()
+						}
+						
+						typeParamNames := make([]string, len(fn.TypeParams))
+						for i, tp := range fn.TypeParams {
+							typeParamNames[i] = tp.Name
+						}
+						
+						signature := fmt.Sprintf("%s[%s](%s)", fnName, strings.Join(typeParamNames, ", "), strings.Join(paramStrs, ", "))
+						
+						help := fmt.Sprintf("generic function `%s` expects %d argument(s), but got %d\n", fnName, len(paramTypes), len(argTypes))
+						help += fmt.Sprintf("signature: fn %s", signature)
+						if len(argTypes) > len(paramTypes) {
+							help += fmt.Sprintf("\nremove %d extra argument(s)", len(argTypes)-len(paramTypes))
+						} else {
+							help += fmt.Sprintf("\nprovide %d more argument(s)", len(paramTypes)-len(argTypes))
+						}
+						
+						c.reportErrorWithLabeledSpans(
+							fmt.Sprintf("function %s expects %d arguments, got %d", fnName, len(paramTypes), len(argTypes)),
+							diag.CodeTypeInvalidOperation,
+							e.Span(),
+							fmt.Sprintf("expected %d argument(s), got %d", len(paramTypes), len(argTypes)),
+							[]struct {
+								span  lexer.Span
+								label string
+							}{},
+							help,
+						)
+					} else {
+						help := fmt.Sprintf("type inference failed: %v\n", err)
+						help += "ensure the argument types match the function's type parameters"
+						c.reportErrorWithCode(
+							fmt.Sprintf("type inference failed: %v", err),
+							e.Span(),
+							diag.CodeTypeInvalidGenericArgs,
+							help,
+							nil,
+						)
+					}
 					return TypeVoid
 				}
 
@@ -1469,9 +1270,60 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 
 				// Verify inferred types satisfy constraints
 				for i, tp := range fn.TypeParams {
-					if err := Satisfies(inferredTypes[i], tp.Bounds, c.Env); err != nil {
-						c.reportError(fmt.Sprintf("inferred type %s does not satisfy constraints for %s: %v",
-							inferredTypes[i], tp.Name, err), e.Span())
+					for _, bound := range tp.Bounds {
+						if err := Satisfies(inferredTypes[i], []Type{bound}, c.Env); err != nil {
+							// Find function definition to get type parameter span
+							var typeParamSpan lexer.Span
+							// Try to get function name from callee
+							var fnName string
+							if ident, ok := e.Callee.(*ast.Ident); ok {
+								fnName = ident.Name
+							} else if fieldExpr, ok := e.Callee.(*ast.FieldExpr); ok && fieldExpr.Field != nil {
+								fnName = fieldExpr.Field.Name
+							}
+							
+							if fnName != "" {
+								if fnSym := scope.Lookup(fnName); fnSym != nil {
+									if fnDecl, ok := fnSym.DefNode.(*ast.FnDecl); ok {
+										for j, astTP := range fnDecl.TypeParams {
+											if j == i && astTP != nil {
+												if typeParam, ok := astTP.(*ast.TypeParam); ok && typeParam.Name != nil {
+													typeParamSpan = typeParam.Name.Span()
+												}
+											}
+										}
+									}
+								}
+							}
+							
+							var boundSpan lexer.Span
+							if named, ok := bound.(*Named); ok {
+								if sym := c.GlobalScope.Lookup(named.Name); sym != nil {
+									if traitDecl, ok := sym.DefNode.(*ast.TraitDecl); ok && traitDecl.Name != nil {
+										boundSpan = traitDecl.Name.Span()
+									}
+								}
+							}
+							
+							// Build diagnostic with proof chain
+							diag := diag.Diagnostic{
+								Stage:    diag.StageTypeCheck,
+								Severity: diag.SeverityError,
+								Code:     diag.CodeTypeConstraintNotSatisfied,
+								Message:  fmt.Sprintf("inferred type `%s` does not satisfy constraint for type parameter `%s`", inferredTypes[i], tp.Name),
+								Span:     c.toDiagSpan(e.Span()),
+							}
+							diag = diag.WithProofStep(fmt.Sprintf("type `%s` was inferred from arguments here", inferredTypes[i]), c.toDiagSpan(e.Span()))
+							if typeParamSpan.Line > 0 {
+								diag = diag.WithProofStep(fmt.Sprintf("type parameter `%s` must satisfy trait `%s`", tp.Name, bound), c.toDiagSpan(typeParamSpan))
+							}
+							if boundSpan.Line > 0 {
+								diag = diag.WithProofStep("required by this bound", c.toDiagSpan(boundSpan))
+							}
+							diag = diag.WithHelp(fmt.Sprintf("ensure the argument types allow inference of a type that satisfies `%s`", bound))
+							c.Errors = append(c.Errors, diag)
+							break
+						}
 					}
 				}
 
@@ -1500,8 +1352,15 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		}
 
 		// Unwrap named types
-		if named, ok := targetType.(*Named); ok && named.Ref != nil {
-			targetType = named.Ref
+		if named, ok := targetType.(*Named); ok {
+			if named.Ref != nil {
+				targetType = named.Ref
+			} else if named.Name == "Self" {
+				// Resolve Self from scope
+				if sym := scope.Lookup("Self"); sym != nil {
+					targetType = sym.Type
+				}
+			}
 		}
 
 		// Check for field on the unwrapped type
@@ -1511,47 +1370,249 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 					return f.Type
 				}
 			}
+			// Field not found - report error with suggestion
+			similar := c.findSimilarField(e.Field.Name, s.Fields)
+			suggestion := ""
+			if similar != "" {
+				suggestion = fmt.Sprintf("did you mean %s?", similar)
+			} else if len(s.Fields) > 0 {
+				suggestion = fmt.Sprintf("available fields: %s", c.listFieldNames(s.Fields))
+			}
+			c.reportErrorWithCode(
+				fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name),
+				e.Span(),
+				diag.CodeTypeMissingField,
+				suggestion,
+				nil,
+			)
 			return TypeVoid
 		}
 
-		c.reportError(fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name), e.Span())
+		if tuple, ok := targetType.(*Tuple); ok {
+			// Check if field name is an integer
+			if index, err := strconv.Atoi(e.Field.Name); err == nil {
+				if index >= 0 && index < len(tuple.Elements) {
+					return tuple.Elements[index]
+				}
+				c.reportError(fmt.Sprintf("tuple index %d out of bounds", index), e.Field.Span())
+				return TypeVoid
+			}
+			c.reportError(fmt.Sprintf("tuple field must be an integer, got %s", e.Field.Name), e.Field.Span())
+			return TypeVoid
+		}
+
+		if genInst, ok := targetType.(*GenericInstance); ok {
+			// Normalize the GenericInstance first
+			normalized := c.normalizeGenericInstanceBase(genInst)
+			var s *Struct
+			if st, ok := normalized.Base.(*Struct); ok {
+				s = st
+			}
+
+			if s != nil {
+				subst := make(map[string]Type)
+				for i, tp := range s.TypeParams {
+					if i < len(genInst.Args) {
+						subst[tp.Name] = genInst.Args[i]
+					}
+				}
+
+				for _, f := range s.Fields {
+					if f.Name == e.Field.Name {
+						return Substitute(f.Type, subst)
+					}
+				}
+				// Field not found in generic struct - report error
+				similar := c.findSimilarField(e.Field.Name, s.Fields)
+				suggestion := ""
+				if similar != "" {
+					suggestion = fmt.Sprintf("did you mean %s?", similar)
+				} else if len(s.Fields) > 0 {
+					suggestion = fmt.Sprintf("available fields: %s", c.listFieldNames(s.Fields))
+				}
+				c.reportErrorWithCode(
+					fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name),
+					e.Span(),
+					diag.CodeTypeMissingField,
+					suggestion,
+					nil,
+				)
+				return TypeVoid
+			}
+		}
+
+		// Try to suggest similar field names if it's a struct
+		suggestion := ""
+		if s, ok := targetType.(*Struct); ok {
+			similar := c.findSimilarField(e.Field.Name, s.Fields)
+			if similar != "" {
+				suggestion = fmt.Sprintf("did you mean %s?", similar)
+			} else if len(s.Fields) > 0 {
+				suggestion = fmt.Sprintf("available fields: %s", c.listFieldNames(s.Fields))
+			}
+		}
+		c.reportErrorWithCode(
+			fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name),
+			e.Span(),
+			diag.CodeTypeMissingField,
+			suggestion,
+			nil,
+		)
 		return TypeVoid
 	case *ast.BlockExpr:
 		c.checkBlock(e, scope, inUnsafe)
 		return TypeVoid // Simplified
 	case *ast.ArrayLiteral:
-		if len(e.Elements) == 0 {
-			c.reportError("array literal cannot be empty (use explicit type annotation)", e.Span())
-			return TypeVoid
+		var explicitType Type
+		if e.Type != nil {
+			explicitType = c.resolveType(e.Type)
 		}
 
-		// Check all elements and infer common type
+		// Check all elements
 		var elemType Type
+		if explicitType != nil {
+			switch t := explicitType.(type) {
+			case *Array:
+				elemType = t.Elem
+				if t.Len != int64(len(e.Elements)) {
+					c.reportErrorWithCode(
+						fmt.Sprintf("array literal length mismatch: expected %d, got %d", t.Len, len(e.Elements)),
+						e.Span(),
+						diag.CodeTypeMismatch,
+						fmt.Sprintf("provide exactly %d element(s) in the array literal, or use a slice type `[%s]` instead of array", t.Len, e.Type.(*ast.ArrayType).Elem),
+						nil,
+					)
+				}
+			case *Slice:
+				elemType = t.Elem
+			default:
+				c.reportError(fmt.Sprintf("type %s is not an array or slice", explicitType), e.Type.Span())
+				return TypeVoid
+			}
+		} else if len(e.Elements) > 0 {
+			elemType = c.checkExpr(e.Elements[0], scope, inUnsafe)
+		} else {
+			elemType = TypeInt // Default to int for empty array
+		}
+
 		for i, elem := range e.Elements {
-			checkedType := c.checkExpr(elem, scope, inUnsafe)
-			if i == 0 {
-				elemType = checkedType
-			} else {
-				// All elements must have compatible types
-				if !c.assignableTo(checkedType, elemType) && !c.assignableTo(elemType, checkedType) {
-					c.reportError(fmt.Sprintf("array element type mismatch: expected %s, got %s", elemType, checkedType), elem.Span())
+			t := c.checkExpr(elem, scope, inUnsafe)
+			if explicitType != nil {
+				if !c.assignableTo(t, elemType) {
+					c.reportError(fmt.Sprintf("cannot use %s as %s in array literal", t, elemType), elem.Span())
+				}
+			} else if i > 0 && !c.assignableTo(t, elemType) {
+				// If the first element was int, and this is float, maybe upgrade?
+				// For now, just enforce homogeneity based on first element.
+				c.reportError(fmt.Sprintf("mixed types in array literal: %s vs %s", t, elemType), elem.Span())
+			}
+		}
+
+		if explicitType != nil {
+			return explicitType
+		}
+		// Return proper Array type with inferred length
+		return &Array{Elem: elemType, Len: int64(len(e.Elements))}
+	case *ast.MapLiteral:
+		// Check all key-value pairs
+		var keyType Type
+		var valueType Type
+
+		if len(e.Entries) > 0 {
+			// Infer types from first entry
+			keyType = c.checkExpr(e.Entries[0].Key, scope, inUnsafe)
+			valueType = c.checkExpr(e.Entries[0].Value, scope, inUnsafe)
+		} else {
+			// Empty map literal - default types
+			keyType = TypeInt
+			valueType = TypeInt
+		}
+
+		// Check all entries for type consistency
+		for i, entry := range e.Entries {
+			keyT := c.checkExpr(entry.Key, scope, inUnsafe)
+			valueT := c.checkExpr(entry.Value, scope, inUnsafe)
+
+			if i > 0 {
+				if !c.assignableTo(keyT, keyType) {
+					c.reportError(fmt.Sprintf("mixed key types in map literal: %s vs %s", keyT, keyType), entry.Key.Span())
+				}
+				if !c.assignableTo(valueT, valueType) {
+					c.reportError(fmt.Sprintf("mixed value types in map literal: %s vs %s", valueT, valueType), entry.Value.Span())
 				}
 			}
 		}
 
-		// Return a slice type for array literals (they're dynamically sized)
-		return &Slice{Elem: elemType}
+		// Return proper Map type
+		return &Map{Key: keyType, Value: valueType}
+	case *ast.TupleLiteral:
+		var elements []Type
+		for _, e := range e.Elements {
+			elements = append(elements, c.checkExpr(e, scope, inUnsafe))
+		}
+		return &Tuple{Elements: elements}
 	case *ast.StructLiteral:
-		sym := scope.Lookup(e.Name.Name)
-		if sym == nil {
-			c.reportError(fmt.Sprintf("undefined struct: %s", e.Name.Name), e.Name.Span())
+		// Resolve the type of the struct (could be generic instantiation)
+		targetType := c.resolveTypeFromExpr(e.Name)
+		if targetType == TypeVoid {
 			return TypeVoid
 		}
 
-		structType := c.resolveStruct(sym.Type)
+		// Special case for Map literal (parsed as StructLiteral)
+		if mapType, ok := targetType.(*Map); ok {
+			if len(e.Fields) > 0 {
+				c.reportError("map literals with elements are not supported in this syntax (use empty literal)", e.Span())
+			}
+			return mapType
+		}
+
+		structType := c.resolveStruct(targetType)
 		if structType == nil {
-			c.reportError(fmt.Sprintf("%s is not a struct", e.Name.Name), e.Name.Span())
+			c.reportError(fmt.Sprintf("%s is not a struct", targetType), e.Name.Span())
 			return TypeVoid
+		}
+
+		// Handle generics
+		var subst map[string]Type
+		if len(structType.TypeParams) > 0 {
+			if genInst, ok := targetType.(*GenericInstance); ok {
+				// Normalize the GenericInstance to ensure base is properly resolved
+				normalized := c.normalizeGenericInstanceBase(genInst)
+				
+				// Verify args count
+				if len(normalized.Args) != len(structType.TypeParams) {
+					c.reportError(fmt.Sprintf("type argument count mismatch: expected %d, got %d", len(structType.TypeParams), len(normalized.Args)), e.Name.Span())
+					return TypeVoid
+				}
+				subst = make(map[string]Type)
+				for i, tp := range structType.TypeParams {
+					subst[tp.Name] = normalized.Args[i]
+				}
+				// Update targetType to use normalized instance
+				targetType = normalized
+			} else {
+				// Missing type arguments - try to infer from field values
+				inferredArgs, err := c.inferStructTypeArgs(structType, e.Fields, scope, inUnsafe)
+				if err != nil {
+					c.reportErrorWithCode(
+						fmt.Sprintf("cannot infer type arguments for %s: %v", structType.Name, err),
+						e.Name.Span(),
+						diag.CodeTypeInvalidGenericArgs,
+						fmt.Sprintf("provide explicit type arguments: %s[...]", structType.Name),
+						nil,
+					)
+					return TypeVoid
+				}
+
+				// Create substitution map
+				subst = make(map[string]Type)
+				for i, tp := range structType.TypeParams {
+					subst[tp.Name] = inferredArgs[i]
+				}
+
+				// Create GenericInstance with inferred types
+				targetType = &GenericInstance{Base: structType, Args: inferredArgs}
+			}
 		}
 
 		// Check fields
@@ -1563,37 +1624,80 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		for _, f := range e.Fields {
 			expectedType, ok := expectedFields[f.Name.Name]
 			if !ok {
-				c.reportError(fmt.Sprintf("unknown field %s in struct %s", f.Name.Name, structType.Name), f.Name.Span())
+				similar := c.findSimilarField(f.Name.Name, structType.Fields)
+				suggestion := ""
+				if similar != "" {
+					suggestion = fmt.Sprintf("did you mean %s?", similar)
+				} else if len(structType.Fields) > 0 {
+					suggestion = fmt.Sprintf("available fields: %s", c.listFieldNames(structType.Fields))
+				}
+				c.reportErrorWithCode(
+					fmt.Sprintf("unknown field %s in struct %s", f.Name.Name, structType.Name),
+					f.Name.Span(),
+					diag.CodeTypeUnknownField,
+					suggestion,
+					nil,
+				)
 				continue
+			}
+
+			// Substitute type parameters in field type
+			if len(subst) > 0 {
+				expectedType = Substitute(expectedType, subst)
 			}
 
 			valType := c.checkExpr(f.Value, scope, inUnsafe)
 			if !c.assignableTo(valType, expectedType) {
-				c.reportError(fmt.Sprintf("cannot assign type %s to field %s of type %s", valType, f.Name.Name, expectedType), f.Value.Span())
+				c.reportErrorWithCode(
+					fmt.Sprintf("cannot assign type %s to field %s of type %s", valType, f.Name.Name, expectedType),
+					f.Value.Span(),
+					diag.CodeTypeCannotAssign,
+					fmt.Sprintf("expected field %s to be of type %s", f.Name.Name, expectedType),
+					nil,
+				)
 			}
 
 			delete(expectedFields, f.Name.Name)
 		}
 
 		for name := range expectedFields {
-			c.reportError(fmt.Sprintf("missing field %s in struct literal", name), e.Span())
+			c.reportErrorWithCode(
+				fmt.Sprintf("missing field %s in struct literal", name),
+				e.Span(),
+				diag.CodeTypeMissingField,
+				fmt.Sprintf("add the required field `%s: <value>` to the struct literal", name),
+				nil,
+			)
 		}
 
-		return structType
+		// Return the instantiated type (GenericInstance) if generic, otherwise Struct
+		return targetType
 	case *ast.IfExpr:
 		// Check all if clauses - all branches must return the same type
 		var resultType Type
 		for i, clause := range e.Clauses {
 			condType := c.checkExpr(clause.Condition, scope, inUnsafe)
 			if condType != TypeBool {
-				c.reportError(fmt.Sprintf("if condition must be boolean, got %s", condType), clause.Condition.Span())
+				c.reportErrorWithCode(
+					fmt.Sprintf("if condition must be boolean, but found `%s`", condType),
+					clause.Condition.Span(),
+					diag.CodeTypeMismatch,
+					"use a boolean expression or comparison (e.g., x == 5, x > 0, flag)",
+					nil,
+				)
 			}
 			branchType := c.checkBlock(clause.Body, scope, inUnsafe)
 			if i == 0 {
 				resultType = branchType
 			} else {
 				if !c.assignableTo(branchType, resultType) && !c.assignableTo(resultType, branchType) {
-					c.reportError(fmt.Sprintf("if branch returns %s, but previous branch returned %s", branchType, resultType), clause.Body.Span())
+					c.reportErrorWithCode(
+						fmt.Sprintf("if branch returns %s, but previous branch returned %s", branchType, resultType),
+						clause.Body.Span(),
+						diag.CodeTypeMismatch,
+						fmt.Sprintf("all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation"),
+						nil,
+					)
 				}
 			}
 		}
@@ -1602,7 +1706,13 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			elseType := c.checkBlock(e.Else, scope, inUnsafe)
 			if resultType != nil {
 				if !c.assignableTo(elseType, resultType) && !c.assignableTo(resultType, elseType) {
-					c.reportError(fmt.Sprintf("else branch returns %s, but if branches returned %s", elseType, resultType), e.Else.Span())
+					c.reportErrorWithCode(
+						fmt.Sprintf("else branch returns %s, but if branches returned %s", elseType, resultType),
+						e.Else.Span(),
+						diag.CodeTypeMismatch,
+						fmt.Sprintf("all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation"),
+						nil,
+					)
 				}
 			} else {
 				resultType = elseType
@@ -1613,41 +1723,44 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 		}
 		return resultType
 	case *ast.IndexExpr:
-		// If this is a type instantiation (generic), handle separately
-		if ident, ok := e.Target.(*ast.Ident); ok {
-			if sym := scope.Lookup(ident.Name); sym != nil {
-				if fnType, ok := sym.Type.(*Function); ok && len(fnType.TypeParams) > 0 {
-					// This is generic function instantiation
-					// Type argument is in e.Index
-					typeArg := c.resolveType(e.Index.(ast.TypeExpr))
+		// Evaluate target first to see what we are indexing
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
 
-					// Create substitution map
-					if len(fnType.TypeParams) != 1 {
-						c.reportError("type argument count mismatch", e.Span())
-						return TypeVoid
-					}
+		// 1. Check for generic function instantiation: fn[T](...)
+		if fnType, ok := targetType.(*Function); ok && len(fnType.TypeParams) > 0 {
+			if len(fnType.TypeParams) != len(e.Indices) {
+				c.reportErrorWithCode(
+					fmt.Sprintf("type argument count mismatch: expected %d, got %d", len(fnType.TypeParams), len(e.Indices)),
+					e.Span(),
+					diag.CodeTypeInvalidGenericArgs,
+					fmt.Sprintf("provide exactly %d type argument(s) for the generic function", len(fnType.TypeParams)),
+					nil,
+				)
+				return TypeVoid
+			}
 
-					subst := make(map[string]Type)
-					subst[fnType.TypeParams[0].Name] = typeArg
+			subst := make(map[string]Type)
+			for i, tp := range fnType.TypeParams {
+				// Indices are type expressions here
+				typeArg := c.resolveTypeFromExpr(e.Indices[i])
+				subst[tp.Name] = typeArg
+			}
 
-					// Substitute in params and return type
-					var newParams []Type
-					for _, p := range fnType.Params {
-						newParams = append(newParams, Substitute(p, subst))
-					}
+			// Substitute in params and return type
+			var newParams []Type
+			for _, p := range fnType.Params {
+				newParams = append(newParams, Substitute(p, subst))
+			}
 
-					return &Function{
-						Unsafe:     fnType.Unsafe,
-						TypeParams: nil, // Instantiated
-						Params:     newParams,
-						Return:     Substitute(fnType.Return, subst),
-					}
-				}
+			return &Function{
+				Unsafe:     fnType.Unsafe,
+				TypeParams: nil, // Instantiated
+				Params:     newParams,
+				Return:     Substitute(fnType.Return, subst),
 			}
 		}
 
-		targetType := c.checkExpr(e.Target, scope, inUnsafe)
-
+		// 2. Standard array/slice/map indexing logic (AUTO-DEREF)
 		// AUTO-DEREF: Unwrap references and pointers
 		for {
 			if ref, ok := targetType.(*Reference); ok {
@@ -1661,149 +1774,274 @@ func (c *Checker) checkExpr(expr ast.Expr, scope *Scope, inUnsafe bool) Type {
 			break
 		}
 
-		indexType := c.checkExpr(e.Index, scope, inUnsafe)
+		if len(e.Indices) == 0 {
+			c.reportErrorWithCode(
+				"index expression missing index",
+				e.Span(),
+				diag.CodeTypeInvalidOperation,
+				"provide an index expression, e.g., `array[0]` or `map[key]`",
+				nil,
+			)
+			return TypeVoid
+		}
 
-		// Index must be int
+		// Check for map indexing
+		if mapType, ok := targetType.(*Map); ok {
+			// Map indexing: map[key] -> value
+			if len(e.Indices) != 1 {
+				c.reportErrorWithCode(
+					"map indexing requires exactly one index (the key)",
+					e.Span(),
+					diag.CodeTypeInvalidOperation,
+					"use single index for map access: `map[key]`",
+					nil,
+				)
+				return TypeVoid
+			}
+
+			indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
+
+			// Index must match map key type
+			if !c.assignableTo(indexType, mapType.Key) {
+				c.reportErrorWithCode(
+					fmt.Sprintf("map index type mismatch: expected %s, got %s", mapType.Key, indexType),
+					e.Indices[0].Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("the key must be of type %s, but got %s. Convert the index to the correct type", mapType.Key, indexType),
+					nil,
+				)
+				return TypeVoid
+			}
+
+			// Return optional map value type (V?) since the key might not exist
+			return &Optional{Elem: mapType.Value}
+		}
+
+		// Array/Slice indexing
+		if arrType, ok := targetType.(*Array); ok {
+			if len(e.Indices) != 1 {
+				c.reportErrorWithCode(
+					"array indexing requires exactly one index",
+					e.Span(),
+					diag.CodeTypeInvalidOperation,
+					"use single integer index for array access: `array[0]`",
+					nil,
+				)
+				return TypeVoid
+			}
+
+			indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
+
+			// Check for slicing
+			if _, ok := indexType.(*Range); ok {
+				return &Slice{Elem: arrType.Elem}
+			}
+
+			// Index must be int
+			if indexType != TypeInt {
+				c.reportErrorWithCode(
+					fmt.Sprintf("array index must be int, got %s", indexType),
+					e.Indices[0].Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("convert the index to `int` type, e.g., cast the value to int if needed"),
+					nil,
+				)
+				return TypeVoid
+			}
+
+			// Return array element type
+			return arrType.Elem
+		}
+
+		if sliceType, ok := targetType.(*Slice); ok {
+			if len(e.Indices) != 1 {
+				c.reportErrorWithCode(
+					"slice indexing requires exactly one index",
+					e.Span(),
+					diag.CodeTypeInvalidOperation,
+					"use single integer index for slice access: `slice[0]`",
+					nil,
+				)
+				return TypeVoid
+			}
+
+			indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
+
+			// Check for slicing
+			if _, ok := indexType.(*Range); ok {
+				return sliceType
+			}
+
+			// Index must be int
+			if indexType != TypeInt {
+				c.reportErrorWithCode(
+					fmt.Sprintf("slice index must be int, got %s", indexType),
+					e.Indices[0].Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("convert the index to `int` type, e.g., cast the value to int if needed"),
+					nil,
+				)
+				return TypeVoid
+			}
+
+			// Return slice element type
+			return sliceType.Elem
+		}
+
+		// String slicing
+		if targetType == TypeString {
+			if len(e.Indices) != 1 {
+				c.reportErrorWithCode(
+					"string indexing requires exactly one index",
+					e.Span(),
+					diag.CodeTypeInvalidOperation,
+					"use string slicing: `string[start:end]` instead of single index access",
+					nil,
+				)
+				return TypeVoid
+			}
+
+			indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
+
+			if _, ok := indexType.(*Range); ok {
+				return TypeString
+			}
+
+			// String indexing (char access) not supported yet
+			c.reportErrorWithCode(
+				"string indexing not supported (use slicing for now)",
+				e.Indices[0].Span(),
+				diag.CodeTypeInvalidOperation,
+				"use string slicing with a range: `string[0:1]` to get a substring, or iterate over characters",
+				nil,
+			)
+			return TypeVoid
+		}
+
+		// For other types, assume single index and return placeholder
+		indexType := c.checkExpr(e.Indices[0], scope, inUnsafe)
 		if indexType != TypeInt {
-			c.reportError(fmt.Sprintf("index must be int, got %s", indexType), e.Index.Span())
+			c.reportErrorWithCode(
+				fmt.Sprintf("index must be int, got %s", indexType),
+				e.Indices[0].Span(),
+				diag.CodeTypeMismatch,
+				fmt.Sprintf("convert the index to `int` type"),
+				nil,
+			)
 		}
 
-		// Extract element type from array or slice
-		switch t := targetType.(type) {
-		case *Array:
-			return t.Elem
-		case *Slice:
-			return t.Elem
-		case *GenericInstance:
-			// Check if base is Array or Slice
-			if arr, ok := t.Base.(*Array); ok {
-				return arr.Elem
+		// Check for operator overloading via 'get' method
+		// This enables indexing on user-defined types like Vec[T]
+		var structType Type = targetType
+		if named, ok := structType.(*Named); ok && named.Ref != nil {
+			structType = named.Ref
+		}
+
+		// Helper to check 'get' method
+		checkGetMethod := func(s *Struct, subst map[string]Type) Type {
+			method := c.lookupMethod(s, "get")
+			if method != nil {
+				// Validate 'get' signature: fn(index: IndexType) -> ReturnType
+				// We allow any index type that the method accepts
+				if len(method.Params) == 1 {
+					paramType := method.Params[0]
+					if subst != nil {
+						paramType = Substitute(paramType, subst)
+					}
+
+					if c.assignableTo(indexType, paramType) {
+						retType := method.Return
+						if subst != nil {
+							retType = Substitute(retType, subst)
+						}
+						return retType
+					}
+				}
 			}
-			if sl, ok := t.Base.(*Slice); ok {
-				return sl.Elem
+			return nil
+		}
+
+		if s, ok := structType.(*Struct); ok {
+			if ret := checkGetMethod(s, nil); ret != nil {
+				return ret
+			}
+		} else if genInst, ok := structType.(*GenericInstance); ok {
+			// Normalize the GenericInstance first
+			normalized := c.normalizeGenericInstanceBase(genInst)
+			var baseStruct *Struct
+			if s, ok := normalized.Base.(*Struct); ok {
+				baseStruct = s
+			}
+
+			if baseStruct != nil {
+				subst := make(map[string]Type)
+				for i, tp := range baseStruct.TypeParams {
+					if i < len(normalized.Args) {
+						subst[tp.Name] = normalized.Args[i]
+					}
+				}
+				if ret := checkGetMethod(baseStruct, subst); ret != nil {
+					return ret
+				}
 			}
 		}
 
-		c.reportError(fmt.Sprintf("cannot index type %s (expected array or slice)", targetType), e.Target.Span())
+		// Unknown indexing target
+		c.reportErrorWithCode(
+			fmt.Sprintf("cannot index type %s", targetType),
+			e.Target.Span(),
+			diag.CodeTypeInvalidOperation,
+			fmt.Sprintf("type %s does not support indexing. Only arrays, slices, maps, strings, and types with a `get` method can be indexed", targetType),
+			nil,
+		)
 		return TypeVoid
 	case *ast.MatchExpr:
 		return c.checkMatchExpr(e, scope, inUnsafe)
+	case *ast.RangeExpr:
+		var startType Type
+		if e.Start != nil {
+			startType = c.checkExpr(e.Start, scope, inUnsafe)
+			if startType != TypeInt {
+				c.reportErrorWithCode(
+					fmt.Sprintf("range start must be integer, got %s", startType),
+					e.Start.Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("convert the start value to `int` type"),
+					nil,
+				)
+			}
+		}
+		var endType Type
+		if e.End != nil {
+			endType = c.checkExpr(e.End, scope, inUnsafe)
+			if endType != TypeInt {
+				c.reportErrorWithCode(
+					fmt.Sprintf("range end must be integer, got %s", endType),
+					e.End.Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("convert the end value to `int` type"),
+					nil,
+				)
+			}
+		}
+		return &Range{Start: startType, End: endType}
+	case *ast.AssignExpr:
+		// Check both target and value expressions
+		targetType := c.checkExpr(e.Target, scope, inUnsafe)
+		valueType := c.checkExpr(e.Value, scope, inUnsafe)
+
+		// Verify assignment compatibility
+		if !c.assignableTo(valueType, targetType) {
+			c.reportCannotAssign(valueType, targetType, e.Value.Span())
+		}
+
+		// Assignments are expressions that return void (unit type)
+		return TypeVoid
 	default:
 		return TypeVoid
 	}
 }
 
-func (c *Checker) assignableTo(src, dst Type) bool {
-	// Handle Named types (unwrap aliases)
-	if named, ok := src.(*Named); ok && named.Ref != nil {
-		return c.assignableTo(named.Ref, dst)
-	}
-	if named, ok := dst.(*Named); ok && named.Ref != nil {
-		return c.assignableTo(src, named.Ref)
-	}
-
-	// Handle Named types without Ref - compare by name
-	if srcNamed, ok := src.(*Named); ok {
-		if dstNamed, ok := dst.(*Named); ok {
-			return srcNamed.Name == dstNamed.Name
-		}
-	}
-
-	// Handle Optional assignment
-	if dstOpt, ok := dst.(*Optional); ok {
-		if src == TypeNil {
-			return true
-		}
-		// Allow &T -> T? (Reference to Optional)
-		// Since T? is implemented as *T, passing a reference &T is valid
-		if srcRef, ok := src.(*Reference); ok {
-			if c.assignableTo(srcRef.Elem, dstOpt.Elem) {
-				return true
-			}
-		}
-		// Allow T -> T? (Implicit wrapping)
-		if c.assignableTo(src, dstOpt.Elem) {
-			return true
-		}
-	}
-
-	// Handle Pointer assignment (unsafe pointers)
-	if _, ok := dst.(*Pointer); ok {
-		if src == TypeNil {
-			return true
-		}
-	}
-
-	// Handle nil assignment (fallback if dst is not Optional, though TypeNil is only assignable to Optional currently)
-	if src == TypeNil {
-		return false
-	}
-
-	// Handle Channel types
-	if srcChan, ok := src.(*Channel); ok {
-		if dstChan, ok := dst.(*Channel); ok {
-			// Channels must have same element type
-			if !c.assignableTo(srcChan.Elem, dstChan.Elem) {
-				return false
-			}
-			// Direction compatibility:
-			// Bidirectional channels can be assigned to directional ones
-			if srcChan.Dir == SendRecv {
-				return true
-			}
-			// Otherwise must match exactly
-			return srcChan.Dir == dstChan.Dir
-		}
-	}
-
-	// Handle Array types
-	if srcArr, ok := src.(*Array); ok {
-		if dstArr, ok := dst.(*Array); ok {
-			// Arrays must have same element type and length
-			return srcArr.Len == dstArr.Len && c.assignableTo(srcArr.Elem, dstArr.Elem)
-		}
-		// Array can be assigned to slice with same element type
-		if dstSlice, ok := dst.(*Slice); ok {
-			return c.assignableTo(srcArr.Elem, dstSlice.Elem)
-		}
-	}
-
-	// Handle Slice types
-	if srcSlice, ok := src.(*Slice); ok {
-		if dstSlice, ok := dst.(*Slice); ok {
-			// Slices must have same element type
-			return c.assignableTo(srcSlice.Elem, dstSlice.Elem)
-		}
-		// Slice cannot be assigned to array (would need runtime length check)
-		if _, ok := dst.(*Array); ok {
-			return false
-		}
-	}
-
-	// Handle GenericInstance
-	if srcGen, ok := src.(*GenericInstance); ok {
-		if dstGen, ok := dst.(*GenericInstance); ok {
-			// Check base types match
-			if !c.assignableTo(srcGen.Base, dstGen.Base) {
-				return false
-			}
-			// Check type arguments match
-			if len(srcGen.Args) != len(dstGen.Args) {
-				return false
-			}
-			for i := range srcGen.Args {
-				if !c.assignableTo(srcGen.Args[i], dstGen.Args[i]) {
-					return false
-				}
-			}
-			return true
-		}
-	}
-
-	// For primitives and others, use equality
-	// Note: This assumes primitive singletons are used consistently
-	return src == dst
-}
 
 func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe bool) Type {
 	subjectType := c.checkExpr(expr.Subject, scope, inUnsafe)
@@ -1818,6 +2056,7 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 
 	// Check if subject is Enum or Primitive or Optional
 	var enumType *Enum
+	var genericArgs []Type
 	var optionalType *Optional
 	isEnum := false
 	isOptional := false
@@ -1825,11 +2064,25 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 	if e, ok := resolvedType.(*Enum); ok {
 		enumType = e
 		isEnum = true
+	} else if g, ok := resolvedType.(*GenericInstance); ok {
+		// Normalize the GenericInstance first
+		normalized := c.normalizeGenericInstanceBase(g)
+		if e, ok := normalized.Base.(*Enum); ok {
+			enumType = e
+			genericArgs = normalized.Args
+			isEnum = true
+		}
 	} else if o, ok := resolvedType.(*Optional); ok {
 		optionalType = o
 		isOptional = true
 	} else if resolvedType != TypeInt && resolvedType != TypeString && resolvedType != TypeBool {
-		c.reportError(fmt.Sprintf("match subject must be an enum, optional, or primitive, got %s", subjectType), expr.Subject.Span())
+		c.reportErrorWithCode(
+			fmt.Sprintf("match subject must be an enum, optional, or primitive, got %s", subjectType),
+			expr.Subject.Span(),
+			diag.CodeTypeInvalidOperation,
+			fmt.Sprintf("only enums, Option[T], and primitive types (int, string, bool) can be matched. Consider converting %s to a matchable type", subjectType),
+			nil,
+		)
 		return TypeVoid
 	}
 
@@ -1865,13 +2118,33 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 
 			switch p := arm.Pattern.(type) {
 			case *ast.CallExpr:
-				// Variant with payload: Shape.Circle(r) or Circle(r)
+				// Variant with payload: Shape.Circle(r) or Circle(r) or Shape::Circle(r)
 				if field, ok := p.Callee.(*ast.FieldExpr); ok {
 					variantName = field.Field.Name
 				} else if ident, ok := p.Callee.(*ast.Ident); ok {
 					variantName = ident.Name
+				} else if infix, ok := p.Callee.(*ast.InfixExpr); ok && infix.Op == lexer.DOUBLE_COLON {
+					// Enum::Variant(args)
+					if ident, ok := infix.Right.(*ast.Ident); ok {
+						variantName = ident.Name
+					} else {
+						c.reportErrorWithCode(
+							"invalid pattern syntax",
+							p.Span(),
+							diag.CodeTypeInvalidPattern,
+							"expected enum variant pattern like `Variant(arg)` or `Variant`, or use `_` for wildcard",
+							nil,
+						)
+						continue
+					}
 				} else {
-					c.reportError("invalid pattern syntax", p.Span())
+					c.reportErrorWithCode(
+						"invalid pattern syntax",
+						p.Span(),
+						diag.CodeTypeInvalidPattern,
+						"expected enum variant pattern like `Variant(arg)` or `Variant`, or use `_` for wildcard",
+						nil,
+					)
 					continue
 				}
 				args = p.Args
@@ -1881,8 +2154,39 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 			case *ast.Ident:
 				// Variant without payload: Circle
 				variantName = p.Name
+			case *ast.InfixExpr:
+				// Variant without payload: Enum::Variant
+				if p.Op == lexer.DOUBLE_COLON {
+					if ident, ok := p.Right.(*ast.Ident); ok {
+						variantName = ident.Name
+					} else {
+						c.reportErrorWithCode(
+							"invalid pattern syntax",
+							p.Span(),
+							diag.CodeTypeInvalidPattern,
+							"expected enum variant pattern like `Variant(arg)` or `Variant`, or use `_` for wildcard",
+							nil,
+						)
+						continue
+					}
+				} else {
+					c.reportErrorWithCode(
+					"invalid pattern syntax for enum match",
+					p.Span(),
+					diag.CodeTypeInvalidPattern,
+					"expected enum variant pattern like `Variant(arg)`, `Variant`, or `Enum::Variant`",
+					nil,
+				)
+					continue
+				}
 			default:
-				c.reportError("invalid pattern syntax for enum match", p.Span())
+				c.reportErrorWithCode(
+					"invalid pattern syntax for enum match",
+					p.Span(),
+					diag.CodeTypeInvalidPattern,
+					"expected enum variant pattern like `Variant(arg)`, `Variant`, or `Enum::Variant`",
+					nil,
+				)
 				continue
 			}
 
@@ -1896,7 +2200,21 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 			}
 
 			if variant == nil {
-				c.reportError(fmt.Sprintf("unknown variant %s for enum %s", variantName, enumType.Name), arm.Pattern.Span())
+				// Try to find similar variant name
+				suggestion := c.findSimilarVariantName(enumType, variantName)
+				suggestionMsg := ""
+				if suggestion != "" {
+					suggestionMsg = fmt.Sprintf("did you mean `%s`?", suggestion)
+				} else {
+					suggestionMsg = fmt.Sprintf("available variants for %s are: %s", enumType.Name, c.listVariantNames(enumType))
+				}
+				c.reportErrorWithCode(
+					fmt.Sprintf("unknown variant %s for enum %s", variantName, enumType.Name),
+					arm.Pattern.Span(),
+					diag.CodeTypeInvalidPattern,
+					suggestionMsg,
+					nil,
+				)
 				continue
 			}
 
@@ -1904,21 +2222,120 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 
 			// Verify payload count
 			if len(args) != len(variant.Payload) {
-				c.reportError(fmt.Sprintf("variant %s expects %d arguments, got %d", variantName, len(variant.Payload), len(args)), arm.Pattern.Span())
+				c.reportErrorWithCode(
+					fmt.Sprintf("variant %s expects %d arguments, got %d", variantName, len(variant.Payload), len(args)),
+					arm.Pattern.Span(),
+					diag.CodeTypeInvalidPattern,
+					fmt.Sprintf("use `%s(%s)` with %d argument(s)", variantName, strings.Repeat("_, ", len(variant.Payload)-1)+"_", len(variant.Payload)),
+					nil,
+				)
 				continue
+			}
+
+			// Prepare substitution map if generic
+			subst := make(map[string]Type)
+			if len(genericArgs) > 0 {
+				for i, tp := range enumType.TypeParams {
+					if i < len(genericArgs) {
+						subst[tp.Name] = genericArgs[i]
+					}
+				}
 			}
 
 			// Bind payload variables
 			for i, arg := range args {
+				// Substitute type params in payload type
+				payloadType := variant.Payload[i]
+				if len(subst) > 0 {
+					payloadType = Substitute(payloadType, subst)
+				}
+
 				if ident, ok := arg.(*ast.Ident); ok {
+					if ident.Name == "_" {
+						continue // Wildcard, nothing to bind
+					}
 					// Bind variable to payload type
 					armScope.Insert(ident.Name, &Symbol{
 						Name:    ident.Name,
-						Type:    variant.Payload[i],
+						Type:    payloadType,
 						DefNode: ident,
 					})
+					// Store in ExprTypes so codegen can access the type
+					c.ExprTypes[ident] = payloadType
+				} else if lit, ok := arg.(*ast.IntegerLit); ok {
+					if payloadType != TypeInt && payloadType != TypeInt64 {
+						c.reportTypeMismatch(payloadType, TypeInt, lit.Span(), "pattern literal")
+					}
+				} else if lit, ok := arg.(*ast.StringLit); ok {
+					if payloadType != TypeString {
+						c.reportTypeMismatch(payloadType, TypeString, lit.Span(), "pattern literal")
+					}
+				} else if lit, ok := arg.(*ast.BoolLit); ok {
+					if payloadType != TypeBool {
+						c.reportTypeMismatch(payloadType, TypeBool, lit.Span(), "pattern literal")
+					}
+				} else if lit, ok := arg.(*ast.NilLit); ok {
+					// Nil can match pointer, optional, reference
+					// TODO: verify payloadType is nullable
+					_ = lit
+				} else if nestedCall, ok := arg.(*ast.CallExpr); ok {
+					// Handle nested enum pattern: Option::Some(Shape::Circle(r))
+					nestedEnumType := c.resolveEnumTypeFromPattern(nestedCall, armScope)
+					if nestedEnumType == nil {
+						c.reportError("invalid nested enum pattern", nestedCall.Span())
+						continue
+					}
+					
+					// Verify nested enum type matches payload type
+					if !c.assignableTo(nestedEnumType, payloadType) && !c.assignableTo(payloadType, nestedEnumType) {
+						c.reportError(fmt.Sprintf("type mismatch in nested pattern: expected %s, got %s", payloadType, nestedEnumType), nestedCall.Span())
+						continue
+					}
+					
+					// Recursively process nested pattern
+					c.checkNestedEnumPattern(nestedCall, nestedEnumType, armScope)
+				} else if nestedInfix, ok := arg.(*ast.InfixExpr); ok && nestedInfix.Op == lexer.DOUBLE_COLON {
+					// Handle nested unit variant pattern: Option::None
+					// This is a unit variant (no payload), so we just need to verify the type matches
+					nestedEnumType := c.resolveEnumTypeFromPattern(nestedInfix, armScope)
+					if nestedEnumType == nil {
+						c.reportError("invalid nested enum pattern", nestedInfix.Span())
+						continue
+					}
+					
+					// Verify nested enum type matches payload type
+					if !c.assignableTo(nestedEnumType, payloadType) && !c.assignableTo(payloadType, nestedEnumType) {
+						c.reportError(fmt.Sprintf("type mismatch in nested pattern: expected %s, got %s", payloadType, nestedEnumType), nestedInfix.Span())
+						continue
+					}
+					
+					// For unit variants, we don't need to bind any variables, just verify the variant exists
+					if rightIdent, ok := nestedInfix.Right.(*ast.Ident); ok {
+						// Verify the variant exists in the enum
+						var enum *Enum
+						switch t := nestedEnumType.(type) {
+						case *Enum:
+							enum = t
+						case *GenericInstance:
+							if e, ok := t.Base.(*Enum); ok {
+								enum = e
+							}
+						}
+						if enum != nil {
+							found := false
+							for _, v := range enum.Variants {
+								if v.Name == rightIdent.Name && len(v.Payload) == 0 {
+									found = true
+									break
+								}
+							}
+							if !found {
+								c.reportError(fmt.Sprintf("unknown unit variant %s in nested pattern", rightIdent.Name), nestedInfix.Span())
+							}
+						}
+					}
 				} else {
-					c.reportError("pattern arguments must be identifiers", arg.Span())
+					c.reportError("pattern arguments must be identifiers, literals, or nested patterns", arg.Span())
 				}
 			}
 
@@ -1983,7 +2400,13 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 	if isEnum {
 		for _, v := range enumType.Variants {
 			if !coveredVariants[v.Name] && !hasDefault {
-				c.reportError(fmt.Sprintf("match is not exhaustive, missing variant: %s", v.Name), expr.Span())
+				c.reportErrorWithCode(
+					fmt.Sprintf("match is not exhaustive, missing variant: %s", v.Name),
+					expr.Span(),
+					diag.CodeTypeNonExhaustiveMatch,
+					fmt.Sprintf("add a match arm for variant `%s` or use a default case `_`", v.Name),
+					nil,
+				)
 			}
 		}
 	} else if isOptional {
@@ -1992,13 +2415,25 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 			// If we have explicit null check, we still need value check (which is infinite for primitives).
 			// So default is required unless we cover all cases (bool?).
 			// For simplicity, require default for now.
-			c.reportError("match on optional must have a default case (_)", expr.Span())
+			c.reportErrorWithCode(
+				"match on optional must have a default case (_)",
+				expr.Span(),
+				diag.CodeTypeNonExhaustiveMatch,
+				"add a default case: `_ => { ... }` to handle the None variant",
+				nil,
+			)
 		}
 	} else {
 		if !hasDefault {
 			// Primitives must have default case for exhaustiveness
 			// (Unless we check all bools, but simpler to require default)
-			c.reportError("match on primitives must have a default case (_)", expr.Span())
+			c.reportErrorWithCode(
+				"match on primitives must have a default case (_)",
+				expr.Span(),
+				diag.CodeTypeNonExhaustiveMatch,
+				"add a default case: `_ => { ... }` to handle all unmatched values",
+				nil,
+			)
 		}
 	}
 
@@ -2008,15 +2443,222 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 	return returnType
 }
 
-func (c *Checker) resolveStruct(t Type) *Struct {
-	if s, ok := t.(*Struct); ok {
-		return s
+// resolveEnumTypeFromPattern resolves the enum type from a nested enum pattern (CallExpr or InfixExpr).
+// For example, `Shape::Circle(r)` or `Option::None` should resolve to the enum type.
+func (c *Checker) resolveEnumTypeFromPattern(pattern ast.Expr, scope *Scope) Type {
+	var callExpr *ast.CallExpr
+	var infixExpr *ast.InfixExpr
+	
+	switch p := pattern.(type) {
+	case *ast.CallExpr:
+		callExpr = p
+	case *ast.InfixExpr:
+		if p.Op == lexer.DOUBLE_COLON {
+			infixExpr = p
+		} else {
+			return nil
+		}
+	default:
+		return nil
 	}
-	if n, ok := t.(*Named); ok && n.Ref != nil {
-		return c.resolveStruct(n.Ref)
+	var enumTypeName string
+	var genericArgs []ast.Expr
+	
+	// Handle CallExpr: Option::Some(val) or Some(val)
+	if callExpr != nil {
+		switch callee := callExpr.Callee.(type) {
+		case *ast.Ident:
+			// Simple variant name: Circle(r) - need to look up enum type
+			// This is harder - we'd need to search for which enum has this variant
+			// For now, try to resolve as a type name
+			enumTypeName = callee.Name
+		case *ast.FieldExpr:
+			// Type.Variant - extract type name from target
+			if ident, ok := callee.Target.(*ast.Ident); ok {
+				enumTypeName = ident.Name
+			}
+		case *ast.InfixExpr:
+			if callee.Op == lexer.DOUBLE_COLON {
+				// Type::Variant - extract type from left side
+				switch left := callee.Left.(type) {
+				case *ast.Ident:
+					enumTypeName = left.Name
+				case *ast.IndexExpr:
+					// Generic type: Option[Shape]::Some
+					if ident, ok := left.Target.(*ast.Ident); ok {
+						enumTypeName = ident.Name
+					}
+					genericArgs = left.Indices
+				}
+			}
+		}
 	}
-	return nil
+	
+	// Handle InfixExpr: Option::None
+	if infixExpr != nil {
+		switch left := infixExpr.Left.(type) {
+		case *ast.Ident:
+			enumTypeName = left.Name
+		case *ast.IndexExpr:
+			// Generic type: Option[Shape]::None
+			if ident, ok := left.Target.(*ast.Ident); ok {
+				enumTypeName = ident.Name
+			}
+			genericArgs = left.Indices
+		}
+	}
+	
+	if enumTypeName == "" {
+		return nil
+	}
+	
+	// Resolve enum type
+	sym := c.GlobalScope.Lookup(enumTypeName)
+	if sym == nil {
+		return nil
+	}
+	
+	var enumType *Enum
+	var genInst *GenericInstance
+	
+	switch t := sym.Type.(type) {
+	case *Enum:
+		enumType = t
+	case *GenericInstance:
+		if e, ok := t.Base.(*Enum); ok {
+			enumType = e
+			genInst = t
+		}
+	}
+	
+	if enumType == nil {
+		return nil
+	}
+	
+	// If we have generic args from pattern, create GenericInstance
+	if len(genericArgs) > 0 {
+		var args []Type
+		for _, arg := range genericArgs {
+			args = append(args, c.resolveTypeFromExpr(arg))
+		}
+		return &GenericInstance{Base: enumType, Args: args}
+	}
+	
+	// Return the enum type (or GenericInstance if it was already one)
+	if genInst != nil {
+		return genInst
+	}
+	
+	return enumType
 }
+
+// checkNestedEnumPattern recursively checks a nested enum pattern and binds variables.
+func (c *Checker) checkNestedEnumPattern(callExpr *ast.CallExpr, enumType Type, scope *Scope) {
+	// Extract variant name
+	var variantName string
+	switch callee := callExpr.Callee.(type) {
+	case *ast.Ident:
+		variantName = callee.Name
+	case *ast.FieldExpr:
+		variantName = callee.Field.Name
+	case *ast.InfixExpr:
+		if callee.Op == lexer.DOUBLE_COLON {
+			if ident, ok := callee.Right.(*ast.Ident); ok {
+				variantName = ident.Name
+			}
+		}
+	}
+	
+	if variantName == "" {
+		return
+	}
+	
+	// Resolve actual enum type
+	var enum *Enum
+	var subst map[string]Type
+	
+	switch t := enumType.(type) {
+	case *Enum:
+		enum = t
+	case *GenericInstance:
+		if e, ok := t.Base.(*Enum); ok {
+			enum = e
+			// Build substitution map
+			subst = make(map[string]Type)
+			for i, tp := range enum.TypeParams {
+				if i < len(t.Args) {
+					subst[tp.Name] = t.Args[i]
+				}
+			}
+		}
+	}
+	
+	if enum == nil {
+		return
+	}
+	
+	// Find variant
+	var variant *Variant
+	for i := range enum.Variants {
+		if enum.Variants[i].Name == variantName {
+			variant = &enum.Variants[i]
+			break
+		}
+	}
+	
+	if variant == nil {
+		c.reportError(fmt.Sprintf("unknown variant %s for enum %s", variantName, enum.Name), callExpr.Span())
+		return
+	}
+	
+	// Verify payload count
+	if len(callExpr.Args) != len(variant.Payload) {
+		c.reportError(fmt.Sprintf("variant %s expects %d arguments, got %d", variantName, len(variant.Payload), len(callExpr.Args)), callExpr.Span())
+		return
+	}
+	
+	// Recursively check and bind payload arguments
+	for i, arg := range callExpr.Args {
+		payloadType := variant.Payload[i]
+		if len(subst) > 0 {
+			payloadType = Substitute(payloadType, subst)
+		}
+		
+		if ident, ok := arg.(*ast.Ident); ok {
+			if ident.Name == "_" {
+				continue // Wildcard
+			}
+			// Bind variable to payload type
+			scope.Insert(ident.Name, &Symbol{
+				Name:    ident.Name,
+				Type:    payloadType,
+				DefNode: ident,
+			})
+			// Store in ExprTypes so codegen can access the type
+			c.ExprTypes[ident] = payloadType
+		} else if nestedCall, ok := arg.(*ast.CallExpr); ok {
+			// Recursively handle nested patterns
+			nestedEnumType := c.resolveEnumTypeFromPattern(nestedCall, scope)
+			if nestedEnumType == nil {
+				c.reportError("invalid nested enum pattern", nestedCall.Span())
+				continue
+			}
+			
+			if !c.assignableTo(nestedEnumType, payloadType) && !c.assignableTo(payloadType, nestedEnumType) {
+				c.reportError(fmt.Sprintf("type mismatch in nested pattern: expected %s, got %s", payloadType, nestedEnumType), nestedCall.Span())
+				continue
+			}
+			
+			// Recursively check nested pattern
+			c.checkNestedEnumPattern(nestedCall, nestedEnumType, scope)
+		}
+		// Note: We can add support for literals here if needed
+	}
+}
+
+// normalizeGenericInstanceBase resolves and normalizes the base of a GenericInstance.
+// It ensures that Named types are properly resolved to their concrete types.
+// It handles nested GenericInstances and resolves types from both global and module scopes.
 
 func (c *Checker) isLValue(expr ast.Expr) bool {
 	switch e := expr.(type) {
@@ -2103,11 +2745,6 @@ func (c *Checker) getSymbol(expr ast.Expr, scope *Scope) *Symbol {
 	return nil
 }
 
-// parseInt64 parses an integer literal string to int64
-func parseInt64(s string) (int64, error) {
-	return strconv.ParseInt(s, 10, 64)
-}
-
 // getTypeName extracts a name from a Type for method lookup
 func (c *Checker) getTypeName(typ Type) string {
 	switch t := typ.(type) {
@@ -2117,6 +2754,8 @@ func (c *Checker) getTypeName(typ Type) string {
 		return t.Name
 	case *Enum:
 		return t.Name
+	case *GenericInstance:
+		return c.getTypeName(t.Base)
 	default:
 		return ""
 	}
@@ -2138,4 +2777,929 @@ func (c *Checker) lookupMethod(typ Type, methodName string) *Function {
 		return methods[methodName]
 	}
 	return nil
+}
+
+// processModDecl processes a module declaration and loads the module file.
+func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
+	moduleName := modDecl.Name.Name
+
+	// Check for circular dependencies
+	if c.LoadingModules[moduleName] {
+		c.reportError(fmt.Sprintf("circular module dependency detected: %s", moduleName), modDecl.Span())
+		return
+	}
+
+	// If module already loaded, skip
+	if _, exists := c.Modules[moduleName]; exists {
+		return
+	}
+
+	// Mark as loading
+	c.LoadingModules[moduleName] = true
+	defer delete(c.LoadingModules, moduleName)
+
+	// Resolve module file path
+	modulePath, err := c.resolveModuleFilePath(moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("cannot find module file for '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Read and parse the module file
+	moduleFile, err := c.loadModuleFile(modulePath, moduleName)
+	if err != nil {
+		c.reportError(fmt.Sprintf("failed to load module '%s': %v", moduleName, err), modDecl.Span())
+		return
+	}
+
+	// Create module info
+	moduleInfo := &ModuleInfo{
+		Name:     moduleName,
+		File:     moduleFile,
+		FilePath: modulePath,
+		Scope:    NewScope(nil),
+	}
+
+	// Store module info BEFORE processing (so sub-modules can reference it if needed)
+	// But mark as loading to prevent circular dependencies
+	c.Modules[moduleName] = moduleInfo
+
+	// Save current state
+	oldCurrentFile := c.CurrentFile
+	oldGlobalScope := c.GlobalScope
+	c.CurrentFile = modulePath
+
+	// Create a temporary scope for the module (child of global scope for built-ins)
+	moduleScope := NewScope(c.GlobalScope)
+	c.GlobalScope = moduleScope
+
+	// Process mod declarations in the module file (recursive)
+	for _, subModDecl := range moduleFile.Mods {
+		c.processModDecl(subModDecl, moduleFile)
+	}
+
+	// Process use declarations in the module file
+	for _, useDecl := range moduleFile.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Collect all declarations from the module file and extract public symbols immediately
+	for _, decl := range moduleFile.Decls {
+		var symbol *Symbol
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.StructDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: c.resolveType(f.Type),
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.EnumDecl:
+			// Build type params
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TraitDecl:
+			// Add trait to scope
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name}, // Placeholder
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			// Extract public symbols immediately
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Extract type parameters from target type if it's a generic instance
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
+						for i := 1; i < len(method.Params); i++ {
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
+		}
+	}
+
+	// Restore checker state
+	c.GlobalScope = oldGlobalScope
+	c.CurrentFile = oldCurrentFile
+
+	// Module info is already stored (we stored it before processing)
+	// Just make sure it's still there (it should be)
+	c.Modules[moduleName] = moduleInfo
+}
+
+// resolveModuleFilePath resolves a module name to a file path.
+// It looks for moduleName.mal or moduleName/mod.mal relative to the current file.
+func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
+	var baseDir string
+	if c.CurrentFile != "" {
+		baseDir = filepath.Dir(c.CurrentFile)
+	} else {
+		// If no current file, use current working directory
+		var err error
+		baseDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine base directory: %v", err)
+		}
+	}
+
+	// Try moduleName.mal
+	moduleFile := filepath.Join(baseDir, moduleName+".mal")
+	if _, err := os.Stat(moduleFile); err == nil {
+		return moduleFile, nil
+	}
+
+	// Try moduleName/mod.mal
+	moduleDirFile := filepath.Join(baseDir, moduleName, "mod.mal")
+	if _, err := os.Stat(moduleDirFile); err == nil {
+		return moduleDirFile, nil
+	}
+
+	return "", fmt.Errorf("module file not found: tried %s and %s", moduleFile, moduleDirFile)
+}
+
+// loadModuleFile reads and parses a module file.
+func (c *Checker) loadModuleFile(filePath string, moduleName string) (*ast.File, error) {
+	// Read file
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	// Parse file
+	p := parser.New(string(src), parser.WithFilename(filePath))
+	file := p.ParseFile()
+
+	if len(p.Errors()) > 0 {
+		var errMsgs []string
+		for _, parseErr := range p.Errors() {
+			errMsgs = append(errMsgs, parseErr.Message)
+		}
+		return nil, fmt.Errorf("parse errors: %v", errMsgs)
+	}
+
+	if file == nil {
+		return nil, fmt.Errorf("failed to parse file")
+	}
+
+	return file, nil
+}
+
+// processUseDecl processes a use declaration and brings the imported item into scope.
+func (c *Checker) processUseDecl(useDecl *ast.UseDecl) {
+	if len(useDecl.Path) == 0 {
+		c.reportError("use path cannot be empty", useDecl.Span())
+		return
+	}
+
+	// Build the module path string
+	pathParts := make([]string, len(useDecl.Path))
+	for i, ident := range useDecl.Path {
+		pathParts[i] = ident.Name
+	}
+
+	// Resolve the module path
+	resolvedType := c.resolveModulePath(pathParts, useDecl.Span())
+	if resolvedType == nil {
+		return // Error already reported
+	}
+
+	// Determine the name to use in scope
+	var name string
+	if useDecl.Alias != nil {
+		name = useDecl.Alias.Name
+	} else {
+		// Use the last component of the path
+		name = pathParts[len(pathParts)-1]
+	}
+
+	// Insert into global scope
+	c.GlobalScope.Insert(name, &Symbol{
+		Name:    name,
+		Type:    resolvedType,
+		DefNode: useDecl,
+	})
+}
+
+// resolveModulePath resolves a module path like ["std", "collections", "HashMap"] to a Type.
+// This handles both built-in standard library paths and user-defined modules.
+func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
+	if len(path) == 0 {
+		c.reportError("module path cannot be empty", span)
+		return nil
+	}
+
+	// Handle standard library paths
+	if path[0] == "std" {
+		// Try to load std module parts
+		// path = ["std", "collections", "hashmap", "HashMap"]
+
+		if len(path) < 2 {
+			return &Named{Name: "std"} // Namespace
+		}
+
+		// Try to load "std/collections"
+		modName := "std/" + path[1]
+		c.ensureStdModuleLoaded(modName, path[1])
+
+		if mod, ok := c.Modules[modName]; ok {
+			return c.resolveUserModulePath(path[2:], mod, span)
+		}
+
+		// If not found, maybe it's "std/collections/hashmap"
+		if len(path) >= 3 {
+			modName = "std/" + path[1] + "/" + path[2]
+			c.ensureStdModuleLoaded(modName, path[1]+"/"+path[2])
+			if mod, ok := c.Modules[modName]; ok {
+				return c.resolveUserModulePath(path[3:], mod, span)
+			}
+		}
+
+		c.reportError(fmt.Sprintf("could not resolve std path: %v", path), span)
+		return nil
+	}
+
+	// Handle user-defined modules
+	if moduleInfo, exists := c.Modules[path[0]]; exists {
+		return c.resolveUserModulePath(path[1:], moduleInfo, span)
+	}
+
+	c.reportError(fmt.Sprintf("unknown module: %s", path[0]), span)
+	return nil
+}
+
+// resolveUserModulePath resolves a path within a user-defined module.
+func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, span lexer.Span) Type {
+	if len(path) == 0 {
+		// Importing the module itself - return a placeholder namespace type
+		return &Named{Name: moduleInfo.Name}
+	}
+
+	// Look up the symbol in the module's scope (direct lookup, no parent search)
+	symbol, exists := moduleInfo.Scope.Symbols[path[0]]
+	if !exists || symbol == nil {
+		c.reportError(fmt.Sprintf("symbol '%s' not found in module '%s'", path[0], moduleInfo.Name), span)
+		return nil
+	}
+
+	// If there are more path components, it's not supported yet
+	// (e.g., utils::MyStruct::field - would need to resolve nested paths)
+	if len(path) > 1 {
+		c.reportError(fmt.Sprintf("nested paths in user modules not yet supported: %v", path), span)
+		return nil
+	}
+
+	return symbol.Type
+}
+
+// resolveStdFilePath resolves a path within the standard library to a file path.
+func (c *Checker) resolveStdFilePath(relPath string) (string, error) {
+	// Look for stdlib in CWD
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	stdlibDir := filepath.Join(cwd, "stdlib")
+
+	// Check if stdlib exists
+	if _, err := os.Stat(stdlibDir); err != nil {
+		// Try finding it relative to the executable or source?
+		// For development, let's try a few common locations
+		// 1. ../stdlib (if in examples)
+		stdlibDir = filepath.Join(cwd, "..", "stdlib")
+		if _, err := os.Stat(stdlibDir); err != nil {
+			// 2. ../../stdlib
+			stdlibDir = filepath.Join(cwd, "..", "..", "stdlib")
+			if _, err := os.Stat(stdlibDir); err != nil {
+				return "", fmt.Errorf("stdlib directory not found")
+			}
+		}
+	}
+
+	// Look for module in stdlib
+	// relPath is like "collections" or "collections/hashmap"
+
+	// Try stdlib/path.mal
+	moduleFile := filepath.Join(stdlibDir, relPath+".mal")
+	if _, err := os.Stat(moduleFile); err == nil {
+		return moduleFile, nil
+	}
+
+	// Try stdlib/path/mod.mal
+	moduleDirFile := filepath.Join(stdlibDir, relPath, "mod.mal")
+	if _, err := os.Stat(moduleDirFile); err == nil {
+		return moduleDirFile, nil
+	}
+
+	return "", fmt.Errorf("std module file not found for %s", relPath)
+}
+
+// ensureStdModuleLoaded attempts to load a standard library module.
+func (c *Checker) ensureStdModuleLoaded(fullModuleName string, relPath string) {
+	if _, ok := c.Modules[fullModuleName]; ok {
+		return
+	}
+
+	// Resolve file path
+	filePath, err := c.resolveStdFilePath(relPath)
+	if err != nil {
+		return // Not found
+	}
+
+	// Load it
+	file, err := c.loadModuleFile(filePath, fullModuleName)
+	if err != nil {
+		// We found the file but failed to load/parse it. This is a real error.
+		// Since we don't have a span here, we print to stderr or append to errors with dummy span.
+		// For now, let's append a generic error.
+		c.Errors = append(c.Errors, diag.Diagnostic{
+			Stage:    diag.StageTypeCheck,
+			Severity: diag.SeverityError,
+			Message:  fmt.Sprintf("failed to load std module '%s': %v", fullModuleName, err),
+		})
+		return
+	}
+
+	// Create module info
+	moduleInfo := &ModuleInfo{
+		Name:     fullModuleName,
+		File:     file,
+		FilePath: filePath,
+		Scope:    NewScope(nil),
+	}
+
+	// Store module info
+	c.Modules[fullModuleName] = moduleInfo
+
+	// Save current state
+	oldCurrentFile := c.CurrentFile
+	oldGlobalScope := c.GlobalScope
+	c.CurrentFile = filePath
+
+	// Create a temporary scope for the module
+	moduleScope := NewScope(c.GlobalScope)
+	c.GlobalScope = moduleScope
+
+	// Process mod declarations in the module file (recursive)
+	for _, subModDecl := range file.Mods {
+		c.processModDecl(subModDecl, file)
+	}
+
+	// Process use declarations in the module file
+	for _, useDecl := range file.Uses {
+		c.processUseDecl(useDecl)
+	}
+
+	// Collect all declarations from the module file and extract public symbols
+	// We reuse the logic from processModDecl, but we need to duplicate it or extract it.
+	// For now, let's duplicate the switch for simplicity as it's already quite long.
+	for _, decl := range file.Decls {
+		var symbol *Symbol
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			// Build type params
+			var typeParams []TypeParam
+			typeParamMap := make(map[string]*TypeParam)
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					param := TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					}
+					typeParams = append(typeParams, param)
+					typeParamMap[param.Name] = &typeParams[len(typeParams)-1]
+				}
+			}
+
+			// Build function type
+			var params []Type
+			for _, p := range d.Params {
+				paramType := c.resolveType(p.Type)
+				if namedType, ok := paramType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						paramType = tpRef
+					}
+				}
+				params = append(params, paramType)
+			}
+			var returnType Type
+			if d.ReturnType != nil {
+				returnType = c.resolveType(d.ReturnType)
+				if namedType, ok := returnType.(*Named); ok {
+					if tpRef, exists := typeParamMap[namedType.Name]; exists {
+						returnType = tpRef
+					}
+				}
+			}
+
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Function{
+					Unsafe:     d.Unsafe,
+					TypeParams: typeParams,
+					Params:     params,
+					Return:     returnType,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.StructDecl:
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			fields := []Field{}
+			for _, f := range d.Fields {
+				fields = append(fields, Field{
+					Name: f.Name.Name,
+					Type: c.resolveType(f.Type),
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Struct{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Fields:     fields,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TypeAliasDecl:
+			target := c.resolveType(d.Target)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    target,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ConstDecl:
+			typ := c.resolveType(d.Type)
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    typ,
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.EnumDecl:
+			var typeParams []TypeParam
+			for _, tp := range d.TypeParams {
+				if astTP, ok := tp.(*ast.TypeParam); ok {
+					var bounds []Type
+					for _, b := range astTP.Bounds {
+						bounds = append(bounds, c.resolveType(b))
+					}
+					typeParams = append(typeParams, TypeParam{
+						Name:   astTP.Name.Name,
+						Bounds: bounds,
+					})
+				}
+			}
+
+			variants := []Variant{}
+			for _, v := range d.Variants {
+				payload := []Type{}
+				for _, p := range v.Payloads {
+					payload = append(payload, c.resolveType(p))
+				}
+				variants = append(variants, Variant{
+					Name:    v.Name.Name,
+					Payload: payload,
+				})
+			}
+			symbol = &Symbol{
+				Name: d.Name.Name,
+				Type: &Enum{
+					Name:       d.Name.Name,
+					TypeParams: typeParams,
+					Variants:   variants,
+				},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.TraitDecl:
+			symbol = &Symbol{
+				Name:    d.Name.Name,
+				Type:    &Named{Name: d.Name.Name},
+				DefNode: d,
+			}
+			c.GlobalScope.Insert(d.Name.Name, symbol)
+			if d.Pub {
+				moduleInfo.Scope.Insert(d.Name.Name, symbol)
+			}
+		case *ast.ImplDecl:
+			// Register trait implementation
+			if d.Trait != nil {
+				traitType := c.resolveType(d.Trait)
+				targetType := c.resolveType(d.Target)
+				if named, ok := traitType.(*Named); ok {
+					c.Env.RegisterImpl(named.Name, targetType)
+				}
+			}
+
+			// Store methods in MethodTable
+			targetType := c.resolveType(d.Target)
+			targetName := c.getTypeName(targetType)
+			if targetName == "" {
+				continue // Skip if we can't determine type name
+			}
+
+			// Extract type parameters from target type if it's a generic instance
+			typeParamMap := make(map[string]Type)
+
+			// Check if target is a generic type
+			if genType, ok := d.Target.(*ast.GenericType); ok {
+				// Get the base type
+				if namedBase, ok := genType.Base.(*ast.NamedType); ok {
+					baseTypeName := namedBase.Name.Name
+					if sym := c.GlobalScope.Lookup(baseTypeName); sym != nil {
+						// Extract type parameters from the struct/enum
+						var baseTypeParams []TypeParam
+						switch baseType := sym.Type.(type) {
+						case *Struct:
+							baseTypeParams = baseType.TypeParams
+						case *Enum:
+							baseTypeParams = baseType.TypeParams
+						}
+
+						// Map type parameter names to TypeParam references
+						for i, tp := range baseTypeParams {
+							if i < len(genType.Args) {
+								typeParamMap[tp.Name] = &TypeParam{Name: tp.Name, Bounds: tp.Bounds}
+							}
+						}
+					}
+				}
+			}
+
+			// Add Self -> targetType mapping
+			typeParamMap["Self"] = targetType
+
+			// Initialize method map for this type if needed
+			if c.MethodTable[targetName] == nil {
+				c.MethodTable[targetName] = make(map[string]*Function)
+			}
+
+			// Process each method in the impl block
+			for _, method := range d.Methods {
+				// Build function type
+				var params []Type
+				var receiver *ReceiverType
+
+				// Check if first parameter is a receiver (self, &self, &mut self)
+				if len(method.Params) > 0 {
+					firstParam := method.Params[0]
+					if firstParam.Name.Name == "self" {
+						// Determine receiver type from parameter type annotation
+						if firstParam.Type != nil {
+							if refType, ok := firstParam.Type.(*ast.ReferenceType); ok {
+								// &self or &mut self
+								receiver = &ReceiverType{
+									IsMutable: refType.Mutable,
+									Type:      targetType,
+								}
+							} else {
+								// self (by value)
+								receiver = &ReceiverType{
+									IsMutable: false,
+									Type:      targetType,
+								}
+							}
+						} else {
+							// No type annotation on self - assume &self
+							receiver = &ReceiverType{
+								IsMutable: false,
+								Type:      targetType,
+							}
+						}
+
+						// Skip the receiver when processing remaining params
+						// Resolve with Self/typeParam context
+						for i := 1; i < len(method.Params); i++ {
+							paramType := c.resolveTypeWithContext(method.Params[i].Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					} else {
+						// Regular parameters (no receiver)
+						for _, p := range method.Params {
+							paramType := c.resolveTypeWithContext(p.Type, typeParamMap)
+							params = append(params, paramType)
+						}
+					}
+				} else {
+					// No parameters - could still be a method with no args
+					// Assume it needs a receiver (will need &self)
+					receiver = &ReceiverType{
+						IsMutable: false,
+						Type:      targetType,
+					}
+				}
+
+				var returnType Type = TypeVoid
+				if method.ReturnType != nil {
+					returnType = c.resolveTypeWithContext(method.ReturnType, typeParamMap)
+				}
+
+				c.MethodTable[targetName][method.Name.Name] = &Function{
+					Unsafe:   method.Unsafe,
+					Params:   params,
+					Return:   returnType,
+					Receiver: receiver,
+				}
+			}
+		}
+	}
+
+	// Restore checker state
+	c.GlobalScope = oldGlobalScope
+	c.CurrentFile = oldCurrentFile
 }

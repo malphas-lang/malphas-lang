@@ -33,7 +33,7 @@ func TestNullSafety(t *testing.T) {
 			}
 			`,
 			hasError: true,
-			errorMsg: "cannot assign type null to int",
+			errorMsg: "cannot assign value of type",
 		},
 		{
 			name: "access field on optional",

@@ -1,0 +1,17 @@
+ 
+
+fn test_if_stmt() {
+    if true {
+        println("yes");
+    } else {
+        println("no");
+    }
+}
+
+fn test_if_expr() -> int {
+    if true {
+        42
+    } else {
+        0
+    }
+}

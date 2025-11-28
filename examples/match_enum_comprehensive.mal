@@ -1,4 +1,4 @@
-package main;
+ 
 
 enum Shape {
     Circle(int),

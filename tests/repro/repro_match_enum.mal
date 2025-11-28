@@ -1,0 +1,20 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rect(int, int),
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    match s {
+        Shape::Circle(r) => {
+            let x: int = r + 5;
+            println(x); 
+        },
+        Shape::Rect(w, h) => {
+            let area = w * h;
+            println(area);
+        },
+    }
+}

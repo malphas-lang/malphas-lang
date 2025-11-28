@@ -1,0 +1,47 @@
+ 
+
+// Simple test to verify basic concurrency features work
+fn worker(ch: chan int) {
+    ch <- 42;
+}
+
+fn worker_multiply(ch: chan int, val: int) {
+    ch <- val * 2;
+}
+
+fn worker_select(ch: chan int) {
+    ch <- 300;
+}
+
+fn main() {
+    println("=== Test 1: Basic Channel ===");
+    let ch1 = Channel[int]::new(1);
+    ch1 <- 10;
+    let x = <-ch1;
+    println(x);
+    
+    println("=== Test 2: Spawn Function ===");
+    let ch2 = Channel[int]::new(0);
+    spawn worker(ch2);
+    let y = <-ch2;
+    println(y);
+    
+    println("=== Test 3: Spawn with Args ===");
+    let ch3 = Channel[int]::new(0);
+    let val = 100;
+    spawn worker_multiply(ch3, val);
+    let z = <-ch3;
+    println(z);
+    
+    println("=== Test 4: Select ===");
+    let ch4 = Channel[int]::new(0);
+    spawn worker_select(ch4);
+    select {
+        case let v = <-ch4 => {
+            println(v);
+        }
+    }
+    
+    println("=== All simple tests passed! ===");
+}
+

@@ -1,0 +1,36 @@
+ 
+
+enum Shape {
+    Circle(int),
+    Rectangle(int, int)
+}
+
+fn main() {
+    let s = Shape::Circle(10);
+    
+    match s {
+        Shape::Circle(r) => {
+            println("Circle radius: ", r);
+            if r != 10 {
+                println("Error: expected radius 10");
+            }
+        },
+        Shape::Rectangle(w, h) => {
+            println("Rectangle: ", w, "x", h);
+        }
+    };
+
+    let s2 = Shape::Rectangle(5, 8);
+    match s2 {
+        Shape::Circle(r) => {
+            println("Error: expected Rectangle");
+        },
+        Shape::Rectangle(w, h) => {
+            println("Rectangle area: ", w * h);
+            if w != 5 {
+                println("Error: expected width 5");
+            }
+        }
+    }
+}
+

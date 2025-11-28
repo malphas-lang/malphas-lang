@@ -1,0 +1,45 @@
+// Standard testing library for Malphas
+// Provides assertion functions for writing tests
+
+// assert_eq checks that two values are equal, panics if not
+pub fn assert_eq[T](expected: T, actual: T) {
+    if expected != actual {
+        panic("assertion failed: expected == actual");
+    }
+}
+
+// assert_ne checks that two values are not equal, panics if they are
+pub fn assert_ne[T](expected: T, actual: T) {
+    if expected == actual {
+        panic("assertion failed: expected != actual");
+    }
+}
+
+// assert_true checks that a value is true, panics if not
+pub fn assert_true(condition: bool) {
+    if !condition {
+        panic("assertion failed: expected true");
+    }
+}
+
+// assert_false checks that a value is false, panics if not
+pub fn assert_false(condition: bool) {
+    if condition {
+        panic("assertion failed: expected false");
+    }
+}
+
+// assert_nil checks that a value is nil, panics if not
+pub fn assert_nil[T](value: T?) {
+    if value != null {
+        panic("assertion failed: expected nil");
+    }
+}
+
+// assert_not_nil checks that a value is not nil, panics if it is
+pub fn assert_not_nil[T](value: T?) {
+    if value == null {
+        panic("assertion failed: expected non-nil value");
+    }
+}
+

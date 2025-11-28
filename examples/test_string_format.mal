@@ -1,0 +1,53 @@
+ 
+
+fn main() {
+    // Test 1: Basic string formatting with one argument
+    let name = "World";
+    let msg = format("Hello {}", name);
+    println(msg); // Should print "Hello World"
+    
+    // Test 2: Format with integer
+    let x = 42;
+    let msg2 = format("The answer is {}", x);
+    println(msg2); // Should print "The answer is 42"
+    
+    // Test 3: Format with multiple arguments
+    let a = 10;
+    let b = 20;
+    let msg3 = format("{} + {} = {}", a, b, a + b);
+    println(msg3); // Should print "10 + 20 = 30"
+    
+    // Test 4: Format with string and integer
+    let name2 = "Alice";
+    let age = 30;
+    let msg4 = format("{} is {} years old", name2, age);
+    println(msg4); // Should print "Alice is 30 years old"
+    
+    // Test 5: Format with boolean
+    let is_true = true;
+    let msg5 = format("The value is {}", is_true);
+    println(msg5); // Should print "The value is true"
+    
+    // Test 6: Format with float
+    let pi = 3.14;
+    let msg6 = format("Pi is approximately {}", pi);
+    println(msg6); // Should print "Pi is approximately 3.14"
+    
+    // Test 7: Format with mixed types
+    let item = "apples";
+    let count = 5;
+    let price = 2.50;
+    let msg7 = format("I bought {} {} for ${}", count, item, price);
+    println(msg7); // Should print "I bought 5 apples for $2.5"
+    
+    // Test 8: Format with only format string (no replacements)
+    let msg8 = format("No replacements here");
+    println(msg8); // Should print "No replacements here"
+    
+    // Test 9: Format with expressions
+    let x2 = 10;
+    let y = 20;
+    let msg9 = format("{} * {} = {}", x2, y, x2 * y);
+    println(msg9); // Should print "10 * 20 = 200"
+}
+

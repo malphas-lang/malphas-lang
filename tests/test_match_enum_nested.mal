@@ -1,0 +1,22 @@
+ 
+
+enum Shape {
+    Circle(int)
+}
+
+enum Option[T] {
+    Some(T),
+    None
+}
+
+fn main() {
+    let o = Option[Shape]::Some(Shape::Circle(10));
+    
+    match o {
+        Option::Some(Shape::Circle(r)) => {
+            println("Found circle");
+        },
+        _ => {}
+    };
+}
+
