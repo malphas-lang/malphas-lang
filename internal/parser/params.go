@@ -69,6 +69,21 @@ func (p *Parser) parseParam() *ast.Param {
 		return ast.NewParam(name, typ, span)
 	}
 
+	// Handle bare 'self' (value receiver) shorthand: fn foo(self)
+	if p.curTok.Type == lexer.IDENT && p.curTok.Literal == "self" {
+		// If followed by ':', it's a normal typed parameter (e.g. self: Box[Self])
+		if p.peekTok.Type != lexer.COLON {
+			nameTok := p.curTok
+			name := ast.NewIdent("self", nameTok.Span)
+
+			// Create Self type
+			typ := ast.NewNamedType(ast.NewIdent("Self", nameTok.Span), nameTok.Span)
+
+			span := nameTok.Span
+			return ast.NewParam(name, typ, span)
+		}
+	}
+
 	if p.curTok.Type != lexer.IDENT {
 		p.reportError("expected parameter name", p.curTok.Span)
 		return nil
@@ -99,4 +114,3 @@ func (p *Parser) parseParam() *ast.Param {
 
 	return ast.NewParam(name, typ, span)
 }
-

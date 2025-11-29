@@ -1106,6 +1106,13 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 				suggestion = fmt.Sprintf("available fields: %s", c.listFieldNames(s.Fields))
 			}
 		}
+
+		// Before reporting error, check if this might be a method
+		// This handles cases where FieldExpr is checked before CallExpr
+		if method := c.lookupMethod(targetType, e.Field.Name); method != nil {
+			return method
+		}
+
 		c.reportErrorWithCode(
 			fmt.Sprintf("type %s has no field %s", targetType, e.Field.Name),
 			e.Span(),
@@ -2696,8 +2703,72 @@ func (c *Checker) getTypeName(typ Type) string {
 // lookupMethod finds a method on a given type
 func (c *Checker) lookupMethod(typ Type, methodName string) *Function {
 	// Unwrap named types
-	if named, ok := typ.(*Named); ok && named.Ref != nil {
-		typ = named.Ref
+	if named, ok := typ.(*Named); ok {
+		if named.Ref != nil {
+			typ = named.Ref
+		}
+	}
+
+	// Handle TypeParam: look up in bounds
+	if typeParam, ok := typ.(*TypeParam); ok {
+		for _, bound := range typeParam.Bounds {
+			// Resolve bound to a trait
+			var trait *Trait
+
+			if named, ok := bound.(*Named); ok {
+				if sym := c.GlobalScope.Lookup(named.Name); sym != nil {
+					typ := sym.Type
+					// Unwrap Named type if necessary
+					if namedType, ok := typ.(*Named); ok {
+						if namedType.Ref != nil {
+							typ = namedType.Ref
+						}
+					}
+
+					if t, ok := typ.(*Trait); ok {
+						trait = t
+					}
+				}
+			} else if genInst, ok := bound.(*GenericInstance); ok {
+				// Handle generic traits if necessary
+				if named, ok := genInst.Base.(*Named); ok {
+					if sym := c.GlobalScope.Lookup(named.Name); sym != nil {
+						typ := sym.Type
+						// Unwrap Named type if necessary
+						if namedType, ok := typ.(*Named); ok && namedType.Ref != nil {
+							typ = namedType.Ref
+						}
+
+						if t, ok := typ.(*Trait); ok {
+							trait = t
+						}
+					}
+				}
+			} else if t, ok := bound.(*Trait); ok {
+				trait = t
+			}
+
+			if trait != nil {
+				// Find method in trait's method list
+				for i := range trait.Methods {
+					if trait.Methods[i].Name == methodName {
+						method := &trait.Methods[i]
+						// Found method! Convert to Function and substitute Self
+						methodFunc := &Function{
+							TypeParams: method.TypeParams,
+							Params:     method.Params,
+							Return:     method.Return,
+						}
+						subst := map[string]Type{
+							"Self": typeParam,
+						}
+						return Substitute(methodFunc, subst).(*Function)
+					}
+				}
+			}
+		}
+		// Method not found in any bound
+		return nil
 	}
 
 	typeName := c.getTypeName(typ)

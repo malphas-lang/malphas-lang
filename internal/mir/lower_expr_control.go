@@ -541,11 +541,14 @@ func (l *Lowerer) lowerEnumPattern(
 		subjectType = lit.Type
 	}
 
+	var genericArgs []types.Type
+
 	enumType, ok := subjectType.(*types.Enum)
 	if !ok {
 		// Maybe it's a GenericInstance?
 		if genInst, ok := subjectType.(*types.GenericInstance); ok {
 			enumType, ok = genInst.Base.(*types.Enum)
+			genericArgs = genInst.Args
 		}
 		// Maybe it's a pointer to enum?
 		if enumType == nil {
@@ -554,6 +557,7 @@ func (l *Lowerer) lowerEnumPattern(
 					enumType = e
 				} else if genInst, ok := ptr.Elem.(*types.GenericInstance); ok {
 					enumType, ok = genInst.Base.(*types.Enum)
+					genericArgs = genInst.Args
 				}
 			}
 		}
@@ -626,6 +630,17 @@ func (l *Lowerer) lowerEnumPattern(
 		// Load argument
 		// We need the type of the argument from the variant definition
 		argType := enumType.Variants[variantIdx].Params[i]
+
+		// Substitute generic parameters if present
+		if len(genericArgs) > 0 && len(enumType.TypeParams) > 0 {
+			subst := make(map[string]types.Type)
+			for i, param := range enumType.TypeParams {
+				if i < len(genericArgs) {
+					subst[param.Name] = genericArgs[i]
+				}
+			}
+			argType = types.Substitute(argType, subst)
+		}
 
 		argLocal := l.newLocal(fmt.Sprintf("arg_%d", i), argType)
 		l.currentFunc.Locals = append(l.currentFunc.Locals, argLocal)

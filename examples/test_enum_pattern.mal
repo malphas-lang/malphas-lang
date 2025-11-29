@@ -1,0 +1,17 @@
+enum Result {
+    Success(int),
+    Failure
+}
+
+fn main() {
+    let result = Result::Success(42);
+    
+    match result {
+        Result::Success(value) => {
+            println(value);
+        },
+        Result::Failure => {
+            println(0);
+        }
+    };
+}

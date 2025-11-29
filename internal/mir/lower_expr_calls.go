@@ -12,8 +12,16 @@ import (
 func (l *Lowerer) lowerCallExpr(call *ast.CallExpr) (Operand, error) {
 	// Check for enum variant construction: Enum::Variant(args...)
 	if infix, ok := call.Callee.(*ast.InfixExpr); ok && infix.Op == lexer.DOUBLE_COLON {
-		leftIdent, ok := infix.Left.(*ast.Ident)
-		if !ok {
+		var typeName string
+		if ident, ok := infix.Left.(*ast.Ident); ok {
+			typeName = ident.Name
+		} else if indexExpr, ok := infix.Left.(*ast.IndexExpr); ok {
+			if ident, ok := indexExpr.Target.(*ast.Ident); ok {
+				typeName = ident.Name
+			} else {
+				return nil, fmt.Errorf("expected identifier as target of generic type")
+			}
+		} else {
 			return nil, fmt.Errorf("expected identifier on left side of ::")
 		}
 		rightIdent, ok := infix.Right.(*ast.Ident)
@@ -34,7 +42,7 @@ func (l *Lowerer) lowerCallExpr(call *ast.CallExpr) (Operand, error) {
 		// Get result type
 		retType := l.getType(call, l.TypeInfo)
 		if retType == nil {
-			retType = &types.Named{Name: leftIdent.Name}
+			retType = &types.Named{Name: typeName}
 		}
 
 		// Resolve variant index
@@ -83,7 +91,7 @@ func (l *Lowerer) lowerCallExpr(call *ast.CallExpr) (Operand, error) {
 		// Emit ConstructEnum
 		l.currentBlock.Statements = append(l.currentBlock.Statements, &ConstructEnum{
 			Result:       resultLocal,
-			Type:         leftIdent.Name,
+			Type:         typeName,
 			Variant:      rightIdent.Name,
 			VariantIndex: variantIndex,
 			Values:       args,
@@ -99,7 +107,18 @@ func (l *Lowerer) lowerCallExpr(call *ast.CallExpr) (Operand, error) {
 	}
 
 	// Lower arguments
-	args := make([]Operand, 0, len(call.Args))
+	args := make([]Operand, 0, len(call.Args)+1)
+
+	// If this is a method call, evaluate receiver first and add as first argument
+	if fieldExpr, ok := call.Callee.(*ast.FieldExpr); ok {
+		receiverOp, err := l.lowerExpr(fieldExpr.Target)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, receiverOp)
+	}
+
+	// Evaluate explicit arguments
 	for _, arg := range call.Args {
 		op, err := l.lowerExpr(arg)
 		if err != nil {
@@ -120,6 +139,20 @@ func (l *Lowerer) lowerCallExpr(call *ast.CallExpr) (Operand, error) {
 
 	// Get type arguments if any
 	typeArgs := l.CallTypeArgs[call]
+
+	// If this is a method call on a generic type, we need to add the receiver's type args
+	// because the method is defined on the generic type and inherits its params.
+	if fieldExpr, ok := call.Callee.(*ast.FieldExpr); ok {
+		targetType := l.getType(fieldExpr.Target, l.TypeInfo)
+		if genInst, ok := targetType.(*types.GenericInstance); ok {
+			// Prepend receiver's type args
+			typeArgs = append(genInst.Args, typeArgs...)
+		} else if ptr, ok := targetType.(*types.Pointer); ok {
+			if genInst, ok := ptr.Elem.(*types.GenericInstance); ok {
+				typeArgs = append(genInst.Args, typeArgs...)
+			}
+		}
+	}
 
 	// Add call statement
 	l.currentBlock.Statements = append(l.currentBlock.Statements, &Call{

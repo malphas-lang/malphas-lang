@@ -35,6 +35,9 @@ type Lowerer struct {
 
 	// Map of call expressions to type arguments
 	CallTypeArgs map[*ast.CallExpr][]types.Type
+
+	// Parameter type overrides (for impl methods)
+	ParamOverrides map[string]types.Type
 }
 
 // NewLowerer creates a new MIR lowerer
@@ -63,6 +66,12 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 				return nil, fmt.Errorf("failed to lower function %s: %w", fnDecl.Name.Name, err)
 			}
 			module.Functions = append(module.Functions, fn)
+		} else if implDecl, ok := decl.(*ast.ImplDecl); ok {
+			fns, err := l.LowerImplDecl(implDecl)
+			if err != nil {
+				return nil, fmt.Errorf("failed to lower impl decl: %w", err)
+			}
+			module.Functions = append(module.Functions, fns...)
 		}
 	}
 
@@ -75,6 +84,13 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 				module.Enums = append(module.Enums, t)
 			}
 		}
+	}
+
+	// Perform monomorphization pass
+	// This will specialize all generic functions based on their call sites
+	monomorphizer := NewMonomorphizer(module)
+	if err := monomorphizer.Monomorphize(); err != nil {
+		return nil, fmt.Errorf("monomorphization failed: %w", err)
 	}
 
 	return module, nil
@@ -111,10 +127,24 @@ func (l *Lowerer) LowerFunction(decl *ast.FnDecl) (*Function, error) {
 					continue
 				}
 			}
-			// Fallback: create a basic type param if not found in info
-			// This ensures we preserve the name at least
+			// Fallback: create type param with bounds extracted from AST
+			bounds := make([]types.Type, 0)
+			for _, boundExpr := range typeParam.Bounds {
+				// Resolve each bound from the AST
+				if boundType := l.getType(boundExpr, l.TypeInfo); boundType != nil {
+					bounds = append(bounds, boundType)
+				} else if boundNamed, ok := boundExpr.(*ast.NamedType); ok {
+					// Try looking up the bound by name in global scope
+					if l.GlobalScope != nil {
+						if sym := l.GlobalScope.Lookup(boundNamed.Name.Name); sym != nil {
+							bounds = append(bounds, sym.Type)
+						}
+					}
+				}
+			}
 			fn.TypeParams = append(fn.TypeParams, types.TypeParam{
-				Name: typeParam.Name.Name,
+				Name:   typeParam.Name.Name,
+				Bounds: bounds,
 			})
 		}
 	}
@@ -131,14 +161,19 @@ func (l *Lowerer) LowerFunction(decl *ast.FnDecl) (*Function, error) {
 		if fnType != nil && i < len(fnType.Params) {
 			paramType = fnType.Params[i]
 		} else {
-			paramType = l.getType(param, l.TypeInfo)
-			if paramType == nil {
-				// Try to infer from type annotation
-				if param.Type != nil {
-					// For now, default to int if we can't resolve
-					paramType = &types.Primitive{Kind: types.Int}
-				} else {
-					paramType = &types.Primitive{Kind: types.Int}
+			// Check overrides first
+			if override, ok := l.ParamOverrides[param.Name.Name]; ok {
+				paramType = override
+			} else {
+				paramType = l.getType(param, l.TypeInfo)
+				if paramType == nil {
+					// Try to infer from type annotation
+					if param.Type != nil {
+						// For now, default to int if we can't resolve
+						paramType = &types.Primitive{Kind: types.Int}
+					} else {
+						paramType = &types.Primitive{Kind: types.Int}
+					}
 				}
 			}
 		}
@@ -187,6 +222,56 @@ func (l *Lowerer) LowerFunction(decl *ast.FnDecl) (*Function, error) {
 	}
 
 	return fn, nil
+}
+
+// LowerImplDecl lowers an implementation declaration to MIR functions
+func (l *Lowerer) LowerImplDecl(decl *ast.ImplDecl) ([]*Function, error) {
+	var functions []*Function
+
+	// Get target type name
+	targetType := l.getType(decl.Target, l.TypeInfo)
+	if targetType == nil {
+		// Try to resolve from AST if not in TypeInfo (e.g. during partial compilation)
+		// This is a fallback
+		return nil, fmt.Errorf("cannot resolve target type for impl")
+	}
+	targetTypeName := l.getTypeName(targetType)
+
+	for _, method := range decl.Methods {
+		// Set up overrides for 'self'
+		l.ParamOverrides = make(map[string]types.Type)
+		l.ParamOverrides["self"] = targetType
+
+		// Lower the method as a function
+		fn, err := l.LowerFunction(method)
+		l.ParamOverrides = nil // Clear overrides
+		if err != nil {
+			return nil, err
+		}
+
+		// Mangle the name: Type::Method
+		fn.Name = targetTypeName + "::" + method.Name.Name
+
+		// Handle generic parameters from the impl block
+		// We need to prepend them to the function's type params
+		// so that they are available in the function body
+		var implTypeParams []types.TypeParam
+		for _, param := range decl.TypeParams {
+			if tp, ok := param.(*ast.TypeParam); ok {
+				implTypeParams = append(implTypeParams, types.TypeParam{Name: tp.Name.Name})
+			}
+		}
+		fn.TypeParams = append(implTypeParams, fn.TypeParams...)
+
+		functions = append(functions, fn)
+	}
+
+	return functions, nil
+}
+
+func isPrimitive(t types.Type) bool {
+	_, ok := t.(*types.Primitive)
+	return ok
 }
 
 // lowerBlock lowers a block expression

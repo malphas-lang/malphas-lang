@@ -19,8 +19,11 @@ type Generator struct {
 	// Local variable mapping (MIR Local.ID -> LLVM register)
 	localRegs map[int]string
 
-	// Block label mapping (MIR BasicBlock.Label -> LLVM label)
-	blockLabels map[string]string
+	// Track whether a local register is a value (true) or pointer/alloca (false)
+	localIsValue map[int]bool
+
+	// Block label mapping (MIR BasicBlock -> LLVM label)
+	blockLabels map[*mir.BasicBlock]string
 
 	// Register counter for generating unique register names
 	regCounter int
@@ -48,7 +51,8 @@ type Generator struct {
 func NewGenerator() *Generator {
 	return &Generator{
 		localRegs:       make(map[int]string),
-		blockLabels:     make(map[string]string),
+		localIsValue:    make(map[int]bool),
+		blockLabels:     make(map[*mir.BasicBlock]string),
 		regCounter:      0,
 		structTypes:     make(map[string]bool),
 		structFields:    make(map[string]map[string]int),
@@ -64,7 +68,8 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 	// Reset state
 	g.builder.Reset()
 	g.localRegs = make(map[int]string)
-	g.blockLabels = make(map[string]string)
+	g.localIsValue = make(map[int]bool)
+	g.blockLabels = make(map[*mir.BasicBlock]string)
 	g.regCounter = 0
 	g.Errors = make([]diag.Diagnostic, 0)
 	g.stringConstants = make(map[string]string)
@@ -284,9 +289,10 @@ func (g *Generator) emitStructDefinitions(module *mir.Module) {
 		}
 		g.structTypes[name] = true
 
-		// Generate field types
+		// Generate field types and populate structFields map
 		var fieldTypes []string
-		for _, field := range s.Fields {
+		fieldMap := make(map[string]int)
+		for i, field := range s.Fields {
 			ft, err := g.mapType(field.Type)
 			if err != nil {
 				// If mapping fails (e.g. recursive type not yet defined), use opaque pointer or i8*
@@ -301,7 +307,12 @@ func (g *Generator) emitStructDefinitions(module *mir.Module) {
 			} else {
 				fieldTypes = append(fieldTypes, ft)
 			}
+			// Populate field map with field index
+			fieldMap[field.Name] = i
 		}
+
+		// Store field map for later use
+		g.structFields[s.Name] = fieldMap
 
 		// Emit struct definition
 		// %struct.Name = type { ... }

@@ -54,9 +54,12 @@ func (l *Lowerer) getReturnType(decl *ast.FnDecl) types.Type {
 	}
 	// Try to infer from ReturnType annotation
 	if decl.ReturnType != nil {
-		// For now, default to void
-		// TODO: properly resolve return type from annotation
-		return nil // void is nil in MIR
+		if retType := l.getType(decl.ReturnType, l.TypeInfo); retType != nil {
+			if prim, ok := retType.(*types.Primitive); ok && prim.Kind == types.Void {
+				return nil
+			}
+			return retType
+		}
 	}
 	return nil // void is nil in MIR
 }
@@ -142,6 +145,16 @@ func (l *Lowerer) getStructName(nameExpr ast.Expr) string {
 // getTypeName extracts the type name from a Type, similar to Checker.getTypeName
 func (l *Lowerer) getTypeName(typ types.Type) string {
 	switch t := typ.(type) {
+	case *types.TypeParam:
+		// During lowering, we encounter TypeParams in generic functions.
+		// The monomorphization pass will handle specialization after lowering.
+		// For now, use the first bound's name if available
+		if len(t.Bounds) > 0 {
+			// Try to get name from first bound
+			return l.getTypeName(t.Bounds[0])
+		}
+		// Fallback: return empty which will cause the monomorphization to handle it
+		return ""
 	case *types.Named:
 		return t.Name
 	case *types.Struct:
@@ -153,6 +166,8 @@ func (l *Lowerer) getTypeName(typ types.Type) string {
 	case *types.Reference:
 		// For &T or &mut T, get the name of the underlying type
 		return l.getTypeName(t.Elem)
+	case *types.Trait:
+		return t.Name
 	default:
 		return ""
 	}

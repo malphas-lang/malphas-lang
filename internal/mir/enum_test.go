@@ -55,19 +55,19 @@ fn main() {
 		t.Fatal("main function not found")
 	}
 
-	// Verify MIR contains Discriminant check and LoadField (for payload)
+	// Verify MIR contains Discriminant check and AccessVariantPayload (for payload)
 	foundDiscriminant := false
-	foundLoadField := false
+	foundAccessPayload := false
 
 	for _, block := range mainFn.Blocks {
 		for _, stmt := range block.Statements {
 			if _, ok := stmt.(*Discriminant); ok {
 				foundDiscriminant = true
 			}
-			if lf, ok := stmt.(*LoadField); ok {
-				// Check if we are loading payload (field "0")
-				if lf.Field == "0" {
-					foundLoadField = true
+			if ap, ok := stmt.(*AccessVariantPayload); ok {
+				// Check if we are loading payload (member 0)
+				if ap.MemberIndex == 0 {
+					foundAccessPayload = true
 				}
 			}
 		}
@@ -76,7 +76,7 @@ fn main() {
 	if !foundDiscriminant {
 		t.Errorf("Expected Discriminant instruction")
 	}
-	if !foundLoadField {
-		t.Errorf("Expected LoadField instruction for payload extraction")
+	if !foundAccessPayload {
+		t.Errorf("Expected AccessVariantPayload instruction for payload extraction")
 	}
 }

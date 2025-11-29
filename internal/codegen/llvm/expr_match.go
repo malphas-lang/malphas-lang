@@ -199,16 +199,19 @@ func (g *LLVMGenerator) genEnumMatch(expr *mast.MatchExpr, subjectReg string, su
 	enumLLVM := "%enum." + sanitizeName(enumName)
 	enumPtrLLVM := enumLLVM + "*"
 
-	// subjectReg might be a pointer to the enum or the enum itself
-	// Check if we need to load it first
-	// For now, assume subjectReg is already a pointer to the enum
+	// subjectReg should be a pointer to the enum (since mapType returns pointer for enums)
+	// Ensure it's treated as a pointer
 	enumValueReg := subjectReg
 
 	// Load tag from enum
+	// Get pointer to tag field (first field, index 0)
+	// For LLVM 21+ with opaque pointers, use ptr type in GEP
 	tagPtrReg := g.nextReg()
-	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 0", tagPtrReg, enumLLVM, enumPtrLLVM, enumValueReg))
+	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", tagPtrReg, enumLLVM, enumValueReg))
+	// Load the i32 tag value (enums use i32 for tag, not i64)
+	// Use opaque pointer syntax for LLVM 21+
 	tagReg := g.nextReg()
-	g.emit(fmt.Sprintf("  %s = load i64, i64* %s", tagReg, tagPtrReg))
+	g.emit(fmt.Sprintf("  %s = load i32, ptr %s", tagReg, tagPtrReg))
 
 	// Start with first arm check
 	g.emit(fmt.Sprintf("  br label %%%s", checkLabels[0]))
@@ -237,8 +240,8 @@ func (g *LLVMGenerator) genEnumMatch(expr *mast.MatchExpr, subjectReg string, su
 			// Specific variant - check tag
 			cmpReg := g.nextReg()
 			variantTagReg := g.nextReg()
-			g.emit(fmt.Sprintf("  %s = add i64 0, %d", variantTagReg, variantIndex))
-			g.emit(fmt.Sprintf("  %s = icmp eq i64 %s, %s", cmpReg, tagReg, variantTagReg))
+			g.emit(fmt.Sprintf("  %s = add i32 0, %d", variantTagReg, variantIndex))
+			g.emit(fmt.Sprintf("  %s = icmp eq i32 %s, %s", cmpReg, tagReg, variantTagReg))
 			g.emit(fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cmpReg, bodyLabel, nextCheckLabel))
 		} else {
 			// Wildcard or variable binding - always matches
@@ -525,6 +528,13 @@ func (g *LLVMGenerator) genStructPatternMatch(structPat *mast.StructPattern, sub
 			return false, err
 		}
 
+		// Handle void fields - can't load or match void values
+		if fieldLLVM == "void" {
+			// Void fields can't be matched, so skip this field
+			// Continue with the rest of the match
+			continue
+		}
+
 		fieldValueReg := g.nextReg()
 		g.emit(fmt.Sprintf("  %s = load %s, %s* %s", fieldValueReg, fieldLLVM, fieldLLVM, fieldPtrReg))
 
@@ -645,6 +655,13 @@ func (g *LLVMGenerator) matchFieldPattern(pattern mast.Pattern, valueReg string,
 			fieldLLVM, err := g.mapType(fieldType)
 			if err != nil {
 				return "", err
+			}
+
+			// Handle void fields - can't load or match void values
+			if fieldLLVM == "void" {
+				// Void fields can't be matched, so skip this field
+				// Continue with the rest of the match
+				continue
 			}
 
 			fieldValueReg := g.nextReg()
@@ -796,6 +813,13 @@ func (g *LLVMGenerator) genStructPatternExtraction(structPat *mast.StructPattern
 		fieldLLVM, err := g.mapType(fieldType)
 		if err != nil {
 			return err
+		}
+
+		// Handle void fields - can't load or match void values
+		if fieldLLVM == "void" {
+			// Void fields can't be matched, so skip this field
+			// Continue with the rest of the match
+			continue
 		}
 
 		// Get pointer to field

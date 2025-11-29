@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/malphas-lang/malphas-lang/internal/mir"
+	"github.com/malphas-lang/malphas-lang/internal/types"
 )
 
 // generateTerminator generates LLVM IR for a MIR terminator
@@ -33,6 +34,17 @@ func (g *Generator) generateReturn(ret *mir.Return, retLLVM string) error {
 		return nil
 	}
 
+	// Check if the value itself is void type
+	if isVoidType(ret.Value.OperandType()) {
+		// Treat as void return
+		if retLLVM == "i32" {
+			g.emit("  ret i32 0")
+		} else {
+			g.emit("  ret void")
+		}
+		return nil
+	}
+
 	// Generate return value
 	valueReg, err := g.generateOperand(ret.Value)
 	if err != nil {
@@ -46,14 +58,10 @@ func (g *Generator) generateReturn(ret *mir.Return, retLLVM string) error {
 // generateGoto generates LLVM IR for an unconditional jump
 func (g *Generator) generateGoto(gotoTerm *mir.Goto) error {
 	// Get target label
-	targetLabel, ok := g.blockLabels[gotoTerm.Target.Label]
+	targetLabel, ok := g.blockLabels[gotoTerm.Target]
 	if !ok {
-		// Generate label if not found
-		targetLabel = gotoTerm.Target.Label
-		if targetLabel == "" {
-			targetLabel = fmt.Sprintf("bb%d", len(g.blockLabels))
-		}
-		g.blockLabels[targetLabel] = targetLabel
+		// Should not happen if generateFunction populates all blocks
+		return fmt.Errorf("block label not found for target %s", gotoTerm.Target.Label)
 	}
 
 	g.emit(fmt.Sprintf("  br label %%%s", targetLabel))
@@ -68,29 +76,58 @@ func (g *Generator) generateBranch(branch *mir.Branch) error {
 		return fmt.Errorf("failed to generate condition: %w", err)
 	}
 
-	// Ensure condition is i1 (boolean)
-	// For now, assume it's already i1
-	// TODO: Add conversion if needed
-
-	// Get target labels
-	trueLabel, ok := g.blockLabels[branch.True.Label]
-	if !ok {
-		trueLabel = branch.True.Label
-		if trueLabel == "" {
-			trueLabel = fmt.Sprintf("bb%d", len(g.blockLabels))
+	// Ensure condition is i1 (boolean) value, not a pointer
+	// There's a bug where sometimes generateOperand returns an alloca pointer instead of loading
+	// Check if condReg matches any alloca register in localRegs - if so, load it
+	needsLoad := false
+	if localRef, ok := branch.Condition.(*mir.LocalRef); ok {
+		// Condition is a LocalRef - check if it's stored in an alloca
+		if allocaReg, ok := g.localRegs[localRef.Local.ID]; ok {
+			if condReg == allocaReg {
+				// condReg is the alloca pointer itself, need to load
+				needsLoad = true
+			}
 		}
-		g.blockLabels[trueLabel] = trueLabel
+	} else {
+		// Condition is not a LocalRef - check if condReg matches any alloca
+		for localID, allocaReg := range g.localRegs {
+			if condReg == allocaReg {
+				if isValue, ok := g.localIsValue[localID]; !ok || !isValue {
+					needsLoad = true
+					break
+				}
+			}
+		}
 	}
 
-	falseLabel, ok := g.blockLabels[branch.False.Label]
+	// If we need to load, do it now
+	if needsLoad {
+		loadedReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = load i1, i1* %s", loadedReg, condReg))
+		condReg = loadedReg
+	}
+
+	// Get target labels
+	trueLabel, ok := g.blockLabels[branch.True]
 	if !ok {
-		falseLabel = branch.False.Label
-		if falseLabel == "" {
-			falseLabel = fmt.Sprintf("bb%d", len(g.blockLabels)+1)
-		}
-		g.blockLabels[falseLabel] = falseLabel
+		return fmt.Errorf("block label not found for true target %s", branch.True.Label)
+	}
+
+	falseLabel, ok := g.blockLabels[branch.False]
+	if !ok {
+		return fmt.Errorf("block label not found for false target %s", branch.False.Label)
 	}
 
 	g.emit(fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", condReg, trueLabel, falseLabel))
 	return nil
+}
+
+func isVoidType(t types.Type) bool {
+	if t == nil {
+		return true
+	}
+	if p, ok := t.(*types.Primitive); ok {
+		return p.Kind == types.Void
+	}
+	return false
 }

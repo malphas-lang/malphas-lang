@@ -1,0 +1,32 @@
+package main;
+
+trait Greeter {
+    fn greet(self) -> int;
+}
+
+struct Person {
+    name: int, // Using int for simplicity as string support might be limited
+}
+
+impl Greeter for Person {
+    fn greet(self) -> int {
+        return self.name;
+    }
+}
+
+fn call_greet[T: Greeter](g: T) -> int {
+    return g.greet();
+}
+
+fn main() {
+    let p = Person { name: 42 };
+    
+    // Static dispatch
+    let res1 = call_greet(p);
+    
+    // Dynamic dispatch (existential)
+    // let g: any Greeter = p; // Syntax for existentials might be different
+    // let res2 = g.greet();
+    
+    // return res1;
+}

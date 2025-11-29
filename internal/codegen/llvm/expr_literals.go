@@ -117,7 +117,8 @@ func (g *LLVMGenerator) genIdent(ident *mast.Ident) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		g.emit(fmt.Sprintf("  %s = load %s, %s* %s", loadReg, llvmType, llvmType, reg))
+		// Use opaque pointer syntax for LLVM 21+
+		g.emit(fmt.Sprintf("  %s = load %s, ptr %s", loadReg, llvmType, reg))
 		return loadReg, nil
 	}
 

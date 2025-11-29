@@ -769,7 +769,7 @@ func TestGenerateTerminator_Goto(t *testing.T) {
 		Terminator: nil,
 	}
 
-	gen.blockLabels["loop"] = "loop"
+	gen.blockLabels[targetBlock] = "loop"
 
 	gotoTerm := &mir.Goto{Target: targetBlock}
 
@@ -790,8 +790,8 @@ func TestGenerateTerminator_Branch(t *testing.T) {
 	trueBlock := &mir.BasicBlock{Label: "true_block"}
 	falseBlock := &mir.BasicBlock{Label: "false_block"}
 
-	gen.blockLabels["true_block"] = "true_block"
-	gen.blockLabels["false_block"] = "false_block"
+	gen.blockLabels[trueBlock] = "true_block"
+	gen.blockLabels[falseBlock] = "false_block"
 
 	cond := &mir.Literal{Type: types.TypeBool, Value: true}
 	branch := &mir.Branch{
@@ -826,6 +826,7 @@ func TestGenerateStatement_LoadField(t *testing.T) {
 
 	gen.localRegs[1] = "%reg0"
 	gen.emit("  %reg0 = alloca %struct.Point*")
+	gen.structFields["Point"] = map[string]int{"x": 0}
 
 	loadField := &mir.LoadField{
 		Result: resultLocal,
@@ -859,6 +860,7 @@ func TestGenerateStatement_StoreField(t *testing.T) {
 
 	gen.localRegs[1] = "%reg0"
 	gen.emit("  %reg0 = alloca %struct.Point*")
+	gen.structFields["Point"] = map[string]int{"x": 0}
 
 	storeField := &mir.StoreField{
 		Target: targetRef,
@@ -944,6 +946,8 @@ func TestGenerateStatement_StoreIndex(t *testing.T) {
 
 func TestGenerateStatement_ConstructStruct(t *testing.T) {
 	gen := newTestGenerator()
+	gen.structTypes["Point"] = true
+	gen.structFields["Point"] = map[string]int{"x": 0, "y": 1}
 
 	resultLocal := mir.Local{ID: 1, Name: "p", Type: &types.Struct{Name: "Point"}}
 
@@ -965,8 +969,8 @@ func TestGenerateStatement_ConstructStruct(t *testing.T) {
 	}
 
 	output := gen.builder.String()
-	if !strings.Contains(output, "alloca %struct.Point") {
-		t.Errorf("generateConstructStruct() should allocate struct, got:\n%s", output)
+	if !strings.Contains(output, "call i8* @runtime_alloc") {
+		t.Errorf("generateConstructStruct() should allocate struct using runtime_alloc, got:\n%s", output)
 	}
 
 	if !strings.Contains(output, "getelementptr") {

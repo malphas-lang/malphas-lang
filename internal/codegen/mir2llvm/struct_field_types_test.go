@@ -11,6 +11,8 @@ import (
 // TestStructFieldTypes tests that struct fields use correct types instead of hardcoded i64
 func TestStructFieldTypes_MixedTypes(t *testing.T) {
 	gen := newTestGenerator()
+	gen.structTypes["Point"] = true
+	gen.structFields["Point"] = map[string]int{"x": 0, "y": 1, "active": 2}
 
 	// Define a struct type with mixed field types
 	// struct Point { x: float, y: float, active: bool }
@@ -88,6 +90,7 @@ func TestStructFieldTypes_StoreField(t *testing.T) {
 	// Allocate the local first
 	gen.localRegs[1] = "%reg0"
 	gen.emit("  %reg0 = alloca %struct.Data*")
+	gen.structFields["Data"] = map[string]int{"count": 0, "ratio": 1, "valid": 2}
 
 	// Test storing a float field
 	floatVal := &mir.Literal{Type: types.TypeFloat, Value: float64(3.14)}
@@ -136,6 +139,8 @@ func TestStructFieldTypes_StoreField(t *testing.T) {
 
 func TestStructFieldTypes_StringField(t *testing.T) {
 	gen := newTestGenerator()
+	gen.structTypes["Person"] = true
+	gen.structFields["Person"] = map[string]int{"name": 0, "age": 1}
 
 	// struct Person { name: string, age: int }
 	personStruct := &types.Struct{

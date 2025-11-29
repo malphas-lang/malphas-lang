@@ -58,6 +58,7 @@ type Terminator interface {
 // Operand represents a value used in an operation
 type Operand interface {
 	operandNode()
+	OperandType() types.Type
 }
 
 // Rvalue represents a right-hand-side value (expression result)
@@ -70,8 +71,9 @@ type LocalRef struct {
 	Local Local
 }
 
-func (*LocalRef) operandNode() {}
-func (*LocalRef) rvalueNode()  {}
+func (*LocalRef) operandNode()              {}
+func (*LocalRef) rvalueNode()               {}
+func (l *LocalRef) OperandType() types.Type { return l.Local.Type }
 
 // Literal represents a constant value
 type Literal struct {
@@ -79,8 +81,9 @@ type Literal struct {
 	Value interface{} // int64, float64, bool, string, nil
 }
 
-func (*Literal) operandNode() {}
-func (*Literal) rvalueNode()  {}
+func (*Literal) operandNode()              {}
+func (*Literal) rvalueNode()               {}
+func (l *Literal) OperandType() types.Type { return l.Type }
 
 // Assign statement: local = rvalue
 type Assign struct {

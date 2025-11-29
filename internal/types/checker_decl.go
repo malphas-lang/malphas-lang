@@ -445,11 +445,16 @@ func (c *Checker) checkBodies(file *ast.File) {
 		case *ast.FnDecl:
 			// Create function scope
 			fnScope := NewScope(c.GlobalScope)
-			// Add params to scope
-			for _, param := range d.Params {
+			// Get the function symbol to access already resolved parameter types
+			fnSym := c.GlobalScope.Lookup(d.Name.Name)
+			fnType := fnSym.Type.(*Function)
+
+			// Add params to scope using the resolved types from fnType
+			// This ensures TypeParams are correctly referenced
+			for i, param := range d.Params {
 				fnScope.Insert(param.Name.Name, &Symbol{
 					Name:    param.Name.Name,
-					Type:    c.resolveType(param.Type),
+					Type:    fnType.Params[i],
 					DefNode: param,
 				})
 			}

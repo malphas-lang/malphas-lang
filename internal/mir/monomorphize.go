@@ -127,6 +127,12 @@ func (m *Monomorphizer) mangleType(t types.Type) string {
 		return "slice_" + m.mangleType(t.Elem)
 	case *types.Array:
 		return fmt.Sprintf("arr_%d_%s", t.Len, m.mangleType(t.Elem))
+	case *types.Struct:
+		return t.Name
+	case *types.Enum:
+		return t.Name
+	case *types.GenericInstance:
+		return m.mangleName(m.mangleType(t.Base), t.Args)
 	default:
 		return "unknown"
 	}
@@ -134,11 +140,25 @@ func (m *Monomorphizer) mangleType(t types.Type) string {
 
 // createSpecializedCopy creates a deep copy of the function with type parameters substituted
 func (m *Monomorphizer) createSpecializedCopy(fn *Function, newName string, typeArgs []types.Type) *Function {
-	// Create substitution map
+	// Create substitution map from type parameter names to concrete types
 	subst := make(map[string]types.Type)
+	// Create a map from trait bound names to the corresponding type parameter's concrete type
+	// This is used to substitute trait method calls like "Greeter::greet" to "Person::greet"
+	traitToConcreteType := make(map[string]types.Type)
+
 	for i, param := range fn.TypeParams {
 		if i < len(typeArgs) {
-			subst[param.Name] = typeArgs[i]
+			concreteType := typeArgs[i]
+			subst[param.Name] = concreteType
+
+			// Map each trait bound to the concrete type
+			for _, bound := range param.Bounds {
+				if trait, ok := bound.(*types.Trait); ok {
+					traitToConcreteType[trait.Name] = concreteType
+				} else if named, ok := bound.(*types.Named); ok {
+					traitToConcreteType[named.Name] = concreteType
+				}
+			}
 		}
 	}
 
@@ -188,7 +208,7 @@ func (m *Monomorphizer) createSpecializedCopy(fn *Function, newName string, type
 		newBlock := newFn.Blocks[i]
 
 		for _, stmt := range block.Statements {
-			newBlock.Statements = append(newBlock.Statements, m.substituteStmt(stmt, subst))
+			newBlock.Statements = append(newBlock.Statements, m.substituteStmt(stmt, subst, traitToConcreteType))
 		}
 
 		if block.Terminator != nil {
@@ -217,14 +237,54 @@ func (m *Monomorphizer) substituteType(t types.Type, subst map[string]types.Type
 		return &types.Slice{Elem: m.substituteType(t.Elem, subst)}
 	case *types.Array:
 		return &types.Array{Elem: m.substituteType(t.Elem, subst), Len: t.Len}
-	// Add other type cases as needed
+	case *types.Named:
+		// fmt.Printf("DEBUG: substituteType Named %s Ref: %T\n", t.Name, t.Ref)
+		// If it's a named type that refers to a type param, we might need to substitute it
+		// But usually TypeParams are direct.
+		// If Named refers to something, substitute the reference
+		if t.Ref != nil {
+			newRef := m.substituteType(t.Ref, subst)
+			if newRef != t.Ref {
+				// If the reference changed, return the new reference directly
+				// (unwrapping the name if it was just an alias to a type param)
+				// Or should we keep the name?
+				// If T -> int, Named("T", Ref: T) -> int.
+				return newRef
+			}
+		} else {
+			// Check if the name matches a type param in subst
+			if replacement, ok := subst[t.Name]; ok {
+				return replacement
+			}
+		}
+		return t
+	case *types.GenericInstance:
+		newBase := m.substituteType(t.Base, subst)
+		newArgs := make([]types.Type, len(t.Args))
+		changed := false
+		if newBase != t.Base {
+			changed = true
+		}
+		for i, arg := range t.Args {
+			newArgs[i] = m.substituteType(arg, subst)
+			if newArgs[i] != t.Args[i] {
+				changed = true
+			}
+		}
+		if changed {
+			return &types.GenericInstance{
+				Base: newBase,
+				Args: newArgs,
+			}
+		}
+		return t
 	default:
 		return t
 	}
 }
 
 // substituteStmt creates a copy of the statement with types substituted
-func (m *Monomorphizer) substituteStmt(stmt Statement, subst map[string]types.Type) Statement {
+func (m *Monomorphizer) substituteStmt(stmt Statement, subst map[string]types.Type, traitToConcreteType map[string]types.Type) Statement {
 	switch s := stmt.(type) {
 	case *Assign:
 		return &Assign{
@@ -236,17 +296,33 @@ func (m *Monomorphizer) substituteStmt(stmt Statement, subst map[string]types.Ty
 		for i, arg := range s.Args {
 			newArgs[i] = m.substituteOperand(arg, subst)
 		}
-		// Note: We don't substitute TypeArgs here because they are already concrete types
-		// for the call being made. But if the call itself uses TypeParams from the outer function,
-		// we would need to substitute them.
+		// Substitute type arguments
 		newTypeArgs := make([]types.Type, len(s.TypeArgs))
 		for i, arg := range s.TypeArgs {
 			newTypeArgs[i] = m.substituteType(arg, subst)
 		}
 
+		// Substitute function name if it's a trait method call
+		// Format: TraitName::method -> ConcreteName::method
+		funcName := s.Func
+		if strings.Contains(funcName, "::") {
+			parts := strings.Split(funcName, "::")
+			if len(parts) == 2 {
+				typeName := parts[0]
+				methodName := parts[1]
+
+				// Check if the type name is a trait bound that maps to a concrete type
+				if concreteType, ok := traitToConcreteType[typeName]; ok {
+					// Get the concrete type name
+					concreteTypeName := m.mangleType(concreteType)
+					funcName = concreteTypeName + "::" + methodName
+				}
+			}
+		}
+
 		return &Call{
 			Result:   m.substituteLocal(s.Result, subst),
-			Func:     s.Func,
+			Func:     funcName,
 			Args:     newArgs,
 			TypeArgs: newTypeArgs,
 		}

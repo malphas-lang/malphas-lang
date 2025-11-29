@@ -1,0 +1,84 @@
+// Advanced RPG Simulation using Generics and Methods
+
+enum Option[T] {
+    Some(T),
+    None
+}
+
+enum Result[T, E] {
+    Ok(T),
+    Err(E)
+}
+
+struct Item {
+    name: string,
+    power: int
+}
+
+// Generic Inventory struct
+struct Inventory[T] {
+    item: T // Simplified to single item
+}
+
+// Methods for generic Inventory
+impl[T] Inventory[T] {
+    fn get_item(self) -> T {
+        return self.item;
+    }
+    
+    fn set_item(self, item: T) {
+        self.item = item;
+    }
+}
+
+struct Character {
+    name: string,
+    inventory: Inventory[Item]
+}
+
+impl Character {
+    fn get_name(self) -> string {
+        return self.name;
+    }
+}
+
+fn main() {
+    println("Advanced RPG Generics");
+    
+    let sword = Item { name: "Excalibur", power: 100 };
+    let inv = Inventory[Item] { item: sword };
+    
+    let mut hero = Character { name: "Arthur", inventory: inv };
+    
+    println("Hero:");
+    println(hero.get_name());
+    
+    let item = hero.inventory.get_item();
+    println("Item:");
+    println(item.name);
+    println("Power:");
+    println(item.power);
+    
+    // Test nested generics
+    println("Nested Generics Test:");
+    let opt = Option[int]::Some(42);
+    let res = Result[Option[int], string]::Ok(opt);
+    
+    match res {
+        Result::Ok(val) => {
+            match val {
+                Option::Some(x) => {
+                    println("Got Some:");
+                    println(x);
+                },
+                Option::None => {
+                    println("Got None");
+                }
+            }
+        },
+        Result::Err(e) => {
+            println("Error:");
+            println(e);
+        }
+    }
+}

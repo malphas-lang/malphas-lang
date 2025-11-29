@@ -42,6 +42,21 @@ func (g *Generator) generateStatement(stmt mir.Statement) error {
 
 // generateAssign generates LLVM IR for an assignment
 func (g *Generator) generateAssign(assign *mir.Assign) error {
+	// Get type for local
+	localType, err := g.mapType(assign.Local.Type)
+	if err != nil {
+		return fmt.Errorf("failed to map local type: %w", err)
+	}
+
+	// Skip allocation and store for void types
+	if localType == "void" || isVoidType(assign.Local.Type) {
+		// For void assignments, we don't need to do anything as the value
+		// doesn't exist in registers.
+		// Mark as handled (use a special marker to avoid re-allocation attempts)
+		g.localRegs[assign.Local.ID] = "undef"
+		return nil
+	}
+
 	// Get RHS value register
 	rhsReg, err := g.generateOperand(assign.RHS)
 	if err != nil {
@@ -52,24 +67,18 @@ func (g *Generator) generateAssign(assign *mir.Assign) error {
 	localReg, ok := g.localRegs[assign.Local.ID]
 	if !ok {
 		// Allocate space for local
-		localType, err := g.mapType(assign.Local.Type)
-		if err != nil {
-			return fmt.Errorf("failed to map local type: %w", err)
-		}
 		localReg = g.nextReg()
 		g.emit(fmt.Sprintf("  %s = alloca %s", localReg, localType))
 		g.localRegs[assign.Local.ID] = localReg
 	}
 
-	// Get type for store
-	localType, err := g.mapType(assign.Local.Type)
-	if err != nil {
-		return fmt.Errorf("failed to map local type: %w", err)
-	}
-
-	// Get RHS type (simplified - assume it matches local type)
 	// Store the value
 	g.emit(fmt.Sprintf("  store %s %s, %s* %s", localType, rhsReg, localType, localReg))
+
+	// IMPORTANT: Clear the localIsValue flag since we just stored to an alloca.
+	// Even if this local was previously used as a value, it's now an alloca pointer.
+	// This fixes the bug where pattern variables reuse local IDs from intermediate values.
+	g.localIsValue[assign.Local.ID] = false
 
 	return nil
 }
@@ -132,10 +141,17 @@ func (g *Generator) generateCall(call *mir.Call) error {
 
 		// Only allocate space if return type is not void
 		if retType != "void" {
-			// Allocate space for the result
-			allocaReg = g.nextReg()
-			g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, retType))
-			g.localRegs[call.Result.ID] = allocaReg
+			// Check if an alloca was already created for this result
+			existingAlloca, hasAlloca := g.localRegs[call.Result.ID]
+			if hasAlloca {
+				// Use existing alloca
+				allocaReg = existingAlloca
+			} else {
+				// Allocate space for the result
+				allocaReg = g.nextReg()
+				g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, retType))
+				g.localRegs[call.Result.ID] = allocaReg
+			}
 
 			// Register for call result (temporary, not stored in localRegs)
 			resultReg = g.nextReg()
@@ -225,6 +241,8 @@ func (g *Generator) generateCall(call *mir.Call) error {
 		g.emit(fmt.Sprintf("  %s = call %s @%s(%s)", resultReg, retType, funcName, callArgsStr))
 		// Store result in allocated memory
 		g.emit(fmt.Sprintf("  store %s %s, %s* %s", retType, resultReg, retType, allocaReg))
+		// Mark result as stored in alloca (not a direct value)
+		g.localIsValue[call.Result.ID] = false
 	}
 
 	return nil
@@ -252,7 +270,7 @@ func isFloatType(llvmType string) bool {
 
 // generateOperatorIntrinsic generates inline LLVM operations for operator intrinsics
 func (g *Generator) generateOperatorIntrinsic(call *mir.Call) error {
-	// Allocate space for result if needed
+	// Check if result already has an alloca (from pre-allocation)
 	var allocaReg string
 	var resultReg string
 
@@ -262,10 +280,21 @@ func (g *Generator) generateOperatorIntrinsic(call *mir.Call) error {
 			return err
 		}
 
-		allocaReg = g.nextReg()
-		g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, retType))
-		g.localRegs[call.Result.ID] = allocaReg
-		resultReg = g.nextReg()
+		// Only allocate space if return type is not void
+		if retType != "void" {
+			// Check if an alloca was already created for this result
+			existingAlloca, hasAlloca := g.localRegs[call.Result.ID]
+			if hasAlloca {
+				// Use existing alloca
+				allocaReg = existingAlloca
+			} else {
+				// Create new alloca
+				allocaReg = g.nextReg()
+				g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, retType))
+				g.localRegs[call.Result.ID] = allocaReg
+			}
+			resultReg = g.nextReg()
+		}
 	}
 
 	// Determine the operation type from the result or first argument
@@ -437,6 +466,8 @@ func (g *Generator) generateOperatorIntrinsic(call *mir.Call) error {
 	if allocaReg != "" && resultReg != "" {
 		retType, _ := g.mapType(call.Result.Type)
 		g.emit(fmt.Sprintf("  store %s %s, %s* %s", retType, resultReg, retType, allocaReg))
+		// Mark result as stored in alloca (not a direct value)
+		g.localIsValue[call.Result.ID] = false
 	}
 
 	return nil
@@ -459,6 +490,7 @@ func (g *Generator) generateLoadField(load *mir.LoadField) error {
 	// Allocate result register
 	resultReg := g.nextReg()
 	g.localRegs[load.Result.ID] = resultReg
+	g.localIsValue[load.Result.ID] = true // This is a value, not a pointer
 
 	// Get struct type from target operand (simplified - assume it's in type info)
 	// For now, use a generic struct pointer
@@ -473,16 +505,68 @@ func (g *Generator) generateLoadField(load *mir.LoadField) error {
 		}
 	}
 
-	// Get field index (simplified - would need struct field map)
-	fieldIndex := 0 // TODO: Look up field index from structFields map
+	// Get field index from structFields map
+	fieldIndex := -1
+	structName := ""
+	if localRef, ok := load.Target.(*mir.LocalRef); ok {
+		// Extract struct name from type
+		if named, ok := localRef.Local.Type.(*types.Named); ok {
+			structName = named.Name
+		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
+			if named, ok := ptr.Elem.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := ptr.Elem.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if ref, ok := localRef.Local.Type.(*types.Reference); ok {
+			if named, ok := ref.Elem.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := ref.Elem.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if structType, ok := localRef.Local.Type.(*types.Struct); ok {
+			structName = structType.Name
+		} else if generic, ok := localRef.Local.Type.(*types.GenericInstance); ok {
+			if named, ok := generic.Base.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := generic.Base.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
+			if generic, ok := ptr.Elem.(*types.GenericInstance); ok {
+				if named, ok := generic.Base.(*types.Named); ok {
+					structName = named.Name
+				} else if structType, ok := generic.Base.(*types.Struct); ok {
+					structName = structType.Name
+				}
+			}
+		}
+
+		// Look up field index from structFields map
+		if structName != "" {
+			if fieldMap, ok := g.structFields[structName]; ok {
+				if idx, ok := fieldMap[load.Field]; ok {
+					fieldIndex = idx
+				}
+			}
+		}
+	}
+
+	if fieldIndex < 0 {
+		return fmt.Errorf("failed to find field index for field %s in struct %s", load.Field, structName)
+	}
 
 	// Use getelementptr to get field pointer
 	fieldPtrReg := g.nextReg()
 	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 %d",
 		fieldPtrReg, structType, structType+"*", targetReg, fieldIndex))
 
+	// Bitcast field pointer to result type pointer
+	castReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast %s* %s to %s*", castReg, structType, fieldPtrReg, resultType))
+
 	// Load field value
-	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, fieldPtrReg))
+	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, castReg))
 
 	return nil
 }
@@ -509,8 +593,56 @@ func (g *Generator) generateStoreField(store *mir.StoreField) error {
 		}
 	}
 
-	// Get field index (simplified)
-	fieldIndex := 0 // TODO: Look up field index
+	// Get field index from structFields map
+	fieldIndex := -1
+	structName := ""
+	if localRef, ok := store.Target.(*mir.LocalRef); ok {
+		// Extract struct name from type
+		if named, ok := localRef.Local.Type.(*types.Named); ok {
+			structName = named.Name
+		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
+			if named, ok := ptr.Elem.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := ptr.Elem.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if ref, ok := localRef.Local.Type.(*types.Reference); ok {
+			if named, ok := ref.Elem.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := ref.Elem.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if structType, ok := localRef.Local.Type.(*types.Struct); ok {
+			structName = structType.Name
+		} else if generic, ok := localRef.Local.Type.(*types.GenericInstance); ok {
+			if named, ok := generic.Base.(*types.Named); ok {
+				structName = named.Name
+			} else if structType, ok := generic.Base.(*types.Struct); ok {
+				structName = structType.Name
+			}
+		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
+			if generic, ok := ptr.Elem.(*types.GenericInstance); ok {
+				if named, ok := generic.Base.(*types.Named); ok {
+					structName = named.Name
+				} else if structType, ok := generic.Base.(*types.Struct); ok {
+					structName = structType.Name
+				}
+			}
+		}
+
+		// Look up field index from structFields map
+		if structName != "" {
+			if fieldMap, ok := g.structFields[structName]; ok {
+				if idx, ok := fieldMap[store.Field]; ok {
+					fieldIndex = idx
+				}
+			}
+		}
+	}
+
+	if fieldIndex < 0 {
+		return fmt.Errorf("failed to find field index for field %s in struct %s", store.Field, structName)
+	}
 
 	// Get value type from struct field definition
 	valueType := "i64" // Default fallback
@@ -539,8 +671,12 @@ func (g *Generator) generateStoreField(store *mir.StoreField) error {
 	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 %d",
 		fieldPtrReg, structType, structType+"*", targetReg, fieldIndex))
 
+	// Bitcast field pointer to value type pointer
+	castReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast %s* %s to %s*", castReg, structType, fieldPtrReg, valueType))
+
 	// Store value
-	g.emit(fmt.Sprintf("  store %s %s, %s* %s", valueType, valueReg, valueType, fieldPtrReg))
+	g.emit(fmt.Sprintf("  store %s %s, %s* %s", valueType, valueReg, valueType, castReg))
 
 	return nil
 }
@@ -559,6 +695,7 @@ func (g *Generator) generateLoadIndex(load *mir.LoadIndex) error {
 
 	resultReg := g.nextReg()
 	g.localRegs[load.Result.ID] = resultReg
+	g.localIsValue[load.Result.ID] = true // LoadIndex produces a value
 
 	// Handle multi-dimensional indexing (slice of slices)
 	currentBase := targetReg
@@ -657,12 +794,14 @@ func (g *Generator) generateLoadIndex(load *mir.LoadIndex) error {
 
 				// So I should update the map too.
 				g.localRegs[load.Result.ID] = loadReg
+				g.localIsValue[load.Result.ID] = true
 			} else {
 				// If resultType is i8*, then elemPtrReg is the result.
 				// But we assigned resultReg to the map.
 				// We should emit a bitcast or move?
 				// Or just update the map to point to elemPtrReg.
 				g.localRegs[load.Result.ID] = elemPtrReg
+				g.localIsValue[load.Result.ID] = false // This is a pointer
 			}
 		}
 	}
@@ -715,17 +854,38 @@ func (g *Generator) generateConstructStruct(cons *mir.ConstructStruct) error {
 	structType := "%struct." + sanitizeName(cons.Type)
 	structPtrType := structType + "*"
 
-	// Allocate struct
+	// Calculate struct size
+	sizeReg, err := g.calculateElementSize(cons.Result.Type)
+	if err != nil {
+		return fmt.Errorf("failed to calculate struct size: %w", err)
+	}
+
+	// Allocate struct on heap
+	memReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call i8* @runtime_alloc(i64 %s)", memReg, sizeReg))
+
+	// Cast to struct pointer
 	allocaReg := g.nextReg()
-	g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, structType))
+	g.emit(fmt.Sprintf("  %s = bitcast i8* %s to %s", allocaReg, memReg, structPtrType))
 
 	resultReg := g.nextReg()
 	g.localRegs[cons.Result.ID] = resultReg
 
 	// Store field values (simplified - assume fields are in order)
 	// TODO: Look up field indices from structFields map
-	fieldIndex := 0
+	// Look up field indices from structFields map
+	structName := sanitizeName(cons.Type)
+	fieldMap, ok := g.structFields[structName]
+	if !ok {
+		return fmt.Errorf("struct definition not found for %s", cons.Type)
+	}
+
 	for fieldName, fieldValue := range cons.Fields {
+		fieldIndex, ok := fieldMap[fieldName]
+		if !ok {
+			return fmt.Errorf("field %s not found in struct %s", fieldName, cons.Type)
+		}
+
 		fieldReg, err := g.generateOperand(fieldValue)
 		if err != nil {
 			return err
@@ -758,12 +918,13 @@ func (g *Generator) generateConstructStruct(cons *mir.ConstructStruct) error {
 
 		// Store field value with correct type
 		g.emit(fmt.Sprintf("  store %s %s, %s* %s", fieldType, fieldReg, fieldType, fieldPtrReg))
-
-		fieldIndex++
 	}
 
 	// Load struct pointer
-	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, structPtrType, structPtrType, allocaReg))
+	// Wait, we already have the pointer in resultReg (which is bitcast of memReg)
+	// And since struct type maps to %struct.Name*, the pointer IS the value.
+	g.localRegs[cons.Result.ID] = allocaReg
+	g.localIsValue[cons.Result.ID] = true // The pointer is the value
 
 	return nil
 }
@@ -793,6 +954,7 @@ func (g *Generator) generateConstructArray(cons *mir.ConstructArray) error {
 	// Create the slice with runtime_slice_new
 	resultReg := g.nextReg()
 	g.localRegs[cons.Result.ID] = resultReg
+	g.localIsValue[cons.Result.ID] = true // The pointer is the value
 	g.emit(fmt.Sprintf("  %s = call %%Slice* @runtime_slice_new(i64 %s, i64 %d, i64 %d)",
 		resultReg, elemSize, length, capacity))
 
@@ -854,9 +1016,10 @@ func (g *Generator) generateConstructTuple(cons *mir.ConstructTuple) error {
 
 	// Handle empty tuple (void)
 	if tupleType == "void" {
-		resultReg := g.nextReg()
-		g.localRegs[cons.Result.ID] = resultReg
-		// Empty tuple is void, nothing to do
+		// Empty tuple is void - don't create a register for it
+		// Just mark it as a value (though void can't really be used)
+		g.localRegs[cons.Result.ID] = "undef"
+		g.localIsValue[cons.Result.ID] = true
 		return nil
 	}
 
@@ -865,9 +1028,19 @@ func (g *Generator) generateConstructTuple(cons *mir.ConstructTuple) error {
 	tupleStructType := tupleType
 	tuplePtrType := tupleStructType + "*"
 
-	// Allocate space for the tuple
+	// Calculate tuple size
+	sizeReg, err := g.calculateElementSize(cons.Result.Type)
+	if err != nil {
+		return fmt.Errorf("failed to calculate tuple size: %w", err)
+	}
+
+	// Allocate tuple on heap
+	memReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call i8* @runtime_alloc(i64 %s)", memReg, sizeReg))
+
+	// Cast to tuple pointer
 	allocaReg := g.nextReg()
-	g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, tupleStructType))
+	g.emit(fmt.Sprintf("  %s = bitcast i8* %s to %s", allocaReg, memReg, tuplePtrType))
 
 	// Get tuple element types from the result type
 	tupleTypeObj, ok := cons.Result.Type.(*types.Tuple)
@@ -919,10 +1092,9 @@ func (g *Generator) generateConstructTuple(cons *mir.ConstructTuple) error {
 		// Store element value
 		g.emit(fmt.Sprintf("  store %s %s, %s* %s", elemType, elemReg, elemType, fieldPtrReg))
 	}
-	// Load the tuple value
-	resultReg := g.nextReg()
-	g.localRegs[cons.Result.ID] = resultReg
-	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, tupleStructType, tuplePtrType, allocaReg))
+	// The pointer is the value
+	g.localRegs[cons.Result.ID] = allocaReg
+	g.localIsValue[cons.Result.ID] = true // The pointer is the value
 
 	return nil
 }
@@ -933,12 +1105,23 @@ func (g *Generator) generateConstructEnum(cons *mir.ConstructEnum) error {
 	enumType := "%enum." + sanitizeName(cons.Type)
 	enumPtrType := enumType + "*"
 
-	// Allocate enum
-	allocaReg := g.nextReg()
-	g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, enumType))
+	// Calculate enum size
+	sizeReg, err := g.calculateElementSize(cons.Result.Type)
+	if err != nil {
+		return fmt.Errorf("failed to calculate enum size: %w", err)
+	}
 
-	resultReg := g.nextReg()
-	g.localRegs[cons.Result.ID] = resultReg
+	// Allocate enum on heap
+	memReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call i8* @runtime_alloc(i64 %s)", memReg, sizeReg))
+
+	// Cast to enum pointer
+	allocaReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast i8* %s to %s", allocaReg, memReg, enumPtrType))
+
+	// The pointer is the value
+	g.localRegs[cons.Result.ID] = allocaReg
+	g.localIsValue[cons.Result.ID] = true // The pointer is the value
 
 	// Set discriminant (tag)
 	// Tag is at index 0
@@ -1026,64 +1209,6 @@ func (g *Generator) generateConstructEnum(cons *mir.ConstructEnum) error {
 		}
 	}
 
-	// Load result pointer? No, result is the pointer to the alloca?
-	// Wait, mapType for Enum returns %enum.Name*.
-	// So resultReg should hold the pointer.
-	// But we allocated it into allocaReg.
-	// So resultReg should be allocaReg?
-	// Or we should load the pointer?
-	// No, alloca returns a pointer.
-	// So resultReg = allocaReg is enough?
-	// But generateConstructStruct does:
-	// g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, structPtrType, structPtrType, allocaReg))
-	// This loads the POINTER? No, structPtrType is %struct.Name**.
-	// Wait, alloca returns %struct.Name*.
-	// If result type is %struct.Name*, then allocaReg IS the value.
-	// But generateConstructStruct loads from allocaReg?
-	// Let's check generateConstructStruct again.
-	// structType = %struct.Name
-	// allocaReg = alloca %struct.Name -> returns %struct.Name*
-	// structPtrType = %struct.Name*
-	// load %struct.Name*, %struct.Name** allocaReg?
-	// No, allocaReg is %struct.Name*.
-	// If we load from it, we get %struct.Name (the value).
-	// But MIR values for structs are usually pointers (references).
-	// mapType returns %struct.Name*.
-	// So we want the pointer.
-
-	// If generateConstructStruct loads, maybe it's wrong or I misunderstood.
-	// Let's check generateConstructStruct code again.
-	// g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, structPtrType, structPtrType, allocaReg))
-	// structPtrType is %struct.Name*.
-	// So it loads %struct.Name* from %struct.Name**?
-	// But allocaReg is %struct.Name*.
-	// This implies allocaReg is treated as a pointer to the pointer?
-	// No, alloca T returns T*.
-	// If T = %struct.Name, alloca returns %struct.Name*.
-	// If we want %struct.Name*, we have it in allocaReg.
-
-	// Maybe generateConstructStruct allocates a pointer variable?
-	// allocaReg = alloca %struct.Name*
-	// Then stores the struct pointer?
-	// No, it says "alloca %struct.Name".
-
-	// So generateConstructStruct seems to be loading the struct VALUE into a register?
-	// But mapType returns pointer.
-	// If we load the value, we get %struct.Name.
-	// But we said mapType returns %struct.Name*.
-
-	// I suspect generateConstructStruct might be doing something weird or I am misreading.
-	// Let's assume for Enum, we want the pointer.
-	// So resultReg should be bitcast/move of allocaReg.
-	// Or just use allocaReg.
-	// But we already assigned resultReg to localRegs map.
-	// So we should emit: resultReg = bitcast allocaReg to ...?
-	// Or just not allocate resultReg separately?
-	// But g.nextReg() was called.
-
-	// I'll just use bitcast to move it (or effectively no-op cast).
-	g.emit(fmt.Sprintf("  %s = bitcast %s %s to %s", resultReg, enumPtrType, allocaReg, enumPtrType))
-
 	return nil
 }
 
@@ -1100,6 +1225,9 @@ func (g *Generator) generateDiscriminant(disc *mir.Discriminant) error {
 	if err != nil {
 		return fmt.Errorf("failed to map result type: %w", err)
 	}
+
+	// Check if there's already an alloca for this result
+	allocaReg, hasAlloca := g.localRegs[disc.Result.ID]
 
 	// Allocate result register
 	resultReg := g.nextReg()
@@ -1127,14 +1255,25 @@ func (g *Generator) generateDiscriminant(disc *mir.Discriminant) error {
 	g.emit(fmt.Sprintf("  %s = load i32, i32* %s", discValReg, discPtrReg))
 
 	// Cast to result type if needed (e.g. if result is i64)
+	var finalReg string
 	if resultType != "i32" {
 		// Sign extend or zero extend? Discriminants are usually positive indices.
 		// Let's use zext.
 		g.emit(fmt.Sprintf("  %s = zext i32 %s to %s", resultReg, discValReg, resultType))
-		g.localRegs[disc.Result.ID] = resultReg
+		finalReg = resultReg
 	} else {
 		// Just use the loaded value
-		g.localRegs[disc.Result.ID] = discValReg
+		finalReg = discValReg
+	}
+
+	// If an alloca was pre-allocated, store the value to it
+	if hasAlloca {
+		g.emit(fmt.Sprintf("  store %s %s, %s* %s", resultType, finalReg, resultType, allocaReg))
+		// Keep localIsValue as false (it's an alloca)
+	} else {
+		// No pre-allocated alloca, use as direct value
+		g.localRegs[disc.Result.ID] = finalReg
+		g.localIsValue[disc.Result.ID] = true
 	}
 
 	return nil
@@ -1150,12 +1289,24 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 
 	// Get enum type
 	var enumType *types.Enum
+	var genericArgs []types.Type
+
 	if localRef, ok := access.Target.(*mir.LocalRef); ok {
 		if e, ok := localRef.Local.Type.(*types.Enum); ok {
 			enumType = e
 		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
 			if e, ok := ptr.Elem.(*types.Enum); ok {
 				enumType = e
+			} else if generic, ok := ptr.Elem.(*types.GenericInstance); ok {
+				if e, ok := generic.Base.(*types.Enum); ok {
+					enumType = e
+					genericArgs = generic.Args
+				}
+			}
+		} else if generic, ok := localRef.Local.Type.(*types.GenericInstance); ok {
+			if e, ok := generic.Base.(*types.Enum); ok {
+				enumType = e
+				genericArgs = generic.Args
 			}
 		}
 	}
@@ -1180,9 +1331,24 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 	variant := enumType.Variants[access.VariantIndex]
 	var payloadType string
 
+	// Build substitution map if needed
+	var subst map[string]types.Type
+	if len(genericArgs) > 0 && len(enumType.TypeParams) > 0 {
+		subst = make(map[string]types.Type)
+		for i, param := range enumType.TypeParams {
+			if i < len(genericArgs) {
+				subst[param.Name] = genericArgs[i]
+			}
+		}
+	}
+
 	if len(variant.Params) == 1 {
 		// Single value
-		t, err := g.mapType(variant.Params[0])
+		paramType := variant.Params[0]
+		if subst != nil {
+			paramType = types.Substitute(paramType, subst)
+		}
+		t, err := g.mapType(paramType)
 		if err != nil {
 			return fmt.Errorf("failed to map variant param type: %w", err)
 		}
@@ -1191,7 +1357,11 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 		// Tuple payload
 		var elemTypes []string
 		for _, param := range variant.Params {
-			t, err := g.mapType(param)
+			paramType := param
+			if subst != nil {
+				paramType = types.Substitute(paramType, subst)
+			}
+			t, err := g.mapType(paramType)
 			if err != nil {
 				return fmt.Errorf("failed to map variant param type: %w", err)
 			}
@@ -1204,9 +1374,11 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 	castPayloadPtrReg := g.nextReg()
 	g.emit(fmt.Sprintf("  %s = bitcast [0 x i8]* %s to %s*", castPayloadPtrReg, payloadPtrReg, payloadType))
 
+	// Check if there's already an alloca for this result (from pre-allocation)
+	allocaReg, hasAlloca := g.localRegs[access.Result.ID]
+
 	// Access member
 	resultReg := g.nextReg()
-	g.localRegs[access.Result.ID] = resultReg
 
 	// Result type
 	resultType, err := g.mapType(access.Result.Type)
@@ -1227,6 +1399,17 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 			elemPtrReg, payloadType, payloadType, castPayloadPtrReg, access.MemberIndex))
 
 		g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, elemPtrReg))
+	}
+
+	// If an alloca was pre-allocated, store the value to it
+	// Otherwise, this is a direct value register
+	if hasAlloca {
+		g.emit(fmt.Sprintf("  store %s %s, %s* %s", resultType, resultReg, resultType, allocaReg))
+		// Keep localIsValue as false (it's an alloca)
+	} else {
+		// No pre-allocated alloca, use as direct value
+		g.localRegs[access.Result.ID] = resultReg
+		g.localIsValue[access.Result.ID] = true
 	}
 
 	return nil

@@ -26,18 +26,23 @@ func (g *Generator) generateLocalRef(ref *mir.LocalRef) (string, error) {
 		return "", fmt.Errorf("local %d not found in register map", ref.Local.ID)
 	}
 
-	// If localReg is an alloca pointer, we need to load from it
-	// For now, assume all locals are allocas (stored as pointers)
+	// Check if this local is already a value or if we need to load from alloca
+	if isValue, ok := g.localIsValue[ref.Local.ID]; ok && isValue {
+		// Already a value register, return it directly
+		return localReg, nil
+	}
+
+	// Need to load from alloca pointer
 	localType, err := g.mapType(ref.Local.Type)
 	if err != nil {
 		return "", fmt.Errorf("failed to map local type: %w", err)
 	}
 
-	// Check if this is already a value register or an alloca pointer
-	// Simple heuristic: if it starts with %reg, it might be a value, otherwise it's an alloca
-	// For a proper implementation, we'd track this metadata
+	// Special case: if localType is void, we can't load it
+	if localType == "void" {
+		return "undef", nil
+	}
 
-	// For now, assume we need to load from alloca
 	valueReg := g.nextReg()
 	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", valueReg, localType, localType, localReg))
 
@@ -96,6 +101,10 @@ func (g *Generator) generateLiteral(lit *mir.Literal) (string, error) {
 
 	case nil:
 		// Nil literal
+		if litType == "void" {
+			// Can't create a void pointer, return undef
+			return "undef", nil
+		}
 		reg := g.nextReg()
 		g.emit(fmt.Sprintf("  %s = inttoptr i64 0 to %s", reg, litType))
 		return reg, nil

@@ -118,8 +118,9 @@ func (g *Generator) mapType(typ types.Type) (string, error) {
 		if g.enumTypes[t.Name] {
 			return "%enum." + sanitizeName(t.Name) + "*", nil
 		}
-		// Fallback to struct
-		return "%struct." + sanitizeName(t.Name) + "*", nil
+		// If Ref is nil, it might be a generic parameter or forward declaration.
+		// Use i8* (opaque pointer) to be safe and allow bitcasting.
+		return "i8*", nil
 
 	case *types.GenericInstance:
 		if structType, ok := t.Base.(*types.Struct); ok {
@@ -297,10 +298,7 @@ func (g *Generator) calculateElementSize(elemType types.Type) (string, error) {
 			return "", fmt.Errorf("failed to map element type: %w", err)
 		}
 		// Remove * suffix if present for the base type
-		baseType := llvmType
-		if strings.HasSuffix(baseType, "*") {
-			baseType = strings.TrimSuffix(baseType, "*")
-		}
+		baseType := strings.TrimSuffix(llvmType, "*")
 		// Calculate size: getelementptr to index 1, then ptrtoint
 		gepReg := g.nextReg()
 		g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s* null, i32 1", gepReg, baseType, baseType))

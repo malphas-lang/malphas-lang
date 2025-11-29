@@ -144,8 +144,9 @@ func (l *Lowerer) lowerWhileStmt(stmt *ast.WhileStmt) error {
 	}
 
 	// If body doesn't have a terminator (no break/continue), goto header
-	if loopBody.Terminator == nil {
-		loopBody.Terminator = &Goto{Target: loopHeader}
+	// If current block doesn't have a terminator (no break/continue), goto header
+	if l.currentBlock.Terminator == nil {
+		l.currentBlock.Terminator = &Goto{Target: loopHeader}
 	}
 
 	// Set current block to end
@@ -254,8 +255,9 @@ func (l *Lowerer) lowerForStmt(stmt *ast.ForStmt) error {
 	}
 
 	// If body doesn't have a terminator (no break/continue), goto header
-	if loopBody.Terminator == nil {
-		loopBody.Terminator = &Goto{Target: loopHeader}
+	// If current block doesn't have a terminator (no break/continue), goto header
+	if l.currentBlock.Terminator == nil {
+		l.currentBlock.Terminator = &Goto{Target: loopHeader}
 	}
 
 	// Pop loop context

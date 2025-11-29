@@ -12,7 +12,7 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 	// Set current function
 	g.currentFunc = fn
 	g.localRegs = make(map[int]string)
-	g.blockLabels = make(map[string]string)
+	g.blockLabels = make(map[*mir.BasicBlock]string)
 	g.regCounter = 0
 
 	// Map return type
@@ -58,29 +58,36 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 
 	// Generate all blocks
 	// First, assign labels to all blocks
+	// Generate all blocks
+	// First, assign labels to all blocks
+	usedLabels := make(map[string]bool)
 	for _, block := range fn.Blocks {
 		label := block.Label
 		if label == "" {
 			label = fmt.Sprintf("bb%d", len(g.blockLabels))
 		}
-		// Store original label mapping
-		if block.Label != "" {
-			g.blockLabels[block.Label] = label
+
+		// Ensure uniqueness
+		if usedLabels[label] {
+			originalLabel := label
+			counter := 1
+			for {
+				newLabel := fmt.Sprintf("%s.%d", originalLabel, counter)
+				if !usedLabels[newLabel] {
+					label = newLabel
+					break
+				}
+				counter++
+			}
 		}
-		g.blockLabels[label] = label
+		usedLabels[label] = true
+		g.blockLabels[block] = label
 	}
 
 	// Generate blocks in order
 	for _, block := range fn.Blocks {
-		label := block.Label
-		if label == "" {
-			label = fmt.Sprintf("bb%d", len(g.blockLabels))
-		}
 		// Use mapped label
-		llvmLabel, ok := g.blockLabels[label]
-		if !ok {
-			llvmLabel = label
-		}
+		llvmLabel := g.blockLabels[block]
 
 		// Emit label (use "entry" for entry block, otherwise use the label)
 		if block == fn.Entry {
@@ -105,6 +112,8 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 				g.emit(fmt.Sprintf("  store %s %s, %s* %s", paramType, paramReg, paramType, allocaReg))
 				// Update register mapping to point to alloca
 				g.localRegs[param.ID] = allocaReg
+				// Mark as alloca (not a direct value)
+				g.localIsValue[param.ID] = false
 			}
 
 			// Allocate space for all other locals
@@ -126,6 +135,10 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 				allocaReg := g.nextReg()
 				g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, localType))
 				g.localRegs[local.ID] = allocaReg
+				// Mark as alloca (not a direct value)
+				// This is important because later code might try to mark this as a value
+				// (e.g., AccessVariantPayload), but we want to ensure allocas are treated correctly
+				g.localIsValue[local.ID] = false
 			}
 		} else {
 			g.emit(fmt.Sprintf("%s:", llvmLabel))
