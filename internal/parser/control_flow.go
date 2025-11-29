@@ -111,7 +111,7 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 	for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
 		armStart := p.curTok.Span
 
-		pattern := p.parseExpr()
+		pattern := p.parsePattern()
 		if pattern == nil {
 			return nil
 		}
@@ -196,4 +196,3 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 
 	return ast.NewMatchExpr(subject, arms, exprSpan)
 }
-

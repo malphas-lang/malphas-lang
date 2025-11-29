@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
-	llvmgen "github.com/malphas-lang/malphas-lang/internal/codegen/llvm"
+	llvmcodegen "github.com/malphas-lang/malphas-lang/internal/codegen/llvm"
+	mir2llvm "github.com/malphas-lang/malphas-lang/internal/codegen/mir2llvm"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
 	"github.com/malphas-lang/malphas-lang/internal/lsp"
+	"github.com/malphas-lang/malphas-lang/internal/mir"
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 	"github.com/malphas-lang/malphas-lang/internal/types"
 )
@@ -146,6 +148,9 @@ func optimizeLLVM(irFile string, optimizationLevel string) (string, error) {
 // formatter is a global formatter instance for diagnostics.
 var formatter = diag.NewFormatter()
 
+// Global flag for codegen backend selection
+var useASTBackend = flag.Bool("use-ast", false, "Use AST-to-LLVM codegen (fallback) instead of MIR-to-LLVM")
+
 // formatDiagnostic formats and prints a diagnostic to stderr with Rust-style formatting.
 func formatDiagnostic(d diag.Diagnostic) {
 	// Ensure primary span is set if we have LabeledSpans but no primary Span
@@ -175,7 +180,9 @@ func debugLog(format string, a ...interface{}) {
 func main() {
 	debugLog("Malphas compiler started (pre-flags)\n")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: malphas <command> [arguments]\n")
+		fmt.Fprintf(os.Stderr, "Usage: malphas [flags] <command> [arguments]\n")
+		fmt.Fprintf(os.Stderr, "\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "  -use-ast        Use AST-to-LLVM codegen (fallback) instead of MIR-to-LLVM\n")
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  build <file>    Compile a Malphas source file\n")
 		fmt.Fprintf(os.Stderr, "  run <file>      Compile and run a Malphas source file\n")
@@ -299,27 +306,36 @@ func compileToTemp(filename string) (string, error) {
 		return "", fmt.Errorf("type check failed")
 	}
 
-	// Compile to LLVM IR
+	// Compile to LLVM IR (via MIR)
 	return compileToLLVM(file, checker)
 }
 
 // compileToLLVM generates LLVM IR and returns the path to the .ll file.
+// Uses either MIR as an intermediate representation (default) or direct AST-to-LLVM (fallback).
 func compileToLLVM(file *ast.File, checker *types.Checker) (string, error) {
-	// Create LLVM generator
-	llvmGen := llvmgen.NewGenerator()
-	llvmGen.SetTypeInfo(checker.ExprTypes)
+	var llvmIR string
+	var err error
 
-	// Extract loaded modules and pass to generator
-	moduleFiles := make(map[string]*ast.File)
-	for name, moduleInfo := range checker.Modules {
-		moduleFiles[name] = moduleInfo.File
-	}
-	llvmGen.SetModules(moduleFiles)
+	if *useASTBackend {
+		// Direct AST-to-LLVM codegen (fallback path)
+		debugLog("Using AST-to-LLVM codegen (fallback)\n")
+		llvmGen := llvmcodegen.NewGenerator()
+		llvmGen.SetTypeInfo(checker.ExprTypes)
+		llvmIR, err = llvmGen.Generate(file)
+		if err != nil {
+			// Report LLVM codegen errors
+			if len(llvmGen.Errors) > 0 {
+				for i, diagErr := range llvmGen.Errors {
+					if i > 0 {
+						fmt.Fprintf(os.Stderr, "\n")
+					}
+					formatDiagnostic(diagErr)
+				}
+			}
+			return "", fmt.Errorf("AST-to-LLVM codegen error: %v", err)
+		}
 
-	// Generate LLVM IR
-	llvmIR, err := llvmGen.Generate(file)
-	if err != nil {
-		// Report LLVM codegen errors
+		// Check for errors even if Generate didn't return an error
 		if len(llvmGen.Errors) > 0 {
 			for i, diagErr := range llvmGen.Errors {
 				if i > 0 {
@@ -327,19 +343,50 @@ func compileToLLVM(file *ast.File, checker *types.Checker) (string, error) {
 				}
 				formatDiagnostic(diagErr)
 			}
+			return "", fmt.Errorf("AST-to-LLVM codegen failed with %d error(s)", len(llvmGen.Errors))
 		}
-		return "", fmt.Errorf("LLVM codegen error: %v", err)
-	}
+	} else {
+		// MIR-to-LLVM codegen (default path)
+		debugLog("Using MIR-to-LLVM codegen (default)\n")
+		// Step 1: Lower AST to MIR
+		lowerer := mir.NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+		mirModule, err := lowerer.LowerModule(file)
+		if err != nil {
+			return "", fmt.Errorf("MIR lowering error: %v", err)
+		}
 
-	// Check for errors even if Generate didn't return an error
-	if len(llvmGen.Errors) > 0 {
-		for i, diagErr := range llvmGen.Errors {
-			if i > 0 {
-				fmt.Fprintf(os.Stderr, "\n")
-			}
-			formatDiagnostic(diagErr)
+		// Step 2: Monomorphize generic functions
+		monomorphizer := mir.NewMonomorphizer(mirModule)
+		if err := monomorphizer.Monomorphize(); err != nil {
+			return "", fmt.Errorf("MIR monomorphization error: %v", err)
 		}
-		return "", fmt.Errorf("LLVM codegen failed with %d error(s)", len(llvmGen.Errors))
+
+		// Step 3: Generate LLVM IR from MIR
+		llvmGen := mir2llvm.NewGenerator()
+		llvmIR, err = llvmGen.Generate(mirModule)
+		if err != nil {
+			// Report LLVM codegen errors
+			if len(llvmGen.Errors) > 0 {
+				for i, diagErr := range llvmGen.Errors {
+					if i > 0 {
+						fmt.Fprintf(os.Stderr, "\n")
+					}
+					formatDiagnostic(diagErr)
+				}
+			}
+			return "", fmt.Errorf("MIR-to-LLVM codegen error: %v", err)
+		}
+
+		// Check for errors even if Generate didn't return an error
+		if len(llvmGen.Errors) > 0 {
+			for i, diagErr := range llvmGen.Errors {
+				if i > 0 {
+					fmt.Fprintf(os.Stderr, "\n")
+				}
+				formatDiagnostic(diagErr)
+			}
+			return "", fmt.Errorf("MIR-to-LLVM codegen failed with %d error(s)", len(llvmGen.Errors))
+		}
 	}
 
 	// Create temp file for LLVM IR

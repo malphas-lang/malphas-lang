@@ -174,3 +174,46 @@ func bind(name string, t Type, subst map[string]Type) error {
 	subst[name] = t
 	return nil
 }
+
+// CollectFreeTypeVars returns a set of type parameter names that appear in the type.
+func CollectFreeTypeVars(t Type) map[string]bool {
+	vars := make(map[string]bool)
+	collectFreeTypeVars(t, vars)
+	return vars
+}
+
+func collectFreeTypeVars(t Type, vars map[string]bool) {
+	if t == nil {
+		return
+	}
+	switch t := t.(type) {
+	case *TypeParam:
+		vars[t.Name] = true
+	case *GenericInstance:
+		for _, arg := range t.Args {
+			collectFreeTypeVars(arg, vars)
+		}
+	case *Function:
+		for _, p := range t.Params {
+			collectFreeTypeVars(p, vars)
+		}
+		collectFreeTypeVars(t.Return, vars)
+	case *Tuple:
+		for _, e := range t.Elements {
+			collectFreeTypeVars(e, vars)
+		}
+	case *Slice:
+		collectFreeTypeVars(t.Elem, vars)
+	case *Array:
+		collectFreeTypeVars(t.Elem, vars)
+	case *Map:
+		collectFreeTypeVars(t.Key, vars)
+		collectFreeTypeVars(t.Value, vars)
+	case *Pointer:
+		collectFreeTypeVars(t.Elem, vars)
+	case *Reference:
+		collectFreeTypeVars(t.Elem, vars)
+	case *Optional:
+		collectFreeTypeVars(t.Elem, vars)
+	}
+}

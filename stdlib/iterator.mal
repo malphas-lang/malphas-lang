@@ -1,0 +1,87 @@
+// Iterator trait for Malphas standard library
+// This defines the protocol for iteration
+
+pub trait Iterator {
+    type Item;  // Associated type for the item being iterated
+    
+    fn has_next(self) -> bool;
+    fn next(mut self) -> Option[Self::Item];
+}
+
+// Range iterator implementation
+pub struct RangeIterator {
+    current: int,
+    end: int,
+}
+
+impl RangeIterator {
+    pub fn new(start: int, end: int) -> RangeIterator {
+        RangeIterator { current: start, end: end }
+    }
+}
+
+impl Iterator for RangeIterator {
+    type Item = int;
+    
+    fn has_next(self) -> bool {
+        self.current < self.end
+    }
+    
+    fn next(mut self) -> Option[int] {
+        if self.current < self.end {
+            let value = self.current;
+            self.current = self.current + 1;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+// Slice iterator implementation
+pub struct SliceIterator[T] {
+    slice: [T],
+    index: int,
+}
+
+impl[T] SliceIterator[T] {
+    pub fn new(slice: [T]) -> SliceIterator[T] {
+        SliceIterator { slice: slice, index: 0 }
+    }
+}
+
+impl[T] Iterator for SliceIterator[T] {
+    type Item = T;
+    
+    fn has_next(self) -> bool {
+        self.index < self.slice.len()
+    }
+    
+    fn next(mut self) -> Option[T] {
+        if self.index < self.slice.len() {
+            let value = self.slice[self.index];
+            self.index = self.index + 1;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+// Helper trait to convert collections to iterators
+pub trait IntoIterator {
+    type Item;
+    type IntoIter: Iterator;
+    
+    fn into_iter(self) -> Self::IntoIter;
+}
+
+// Implement IntoIterator for slices
+impl[T] IntoIterator for [T] {
+    type Item = T;
+    type IntoIter = SliceIterator[T];
+    
+    fn into_iter(self) -> SliceIterator[T] {
+        SliceIterator::new(self)
+    }
+}

@@ -65,6 +65,9 @@ func (c *Checker) collectDecls(file *ast.File) {
 						returnType = tpRef
 					}
 				}
+			} else {
+				// If no return type specified, default to void (like Rust/Go main)
+				returnType = TypeVoid
 			}
 
 			c.GlobalScope.Insert(d.Name.Name, &Symbol{

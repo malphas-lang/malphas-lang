@@ -1,0 +1,6 @@
+package test;
+
+pub fn main() -> int {
+    let result = 2 + 3;
+    result
+}

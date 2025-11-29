@@ -308,6 +308,51 @@ fn main() {
 	}
 }
 
+func TestParseMatchExprWithPatterns(t *testing.T) {
+	const src = `
+package foo;
+
+fn main() {
+	let x = match y {
+		1 => 10,
+		2 => 20,
+		_ => 0,
+	};
+}
+`
+
+	file, errs := parseFile(t, src)
+	assertNoErrors(t, errs)
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	letStmt := fn.Body.Stmts[0].(*ast.LetStmt)
+	matchExpr, ok := letStmt.Value.(*ast.MatchExpr)
+	if !ok {
+		t.Fatalf("expected match expression, got %T", letStmt.Value)
+	}
+
+	if len(matchExpr.Arms) != 3 {
+		t.Fatalf("expected 3 arms, got %d", len(matchExpr.Arms))
+	}
+
+	// Check first arm: 1 => 10
+	arm0 := matchExpr.Arms[0]
+	lit0, ok := arm0.Pattern.(*ast.LiteralPattern)
+	if !ok {
+		t.Fatalf("expected literal pattern, got %T", arm0.Pattern)
+	}
+	intLit0, ok := lit0.Value.(*ast.IntegerLit)
+	if !ok || intLit0.Text != "1" {
+		t.Errorf("expected pattern '1', got %v", lit0.Value)
+	}
+
+	// Check wildcard arm: _ => 0
+	arm2 := matchExpr.Arms[2]
+	if _, ok := arm2.Pattern.(*ast.WildcardPattern); !ok {
+		t.Errorf("expected wildcard pattern, got %T", arm2.Pattern)
+	}
+}
+
 func TestParseLetStmtWithPrecedence(t *testing.T) {
 	const src = `
 package foo;
@@ -2666,8 +2711,12 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 
 		firstArm := matchExpr.Arms[0]
-		if _, ok := firstArm.Pattern.(*ast.IntegerLit); !ok {
-			t.Fatalf("expected first arm pattern type *ast.IntegerLit, got %T", firstArm.Pattern)
+		lit, ok := firstArm.Pattern.(*ast.LiteralPattern)
+		if !ok {
+			t.Fatalf("expected first arm pattern type *ast.LiteralPattern, got %T", firstArm.Pattern)
+		}
+		if _, ok := lit.Value.(*ast.IntegerLit); !ok {
+			t.Fatalf("expected first arm pattern value type *ast.IntegerLit, got %T", lit.Value)
 		}
 
 		if len(firstArm.Body.Stmts) != 0 {
@@ -2683,8 +2732,12 @@ func TestParseBlockTailExpressions(t *testing.T) {
 		}
 
 		secondArm := matchExpr.Arms[1]
-		if _, ok := secondArm.Pattern.(*ast.Ident); !ok {
-			t.Fatalf("expected second arm pattern type *ast.Ident, got %T", secondArm.Pattern)
+		varPat, ok := secondArm.Pattern.(*ast.VarPattern)
+		if !ok {
+			t.Fatalf("expected second arm pattern type *ast.VarPattern, got %T", secondArm.Pattern)
+		}
+		if varPat.Name.Name != "other" {
+			t.Errorf("expected pattern variable 'other', got %s", varPat.Name.Name)
 		}
 
 		if secondArm.Body.Tail == nil {
@@ -3347,18 +3400,25 @@ func TestParseMatchExpr(t *testing.T) {
 			t.Fatalf("expected 2 match arms, got %d", len(matchExpr.Arms))
 		}
 
-		firstPattern, ok := matchExpr.Arms[0].Pattern.(*ast.IntegerLit)
-		if !ok || firstPattern.Text != "1" {
-			t.Fatalf("expected first arm integer literal pattern '1', got %#v", matchExpr.Arms[0].Pattern)
+		firstPattern, ok := matchExpr.Arms[0].Pattern.(*ast.LiteralPattern)
+		if !ok {
+			t.Fatalf("expected first arm pattern type *ast.LiteralPattern, got %T", matchExpr.Arms[0].Pattern)
+		}
+		intLit, ok := firstPattern.Value.(*ast.IntegerLit)
+		if !ok || intLit.Text != "1" {
+			t.Fatalf("expected first arm integer literal pattern '1', got %#v", firstPattern.Value)
 		}
 
 		if matchExpr.Arms[0].Body.Tail == nil {
 			t.Fatalf("expected first arm body tail expression, got nil")
 		}
 
-		secondPattern, ok := matchExpr.Arms[1].Pattern.(*ast.Ident)
-		if !ok || secondPattern.Name != "other" {
-			t.Fatalf("expected second arm identifier pattern 'other', got %#v", matchExpr.Arms[1].Pattern)
+		secondPattern, ok := matchExpr.Arms[1].Pattern.(*ast.VarPattern)
+		if !ok {
+			t.Fatalf("expected second arm pattern type *ast.VarPattern, got %T", matchExpr.Arms[1].Pattern)
+		}
+		if secondPattern.Name.Name != "other" {
+			t.Fatalf("expected second arm identifier pattern 'other', got %#v", secondPattern.Name)
 		}
 
 		if matchExpr.Arms[1].Body.Tail == nil {

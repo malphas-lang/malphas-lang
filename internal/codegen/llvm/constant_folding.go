@@ -18,7 +18,6 @@ type constantValue struct {
 	intVal   int64
 	floatVal float64
 	boolVal  bool
-	strVal   string
 }
 
 // isConstant checks if an expression is a compile-time constant.
@@ -414,4 +413,3 @@ func (g *LLVMGenerator) foldConstant(expr mast.Expr) (string, bool) {
 
 	return llvmVal, true
 }
-

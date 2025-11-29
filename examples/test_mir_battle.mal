@@ -1,0 +1,67 @@
+package main;
+
+// Test basic arithmetic functions
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn multiply(a: int, b: int) -> int {
+    return a * b;
+}
+
+// Test control flow with recursion
+fn factorial(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+fn fibonacci(n: int) -> int {
+    if n == 0 {
+        return 0;
+    } else if n == 1 {
+        return 1;
+    } else {
+        return fibonacci(n - 1) + fibonacci(n - 2);
+    }
+}
+
+// Test generic functions
+fn identity[T](x: T) -> T {
+    return x;
+}
+
+// Test complex expressions
+fn complex_expr(a: int, b: int, c: int) -> int {
+    return (a + b) * c - (a * b) + (c / 2) * (a - b);
+}
+
+// Main function
+fn main() {
+    // Test basic functions
+    let sum = add(10, 20);
+    let product = multiply(5, 6);
+    
+    // Test control flow
+    let fact5 = factorial(5);
+    let fib10 = fibonacci(10);
+    
+    // Test generic functions
+    let id1 = identity(42);
+    let id2 = identity(100);
+    
+    // Test complex expressions
+    let complex = complex_expr(1, 2, 3);
+    
+    // Use the results so they're not optimized away
+    println(sum);
+    println(product);
+    println(fact5);
+    println(fib10);
+    println(id1);
+    println(id2);
+    println(complex);
+}
+

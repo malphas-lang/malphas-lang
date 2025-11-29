@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/malphas-lang/malphas-lang/internal/ast"
 	mast "github.com/malphas-lang/malphas-lang/internal/ast"
 	"github.com/malphas-lang/malphas-lang/internal/diag"
 	mlexer "github.com/malphas-lang/malphas-lang/internal/lexer"
@@ -369,7 +368,7 @@ func (g *LLVMGenerator) genDecl(decl mast.Decl) error {
 	case *mast.ImplDecl:
 		// Implementation methods are handled as functions
 		return g.genImpl(d)
-	case *ast.TraitDecl:
+	case *mast.TraitDecl:
 		// Traits are handled separately (vtable generation)
 		return nil
 	default:

@@ -951,7 +951,7 @@ func (*SelectStmt) stmtNode() {}
 
 // MatchArm represents a single match arm.
 type MatchArm struct {
-	Pattern Expr
+	Pattern Pattern
 	Body    *BlockExpr
 	span    lexer.Span
 }
@@ -963,7 +963,7 @@ func (a *MatchArm) Span() lexer.Span { return a.span }
 func (a *MatchArm) SetSpan(span lexer.Span) { a.span = span }
 
 // NewMatchArm constructs a match arm node.
-func NewMatchArm(pattern Expr, body *BlockExpr, span lexer.Span) *MatchArm {
+func NewMatchArm(pattern Pattern, body *BlockExpr, span lexer.Span) *MatchArm {
 	return &MatchArm{
 		Pattern: pattern,
 		Body:    body,

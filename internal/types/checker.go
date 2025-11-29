@@ -28,6 +28,8 @@ type Checker struct {
 	LoadingModules map[string]bool
 	// ExprTypes maps AST nodes to their resolved types
 	ExprTypes map[ast.Node]Type
+	// CallTypeArgs maps CallExpr nodes to their inferred/explicit type arguments
+	CallTypeArgs map[*ast.CallExpr][]Type
 }
 
 // NewChecker creates a new type checker.
@@ -40,6 +42,7 @@ func NewChecker() *Checker {
 		Modules:        make(map[string]*ModuleInfo),
 		LoadingModules: make(map[string]bool),
 		ExprTypes:      make(map[ast.Node]Type),
+		CallTypeArgs:   make(map[*ast.CallExpr][]Type),
 	}
 
 	// Add built-in types
@@ -153,5 +156,3 @@ func (c *Checker) CheckWithFilename(file *ast.File, filename string) {
 		c.CurrentFile = oldFile
 	}
 }
-
-

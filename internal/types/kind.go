@@ -145,7 +145,7 @@ func kindFromTypeParams(n int) Kind {
 		return KindStar
 	}
 
-	result := KindStar
+	var result Kind = KindStar
 	for i := 0; i < n; i++ {
 		result = &Arrow{From: KindStar, To: result}
 	}

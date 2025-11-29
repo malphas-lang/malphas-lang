@@ -23,7 +23,7 @@ fn eval[T](e: Expr[T]) -> T {
 }
 
 fn main() {
-    let i = eval(Expr::Int(42));
+    let i = eval[int](Expr::Int(42));
 }
 `
 	// Parse

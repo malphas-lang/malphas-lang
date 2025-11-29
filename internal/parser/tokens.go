@@ -57,4 +57,3 @@ func (p *Parser) expect(tt lexer.TokenType) bool {
 	p.reportError(msg, p.peekTok.Span)
 	return false
 }
-

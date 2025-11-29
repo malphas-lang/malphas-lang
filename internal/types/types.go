@@ -65,6 +65,9 @@ type Struct struct {
 	Name       string
 	TypeParams []TypeParam
 	Fields     []Field
+	// fieldMap provides O(1) lookup of field name -> field index
+	// It's built lazily on first access via ensureFieldMap()
+	fieldMap map[string]int
 }
 
 type Field struct {
@@ -74,6 +77,37 @@ type Field struct {
 
 func (s *Struct) String() string { return s.Name }
 func (s *Struct) IsType()        {}
+
+// ensureFieldMap builds the field map if it hasn't been built yet.
+// This provides O(1) field lookups instead of O(n) linear search.
+func (s *Struct) ensureFieldMap() {
+	if s.fieldMap == nil {
+		s.fieldMap = make(map[string]int, len(s.Fields))
+		for i, f := range s.Fields {
+			s.fieldMap[f.Name] = i
+		}
+	}
+}
+
+// FieldIndex returns the index of a field by name, or -1 if not found.
+// This uses the field map for O(1) lookup.
+func (s *Struct) FieldIndex(fieldName string) int {
+	s.ensureFieldMap()
+	if idx, ok := s.fieldMap[fieldName]; ok {
+		return idx
+	}
+	return -1
+}
+
+// FieldByName returns the field with the given name, or nil if not found.
+// This uses the field map for O(1) lookup.
+func (s *Struct) FieldByName(fieldName string) *Field {
+	idx := s.FieldIndex(fieldName)
+	if idx < 0 || idx >= len(s.Fields) {
+		return nil
+	}
+	return &s.Fields[idx]
+}
 
 // Existential represents an existential type (exists a. T).
 type Existential struct {

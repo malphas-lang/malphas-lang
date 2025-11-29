@@ -1,0 +1,31 @@
+package test;
+
+pub fn test_float_ops() -> float {
+    let x = 3.14;
+    let y = 2.0;
+    
+    let sum = x + y;      // Should emit: fadd double
+    let diff = x - y;     // Should emit: fsub double
+    let prod = x * y;     // Should emit: fmul double
+    let quot = x / y;     // Should emit: fdiv double
+    
+    quot
+}
+
+pub fn test_int_ops() -> int {
+    let a = 10;
+    let b = 3;
+    
+    let sum = a + b;      // Should emit: add i64
+    let diff = a - b;     // Should emit: sub i64
+    let prod = a * b;     // Should emit: mul i64
+    let quot = a / b;     // Should emit: sdiv i64
+    
+    quot
+}
+
+pub fn main() -> int {
+    let float_result = test_float_ops();
+    let int_result = test_int_ops();
+    int_result
+}
