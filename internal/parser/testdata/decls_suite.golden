@@ -18,13 +18,17 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         },
         {
           "Name": {
             "Name": "U"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
       "Params": [
@@ -67,7 +71,9 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
       "Where": null,
@@ -104,7 +110,9 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
       "Where": null,
@@ -141,7 +149,9 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
       "Where": null,
@@ -184,10 +194,11 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
-      "Where": null,
       "Methods": [
         {
           "Pub": false,
@@ -220,9 +231,11 @@
             "Tail": null
           }
         }
-      ]
+      ],
+      "AssociatedTypes": []
     },
     {
+      "Pub": false,
       "TypeParams": null,
       "Trait": {
         "Name": {
@@ -243,7 +256,6 @@
           }
         ]
       },
-      "Where": null,
       "Methods": [
         {
           "Pub": false,
@@ -285,7 +297,9 @@
             "Tail": null
           }
         }
-      ]
+      ],
+      "TypeAssignments": [],
+      "Where": null
     }
   ]
 }

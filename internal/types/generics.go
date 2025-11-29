@@ -103,6 +103,57 @@ func Substitute(t Type, subst map[string]Type) Type {
 			return &Channel{Elem: newElem, Dir: t.Dir}
 		}
 		return t
+	case *Slice:
+		newElem := Substitute(t.Elem, subst)
+		if newElem != t.Elem {
+			return &Slice{Elem: newElem}
+		}
+		return t
+	case *Array:
+		newElem := Substitute(t.Elem, subst)
+		if newElem != t.Elem {
+			return &Array{Elem: newElem, Len: t.Len}
+		}
+		return t
+	case *Map:
+		newKey := Substitute(t.Key, subst)
+		newValue := Substitute(t.Value, subst)
+		if newKey != t.Key || newValue != t.Value {
+			return &Map{Key: newKey, Value: newValue}
+		}
+		return t
+	case *Pointer:
+		newElem := Substitute(t.Elem, subst)
+		if newElem != t.Elem {
+			return &Pointer{Elem: newElem}
+		}
+		return t
+	case *Reference:
+		newElem := Substitute(t.Elem, subst)
+		if newElem != t.Elem {
+			return &Reference{Elem: newElem, Mutable: t.Mutable}
+		}
+		return t
+	case *Optional:
+		newElem := Substitute(t.Elem, subst)
+		if newElem != t.Elem {
+			return &Optional{Elem: newElem}
+		}
+		return t
+	case *Tuple:
+		var newElements []Type
+		changed := false
+		for _, elem := range t.Elements {
+			newElem := Substitute(elem, subst)
+			if newElem != elem {
+				changed = true
+			}
+			newElements = append(newElements, newElem)
+		}
+		if !changed {
+			return t
+		}
+		return &Tuple{Elements: newElements}
 	default:
 		return t
 	}
@@ -134,9 +185,12 @@ func unify(t1, t2 Type, subst map[string]Type) error {
 	switch t1 := t1.(type) {
 	case *GenericInstance:
 		if t2, ok := t2.(*GenericInstance); ok {
-			// Check if bases are the same.
-			// For now, we assume pointer equality for Struct/Enum definitions.
-			if t1.Base != t2.Base {
+			// Normalize bases to handle Named wrappers
+			base1 := normalizeBase(t1.Base)
+			base2 := normalizeBase(t2.Base)
+
+			// Check if bases are the same using structural equality
+			if !sameBase(base1, base2) {
 				return fmt.Errorf("cannot unify %s with %s", t1, t2)
 			}
 			if len(t1.Args) != len(t2.Args) {
@@ -165,14 +219,117 @@ func unify(t1, t2 Type, subst map[string]Type) error {
 			}
 			return unify(t1.Return, t2.Return, subst)
 		}
+	case *Slice:
+		if t2, ok := t2.(*Slice); ok {
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+		// Allow unifying Slice with Array (e.g. []T with [int; 3] -> T=int)
+		if t2, ok := t2.(*Array); ok {
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+	case *Array:
+		if t2, ok := t2.(*Array); ok {
+			// Arrays must have same length to unify exactly
+			// But for type inference purposes, maybe we just care about elements?
+			// Strict unification usually requires same length.
+			if t1.Len != t2.Len {
+				return fmt.Errorf("array length mismatch: %d vs %d", t1.Len, t2.Len)
+			}
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+		// Allow unifying Array with Slice (symmetric to above)
+		if t2, ok := t2.(*Slice); ok {
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+	case *Map:
+		if t2, ok := t2.(*Map); ok {
+			if err := unify(t1.Key, t2.Key, subst); err != nil {
+				return err
+			}
+			return unify(t1.Value, t2.Value, subst)
+		}
+	case *Pointer:
+		if t2, ok := t2.(*Pointer); ok {
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+	case *Reference:
+		if t2, ok := t2.(*Reference); ok {
+			if t1.Mutable != t2.Mutable {
+				return fmt.Errorf("reference mutability mismatch: %s vs %s", t1, t2)
+			}
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+	case *Optional:
+		if t2, ok := t2.(*Optional); ok {
+			return unify(t1.Elem, t2.Elem, subst)
+		}
+	case *Tuple:
+		if t2, ok := t2.(*Tuple); ok {
+			if len(t1.Elements) != len(t2.Elements) {
+				return fmt.Errorf("tuple arity mismatch: %s vs %s", t1, t2)
+			}
+			for i := range t1.Elements {
+				if err := unify(t1.Elements[i], t2.Elements[i], subst); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 	}
 	return fmt.Errorf("cannot unify %s with %s", t1, t2)
 }
 
 func bind(name string, t Type, subst map[string]Type) error {
-	// TODO: Occurs check to prevent infinite types (e.g. T = Box[T])
+	// Occurs check: prevent infinite types (e.g. T = Box[T])
+	if occursIn(name, t) {
+		return fmt.Errorf("occurs check: cannot bind %s to %s (would create infinite type)", name, t)
+	}
 	subst[name] = t
 	return nil
+}
+
+// occursIn checks if a type variable name appears in type t.
+// This prevents creating infinite types during unification.
+func occursIn(name string, t Type) bool {
+	vars := CollectFreeTypeVars(t)
+	return vars[name]
+}
+
+// normalizeBase unwraps Named types to get the underlying type.
+// This is used during unification to handle cases where GenericInstance
+// bases may be wrapped in Named types.
+func normalizeBase(t Type) Type {
+	if named, ok := t.(*Named); ok {
+		if named.Ref != nil {
+			return named.Ref
+		}
+	}
+	return t
+}
+
+// sameBase checks if two types represent the same base type,
+// handling structural equality for Struct and Enum types.
+func sameBase(t1, t2 Type) bool {
+	// Pointer equality check first
+	if t1 == t2 {
+		return true
+	}
+
+	// For Struct types, compare by name
+	if s1, ok := t1.(*Struct); ok {
+		if s2, ok := t2.(*Struct); ok {
+			return s1.Name == s2.Name
+		}
+	}
+
+	// For Enum types, compare by name
+	if e1, ok := t1.(*Enum); ok {
+		if e2, ok := t2.(*Enum); ok {
+			return e1.Name == e2.Name
+		}
+	}
+
+	return false
 }
 
 // CollectFreeTypeVars returns a set of type parameter names that appear in the type.

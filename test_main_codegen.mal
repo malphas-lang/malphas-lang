@@ -1,0 +1,6 @@
+fn main() {
+    // This function implicitly returns (), but the compiler should generate
+    // code that returns 0 (exit code success) to the OS.
+    println("Hello from main!");
+    return;
+}

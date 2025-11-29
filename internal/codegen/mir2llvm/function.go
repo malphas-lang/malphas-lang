@@ -21,6 +21,11 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 		return fmt.Errorf("failed to map return type: %w", err)
 	}
 
+	// Special case for main: always return i32 (exit code)
+	if fn.Name == "main" {
+		retLLVM = "i32"
+	}
+
 	// Build parameter list
 	var paramParts []string
 	for i, param := range fn.Params {
@@ -111,6 +116,10 @@ func (g *Generator) generateFunction(fn *mir.Function) error {
 				localType, err := g.mapType(local.Type)
 				if err != nil {
 					// Skip locals with unmappable types (might be unused or special)
+					continue
+				}
+
+				if localType == "void" {
 					continue
 				}
 

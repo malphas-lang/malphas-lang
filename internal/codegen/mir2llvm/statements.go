@@ -29,8 +29,12 @@ func (g *Generator) generateStatement(stmt mir.Statement) error {
 		return g.generateConstructArray(s)
 	case *mir.ConstructTuple:
 		return g.generateConstructTuple(s)
+	case *mir.ConstructEnum:
+		return g.generateConstructEnum(s)
 	case *mir.Discriminant:
 		return g.generateDiscriminant(s)
+	case *mir.AccessVariantPayload:
+		return g.generateAccessVariantPayload(s)
 	default:
 		return fmt.Errorf("unsupported statement type: %T", stmt)
 	}
@@ -923,6 +927,166 @@ func (g *Generator) generateConstructTuple(cons *mir.ConstructTuple) error {
 	return nil
 }
 
+// generateConstructEnum generates LLVM IR for enum construction
+func (g *Generator) generateConstructEnum(cons *mir.ConstructEnum) error {
+	// Get enum type
+	enumType := "%enum." + sanitizeName(cons.Type)
+	enumPtrType := enumType + "*"
+
+	// Allocate enum
+	allocaReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, enumType))
+
+	resultReg := g.nextReg()
+	g.localRegs[cons.Result.ID] = resultReg
+
+	// Set discriminant (tag)
+	// Tag is at index 0
+	tagPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 0",
+		tagPtrReg, enumType, enumPtrType, allocaReg))
+
+	g.emit(fmt.Sprintf("  store i32 %d, i32* %s", cons.VariantIndex, tagPtrReg))
+
+	// Set payload if any
+	if len(cons.Values) > 0 {
+		// Get payload pointer (index 1)
+		payloadPtrReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 1",
+			payloadPtrReg, enumType, enumPtrType, allocaReg))
+
+		// Determine payload type
+		var payloadType string
+		if len(cons.Values) == 1 {
+			// Single value
+			var err error
+			if lit, ok := cons.Values[0].(*mir.Literal); ok {
+				payloadType, err = g.mapType(lit.Type)
+			} else if localRef, ok := cons.Values[0].(*mir.LocalRef); ok {
+				payloadType, err = g.mapType(localRef.Local.Type)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to determine payload type: %w", err)
+			}
+		} else {
+			// Tuple payload
+			var elemTypes []string
+			for _, val := range cons.Values {
+				var t string
+				var err error
+				if lit, ok := val.(*mir.Literal); ok {
+					t, err = g.mapType(lit.Type)
+				} else if localRef, ok := val.(*mir.LocalRef); ok {
+					t, err = g.mapType(localRef.Local.Type)
+				}
+				if err != nil {
+					return fmt.Errorf("failed to determine payload element type: %w", err)
+				}
+				elemTypes = append(elemTypes, t)
+			}
+			payloadType = "{" + strings.Join(elemTypes, ", ") + "}"
+		}
+
+		// Bitcast payload pointer to correct type
+		castPayloadPtrReg := g.nextReg()
+		// Note: payload field in enum struct is usually [0 x i8] or similar opaque type
+		// We cast it to the actual payload type pointer
+		g.emit(fmt.Sprintf("  %s = bitcast [0 x i8]* %s to %s*", castPayloadPtrReg, payloadPtrReg, payloadType))
+
+		// Store values
+		if len(cons.Values) == 1 {
+			valReg, err := g.generateOperand(cons.Values[0])
+			if err != nil {
+				return err
+			}
+			g.emit(fmt.Sprintf("  store %s %s, %s* %s", payloadType, valReg, payloadType, castPayloadPtrReg))
+		} else {
+			// Store tuple elements
+			for i, val := range cons.Values {
+				valReg, err := g.generateOperand(val)
+				if err != nil {
+					return err
+				}
+
+				// Get element pointer
+				elemPtrReg := g.nextReg()
+				g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s* %s, i32 0, i32 %d",
+					elemPtrReg, payloadType, payloadType, castPayloadPtrReg, i))
+
+				// Get element type
+				var elemType string
+				if lit, ok := val.(*mir.Literal); ok {
+					elemType, _ = g.mapType(lit.Type)
+				} else if localRef, ok := val.(*mir.LocalRef); ok {
+					elemType, _ = g.mapType(localRef.Local.Type)
+				}
+
+				g.emit(fmt.Sprintf("  store %s %s, %s* %s", elemType, valReg, elemType, elemPtrReg))
+			}
+		}
+	}
+
+	// Load result pointer? No, result is the pointer to the alloca?
+	// Wait, mapType for Enum returns %enum.Name*.
+	// So resultReg should hold the pointer.
+	// But we allocated it into allocaReg.
+	// So resultReg should be allocaReg?
+	// Or we should load the pointer?
+	// No, alloca returns a pointer.
+	// So resultReg = allocaReg is enough?
+	// But generateConstructStruct does:
+	// g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, structPtrType, structPtrType, allocaReg))
+	// This loads the POINTER? No, structPtrType is %struct.Name**.
+	// Wait, alloca returns %struct.Name*.
+	// If result type is %struct.Name*, then allocaReg IS the value.
+	// But generateConstructStruct loads from allocaReg?
+	// Let's check generateConstructStruct again.
+	// structType = %struct.Name
+	// allocaReg = alloca %struct.Name -> returns %struct.Name*
+	// structPtrType = %struct.Name*
+	// load %struct.Name*, %struct.Name** allocaReg?
+	// No, allocaReg is %struct.Name*.
+	// If we load from it, we get %struct.Name (the value).
+	// But MIR values for structs are usually pointers (references).
+	// mapType returns %struct.Name*.
+	// So we want the pointer.
+
+	// If generateConstructStruct loads, maybe it's wrong or I misunderstood.
+	// Let's check generateConstructStruct code again.
+	// g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, structPtrType, structPtrType, allocaReg))
+	// structPtrType is %struct.Name*.
+	// So it loads %struct.Name* from %struct.Name**?
+	// But allocaReg is %struct.Name*.
+	// This implies allocaReg is treated as a pointer to the pointer?
+	// No, alloca T returns T*.
+	// If T = %struct.Name, alloca returns %struct.Name*.
+	// If we want %struct.Name*, we have it in allocaReg.
+
+	// Maybe generateConstructStruct allocates a pointer variable?
+	// allocaReg = alloca %struct.Name*
+	// Then stores the struct pointer?
+	// No, it says "alloca %struct.Name".
+
+	// So generateConstructStruct seems to be loading the struct VALUE into a register?
+	// But mapType returns pointer.
+	// If we load the value, we get %struct.Name.
+	// But we said mapType returns %struct.Name*.
+
+	// I suspect generateConstructStruct might be doing something weird or I am misreading.
+	// Let's assume for Enum, we want the pointer.
+	// So resultReg should be bitcast/move of allocaReg.
+	// Or just use allocaReg.
+	// But we already assigned resultReg to localRegs map.
+	// So we should emit: resultReg = bitcast allocaReg to ...?
+	// Or just not allocate resultReg separately?
+	// But g.nextReg() was called.
+
+	// I'll just use bitcast to move it (or effectively no-op cast).
+	g.emit(fmt.Sprintf("  %s = bitcast %s %s to %s", resultReg, enumPtrType, allocaReg, enumPtrType))
+
+	return nil
+}
+
 // generateDiscriminant generates LLVM IR for extracting enum discriminant
 func (g *Generator) generateDiscriminant(disc *mir.Discriminant) error {
 	// Get target register
@@ -971,6 +1135,98 @@ func (g *Generator) generateDiscriminant(disc *mir.Discriminant) error {
 	} else {
 		// Just use the loaded value
 		g.localRegs[disc.Result.ID] = discValReg
+	}
+
+	return nil
+}
+
+// generateAccessVariantPayload generates LLVM IR for accessing enum variant payload
+func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayload) error {
+	// Get target register
+	targetReg, err := g.generateOperand(access.Target)
+	if err != nil {
+		return err
+	}
+
+	// Get enum type
+	var enumType *types.Enum
+	if localRef, ok := access.Target.(*mir.LocalRef); ok {
+		if e, ok := localRef.Local.Type.(*types.Enum); ok {
+			enumType = e
+		} else if ptr, ok := localRef.Local.Type.(*types.Pointer); ok {
+			if e, ok := ptr.Elem.(*types.Enum); ok {
+				enumType = e
+			}
+		}
+	}
+	// Also check Literal type if needed, but usually it's LocalRef
+
+	if enumType == nil {
+		// Try to map type and see if it looks like enum
+		// But we need the actual type definition to get variant params
+		return fmt.Errorf("failed to determine enum type for AccessVariantPayload")
+	}
+
+	enumName := sanitizeName(enumType.Name)
+	enumLLVMType := "%enum." + enumName
+	enumPtrType := enumLLVMType + "*"
+
+	// Get payload pointer (index 1)
+	payloadPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 1",
+		payloadPtrReg, enumLLVMType, enumPtrType, targetReg))
+
+	// Determine payload type
+	variant := enumType.Variants[access.VariantIndex]
+	var payloadType string
+
+	if len(variant.Params) == 1 {
+		// Single value
+		t, err := g.mapType(variant.Params[0])
+		if err != nil {
+			return fmt.Errorf("failed to map variant param type: %w", err)
+		}
+		payloadType = t
+	} else {
+		// Tuple payload
+		var elemTypes []string
+		for _, param := range variant.Params {
+			t, err := g.mapType(param)
+			if err != nil {
+				return fmt.Errorf("failed to map variant param type: %w", err)
+			}
+			elemTypes = append(elemTypes, t)
+		}
+		payloadType = "{" + strings.Join(elemTypes, ", ") + "}"
+	}
+
+	// Bitcast payload pointer
+	castPayloadPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast [0 x i8]* %s to %s*", castPayloadPtrReg, payloadPtrReg, payloadType))
+
+	// Access member
+	resultReg := g.nextReg()
+	g.localRegs[access.Result.ID] = resultReg
+
+	// Result type
+	resultType, err := g.mapType(access.Result.Type)
+	if err != nil {
+		return fmt.Errorf("failed to map result type: %w", err)
+	}
+
+	if len(variant.Params) == 1 {
+		// Single value - just load it
+		if access.MemberIndex != 0 {
+			return fmt.Errorf("invalid member index %d for single-value variant", access.MemberIndex)
+		}
+		g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, castPayloadPtrReg))
+	} else {
+		// Tuple payload - GEP then load
+		elemPtrReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s* %s, i32 0, i32 %d",
+			elemPtrReg, payloadType, payloadType, castPayloadPtrReg, access.MemberIndex))
+
+		g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, elemPtrReg))
 	}
 
 	return nil

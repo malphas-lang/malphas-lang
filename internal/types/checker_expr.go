@@ -177,9 +177,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 						if variant.Name == rightIdent.Name {
 							// Found variant.
 							var params []Type
-							for _, p := range variant.Params {
-								params = append(params, p)
-							}
+							params = append(params, variant.Params...)
 
 							// Handle generic enum
 							if len(enumType.TypeParams) > 0 {
@@ -1041,7 +1039,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 				msg := fmt.Sprintf("tuple index %d out of bounds", index)
 				help := fmt.Sprintf("tuple has %d element(s) (indices 0-%d), but index %d was accessed\n\n", len(tuple.Elements), len(tuple.Elements)-1, index)
 				help += "Valid tuple field access:\n"
-				help += fmt.Sprintf("  let x = tuple.0;  // first element\n")
+				help += "  let x = tuple.0;  // first element\n"
 				if len(tuple.Elements) > 1 {
 					help += fmt.Sprintf("  let y = tuple.%d;  // last element\n", len(tuple.Elements)-1)
 				}
@@ -1050,11 +1048,11 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 			}
 			// Provide better error message for invalid tuple field
 			msg := fmt.Sprintf("tuple field must be an integer, got `%s`", e.Field.Name)
-			help := fmt.Sprintf("tuple fields are accessed by numeric index (0, 1, 2, ...)\n\n")
+			help := "tuple fields are accessed by numeric index (0, 1, 2, ...)\n\n"
 			help += "Example:\n"
-			help += fmt.Sprintf("  let t = (1, 2, 3);\n")
-			help += fmt.Sprintf("  let x = t.0;  // access first element\n")
-			help += fmt.Sprintf("  let y = t.1;  // access second element\n")
+			help += "  let t = (1, 2, 3);\n"
+			help += "  let x = t.0;  // access first element\n"
+			help += "  let y = t.1;  // access second element\n"
 			c.reportErrorWithCode(msg, e.Field.Span(), diag.CodeTypeInvalidOperation, help, nil)
 			return TypeVoid
 		}
@@ -1503,7 +1501,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 						fmt.Sprintf("if branch returns %s, but previous branch returned %s", branchType, resultType),
 						clause.Body.Span(),
 						diag.CodeTypeMismatch,
-						fmt.Sprintf("all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation"),
+						"all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation",
 						nil,
 					)
 				}
@@ -1518,7 +1516,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 						fmt.Sprintf("else branch returns %s, but if branches returned %s", elseType, resultType),
 						e.Else.Span(),
 						diag.CodeTypeMismatch,
-						fmt.Sprintf("all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation"),
+						"all branches of an if expression must return the same type. Consider explicitly returning a common type or using an explicit return type annotation",
 						nil,
 					)
 				}
@@ -1652,7 +1650,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 					fmt.Sprintf("array index must be int, got %s", indexType),
 					e.Indices[0].Span(),
 					diag.CodeTypeMismatch,
-					fmt.Sprintf("convert the index to `int` type, e.g., cast the value to int if needed"),
+					"convert the index to `int` type, e.g., cast the value to int if needed",
 					nil,
 				)
 				return TypeVoid
@@ -1687,7 +1685,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 					fmt.Sprintf("slice index must be int, got %s", indexType),
 					e.Indices[0].Span(),
 					diag.CodeTypeMismatch,
-					fmt.Sprintf("convert the index to `int` type, e.g., cast the value to int if needed"),
+					"convert the index to `int` type, e.g., cast the value to int if needed",
 					nil,
 				)
 				return TypeVoid
@@ -1734,7 +1732,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 				fmt.Sprintf("index must be int, got %s", indexType),
 				e.Indices[0].Span(),
 				diag.CodeTypeMismatch,
-				fmt.Sprintf("convert the index to `int` type"),
+				"convert the index to `int` type",
 				nil,
 			)
 		}
@@ -1815,7 +1813,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 					fmt.Sprintf("range start must be integer, got %s", startType),
 					e.Start.Span(),
 					diag.CodeTypeMismatch,
-					fmt.Sprintf("convert the start value to `int` type"),
+					"convert the start value to `int` type",
 					nil,
 				)
 			}
@@ -1828,7 +1826,7 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 					fmt.Sprintf("range end must be integer, got %s", endType),
 					e.End.Span(),
 					diag.CodeTypeMismatch,
-					fmt.Sprintf("convert the end value to `int` type"),
+					"convert the end value to `int` type",
 					nil,
 				)
 			}
@@ -2241,10 +2239,6 @@ func (c *Checker) checkMatchExpr(expr *ast.MatchExpr, scope *Scope, inUnsafe boo
 				if matchedVariant.ReturnType != nil {
 					if vGen, ok := matchedVariant.ReturnType.(*GenericInstance); ok && len(vGen.Args) > idx {
 						targetType = vGen.Args[idx]
-					} else if _, ok := matchedVariant.ReturnType.(*Enum); ok {
-						// Non-generic return type (e.g. Expr[int] where Expr is generic but return is concrete? No)
-						// If ReturnType is Enum, it means it's the raw Enum type.
-						// This shouldn't happen if we are in GenericInstance context usually, unless it's a raw variant.
 					}
 				} else {
 					// Standard variant: target is the generic param itself
@@ -2736,7 +2730,7 @@ func (c *Checker) checkFunctionLiteralWithType(fnLit *ast.FunctionLiteral, expec
 	}
 
 	// Collect parameter types, inferring from expected type if not provided
-	paramTypes := make([]Type, 0, len(fnLit.Params))
+
 	for i, param := range fnLit.Params {
 		var paramType Type
 		if param.Type != nil {
@@ -2761,8 +2755,6 @@ func (c *Checker) checkFunctionLiteralWithType(fnLit *ast.FunctionLiteral, expec
 			paramType = expectedType.Params[i]
 		}
 
-		paramTypes = append(paramTypes, paramType)
-
 		// Add parameter to function scope
 		fnScope.Insert(param.Name.Name, &Symbol{
 			Name:    param.Name.Name,
@@ -2772,7 +2764,13 @@ func (c *Checker) checkFunctionLiteralWithType(fnLit *ast.FunctionLiteral, expec
 	}
 
 	// Check function body
+	oldReturn := c.CurrentReturn
+	oldFnName := c.CurrentFnName
+	c.CurrentReturn = expectedType.Return
+	c.CurrentFnName = "" // Lambdas don't have a name, so they can't be main
 	returnType := c.checkBlock(fnLit.Body, fnScope, inUnsafe)
+	c.CurrentReturn = oldReturn
+	c.CurrentFnName = oldFnName
 	if returnType == nil {
 		returnType = TypeVoid
 	}

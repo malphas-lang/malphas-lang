@@ -349,7 +349,7 @@ func compileToLLVM(file *ast.File, checker *types.Checker) (string, error) {
 		// MIR-to-LLVM codegen (default path)
 		debugLog("Using MIR-to-LLVM codegen (default)\n")
 		// Step 1: Lower AST to MIR
-		lowerer := mir.NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+		lowerer := mir.NewLowerer(checker.ExprTypes, checker.CallTypeArgs, checker.GlobalScope)
 		mirModule, err := lowerer.LowerModule(file)
 		if err != nil {
 			return "", fmt.Errorf("MIR lowering error: %v", err)

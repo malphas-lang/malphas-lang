@@ -9,7 +9,7 @@ import (
 
 func TestLowerPattern_Struct(t *testing.T) {
 	// Setup
-	l := NewLowerer(nil, nil)
+	l := NewLowerer(nil, nil, nil)
 	l.currentFunc = &Function{
 		Name: "test_func",
 	}
@@ -89,7 +89,7 @@ func TestLowerPattern_Struct(t *testing.T) {
 
 func TestLowerPattern_Enum(t *testing.T) {
 	// Setup
-	l := NewLowerer(nil, nil)
+	l := NewLowerer(nil, nil, nil)
 	l.currentFunc = &Function{
 		Name: "test_func",
 	}
@@ -149,7 +149,7 @@ func TestLowerPattern_Enum(t *testing.T) {
 
 func TestLowerPattern_Tuple(t *testing.T) {
 	// Setup
-	l := NewLowerer(nil, nil)
+	l := NewLowerer(nil, nil, nil)
 	l.currentFunc = &Function{
 		Name: "test_func",
 	}
@@ -227,7 +227,7 @@ func TestLowerPattern_Tuple(t *testing.T) {
 
 func TestLowerPattern_Nested(t *testing.T) {
 	// Setup
-	l := NewLowerer(nil, nil)
+	l := NewLowerer(nil, nil, nil)
 	l.currentFunc = &Function{Name: "test_func"}
 	entry := l.newBlock("entry")
 	l.currentFunc.Blocks = append(l.currentFunc.Blocks, entry)

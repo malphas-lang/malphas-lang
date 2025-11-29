@@ -57,7 +57,7 @@ func (c *Checker) checkTypeAssignments(impl *ast.ImplDecl, trait *Trait) {
 			fmt.Sprintf("trait %s has no associated type named %s", trait.Name, name),
 			ta.Name.Span(),
 			diag.CodeTypeUnknownAssociatedType,
-			fmt.Sprintf("remove this type assignment or check the trait definition"),
+			"remove this type assignment or check the trait definition",
 			nil,
 		)
 	}

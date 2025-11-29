@@ -60,7 +60,7 @@ func TestLowerGenericFunction(t *testing.T) {
 	typeInfo[fnDecl] = fnType
 
 	// Lower
-	lowerer := NewLowerer(typeInfo, nil)
+	lowerer := NewLowerer(typeInfo, nil, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("Failed to lower function: %v", err)

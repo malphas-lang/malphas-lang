@@ -46,7 +46,7 @@ func TestNullSafety(t *testing.T) {
 			}
 			`,
 			hasError: true,
-			errorMsg: "type User? has no field name",
+			errorMsg: "type ?User has no field name",
 		},
 		{
 			name: "unwrap optional",

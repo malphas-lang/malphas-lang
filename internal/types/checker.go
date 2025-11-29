@@ -30,6 +30,10 @@ type Checker struct {
 	ExprTypes map[ast.Node]Type
 	// CallTypeArgs maps CallExpr nodes to their inferred/explicit type arguments
 	CallTypeArgs map[*ast.CallExpr][]Type
+	// CurrentReturn tracks the expected return type of the current function
+	CurrentReturn Type
+	// CurrentFnName tracks the name of the current function (for main checks)
+	CurrentFnName string
 }
 
 // NewChecker creates a new type checker.
@@ -67,6 +71,16 @@ func NewChecker() *Checker {
 		Name: "println",
 		Type: &Function{
 			Params: []Type{&Named{Name: "any"}}, // Placeholder for any type
+			Return: TypeVoid,
+		},
+	})
+
+	// panic: fn(string) -> ! (diverges)
+	// For now, we treat it as returning void, but the checker knows it terminates.
+	c.GlobalScope.Insert("panic", &Symbol{
+		Name: "panic",
+		Type: &Function{
+			Params: []Type{TypeString},
 			Return: TypeVoid,
 		},
 	})

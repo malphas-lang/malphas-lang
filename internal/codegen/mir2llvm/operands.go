@@ -78,10 +78,20 @@ func (g *Generator) generateLiteral(lit *mir.Literal) (string, error) {
 
 	case string:
 		// String literal - use runtime function
-		// For now, create a simple string (would need to create global constant in real impl)
+		// Check if already exists
+		globalName, ok := g.stringConstants[v]
+		if !ok {
+			globalName = fmt.Sprintf("@.str.%d", len(g.stringConstants))
+			g.stringConstants[v] = globalName
+		}
+
+		// Get pointer to string data
+		length := len(v)
+		ptrReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = getelementptr inbounds [%d x i8], [%d x i8]* %s, i64 0, i64 0", ptrReg, length, length, globalName))
+
 		reg := g.nextReg()
-		// Simplified - would need proper string literal handling
-		g.emit(fmt.Sprintf("  %s = call %%String* @runtime_string_new(i8* null, i64 0)", reg))
+		g.emit(fmt.Sprintf("  %s = call %%String* @runtime_string_new(i8* %s, i64 %d)", reg, ptrReg, length))
 		return reg, nil
 
 	case nil:
@@ -94,4 +104,3 @@ func (g *Generator) generateLiteral(lit *mir.Literal) (string, error) {
 		return "", fmt.Errorf("unsupported literal type: %T", v)
 	}
 }
-

@@ -96,7 +96,7 @@ func (c *Checker) reportConstraintError(typ Type, bound Type, boundSpan lexer.Sp
 	// Step 2: Show where the type is used
 	if boundSpan.Line > 0 {
 		proofChain = append(proofChain, diag.ProofStep{
-			Message: fmt.Sprintf("required by this bound"),
+			Message: "required by this bound",
 			Span:    c.toDiagSpan(boundSpan),
 		})
 	}
@@ -393,7 +393,7 @@ func (c *Checker) generateTypeMismatchHelp(expected, actual Type) string {
 
 	// Check for common mistakes and provide code examples
 	if strings.Contains(expectedStr, "&") && !strings.Contains(actualStr, "&") {
-		return fmt.Sprintf("try taking a reference:\n  let x = &value;")
+		return "try taking a reference:\n  let x = &value;"
 	}
 	if strings.Contains(expectedStr, "mut") && !strings.Contains(actualStr, "mut") {
 		return "try using `&mut` to create a mutable reference:\n  let mut x = 5;\n  let r = &mut x;"
@@ -555,7 +555,7 @@ func (c *Checker) findSimilarVariantName(enumType *Enum, variantName string) str
 func (c *Checker) generateChannelErrorHelp(operation string, channelType Type, isSendOnly, isReceiveOnly bool) string {
 	var help strings.Builder
 	help.WriteString(fmt.Sprintf("channel operation error: %s\n\n", operation))
-	
+
 	if isSendOnly {
 		help.WriteString("This channel is send-only. To receive from it, you need a bidirectional or receive-only channel.\n")
 		help.WriteString("  Example: let ch: Channel[int] = Channel::new(10);\n")
@@ -568,7 +568,7 @@ func (c *Checker) generateChannelErrorHelp(operation string, channelType Type, i
 		help.WriteString("  ch <- value;  // send\n")
 		help.WriteString("  let x = <-ch; // receive\n")
 	}
-	
+
 	return help.String()
 }
 
@@ -576,7 +576,7 @@ func (c *Checker) generateChannelErrorHelp(operation string, channelType Type, i
 func (c *Checker) generateBorrowErrorHelp(varName string, isMutable bool, suggestion string) string {
 	var help strings.Builder
 	help.WriteString(fmt.Sprintf("borrow checker error: %s\n\n", suggestion))
-	
+
 	if isMutable {
 		help.WriteString("A mutable borrow conflicts with other borrows. Options:\n")
 		help.WriteString("  1. Restructure code to avoid overlapping borrows\n")
@@ -596,7 +596,7 @@ func (c *Checker) generateBorrowErrorHelp(varName string, isMutable bool, sugges
 		help.WriteString("    let r1 = &x;  // immutable\n")
 		help.WriteString("    let r2 = &x;  // also immutable (allowed)\n")
 	}
-	
+
 	return help.String()
 }
 
@@ -604,7 +604,7 @@ func (c *Checker) generateBorrowErrorHelp(varName string, isMutable bool, sugges
 func (c *Checker) generateFunctionCallErrorHelp(fnName string, expected, actual int, paramNames []string) string {
 	var help strings.Builder
 	help.WriteString(fmt.Sprintf("function `%s` expects %d argument(s), but %d were provided\n\n", fnName, expected, actual))
-	
+
 	if expected > actual {
 		help.WriteString("Missing argument(s). Provide all required arguments:\n")
 		help.WriteString(fmt.Sprintf("  %s(", fnName))
@@ -636,7 +636,7 @@ func (c *Checker) generateFunctionCallErrorHelp(fnName string, expected, actual 
 		}
 		help.WriteString(")\n")
 	}
-	
+
 	return help.String()
 }
 
@@ -644,10 +644,10 @@ func (c *Checker) generateFunctionCallErrorHelp(fnName string, expected, actual 
 func (c *Checker) generateTypeConversionHelp(from, to Type) string {
 	fromStr := from.String()
 	toStr := to.String()
-	
+
 	var help strings.Builder
 	help.WriteString(fmt.Sprintf("cannot convert type `%s` to `%s`\n\n", fromStr, toStr))
-	
+
 	// Check for common conversions
 	if strings.Contains(toStr, "int") && strings.Contains(fromStr, "float") {
 		help.WriteString("Convert float to int explicitly:\n")
@@ -665,7 +665,7 @@ func (c *Checker) generateTypeConversionHelp(from, to Type) string {
 		help.WriteString("  2. Using explicit type conversion if valid\n")
 		help.WriteString("  3. Checking if a conversion function exists\n")
 	}
-	
+
 	return help.String()
 }
 
@@ -673,7 +673,7 @@ func (c *Checker) generateTypeConversionHelp(from, to Type) string {
 func (c *Checker) generateArrayLiteralErrorHelp(expectedLen, actualLen int, expectedType, actualType Type) string {
 	var help strings.Builder
 	help.WriteString("array literal error\n\n")
-	
+
 	if expectedLen != actualLen {
 		help.WriteString(fmt.Sprintf("Array length mismatch: expected %d elements, got %d\n", expectedLen, actualLen))
 		help.WriteString(fmt.Sprintf("  let arr: [%s; %d] = [", expectedType, expectedLen))
@@ -686,7 +686,7 @@ func (c *Checker) generateArrayLiteralErrorHelp(expectedLen, actualLen int, expe
 		help.WriteString(strings.Repeat(fmt.Sprintf("%s_value, ", expectedType), expectedLen))
 		help.WriteString("];\n")
 	}
-	
+
 	return help.String()
 }
 
@@ -923,7 +923,7 @@ func (c *Checker) reportInvalidOperation(operation string, targetType Type, span
 func (c *Checker) reportTypeArgumentCountMismatch(expected, actual int, typeName string, span lexer.Span, isFunction bool) {
 	var msg string
 	var help string
-	
+
 	if isFunction {
 		msg = fmt.Sprintf("type argument count mismatch for function `%s`: expected %d, got %d", typeName, expected, actual)
 		help = fmt.Sprintf("provide exactly %d type argument(s)\n  example: %s[", expected, typeName)
@@ -943,7 +943,7 @@ func (c *Checker) reportTypeArgumentCountMismatch(expected, actual int, typeName
 		help += strings.Join(typeArgs, ", ")
 		help += "]"
 	}
-	
+
 	c.reportErrorWithLabeledSpans(
 		msg,
 		diag.CodeTypeInvalidGenericArgs,
@@ -958,25 +958,25 @@ func (c *Checker) reportTypeArgumentCountMismatch(expected, actual int, typeName
 func (c *Checker) reportTypeInferenceFailure(typeName string, err error, span lexer.Span, isFunction bool, paramNames []string) {
 	var msg string
 	var help string
-	
+
 	if isFunction {
 		msg = fmt.Sprintf("cannot infer type arguments for generic function `%s`", typeName)
 	} else {
 		msg = fmt.Sprintf("cannot infer type arguments for generic type `%s`", typeName)
 	}
-	
+
 	// Provide more detailed error context
 	errMsg := ""
 	if err != nil {
 		errMsg = err.Error()
 	}
-	
+
 	help = "Type inference failed"
 	if errMsg != "" {
 		help += fmt.Sprintf(": %s", errMsg)
 	}
 	help += "\n\n"
-	
+
 	if len(paramNames) > 0 {
 		help += "The compiler could not determine the type arguments automatically.\n"
 		help += "Provide explicit type arguments:\n\n"
@@ -986,10 +986,7 @@ func (c *Checker) reportTypeInferenceFailure(typeName string, err error, span le
 			help += fmt.Sprintf("  let x: %s[", typeName)
 		}
 		typeArgs := make([]string, len(paramNames))
-		for i, name := range paramNames {
-			// Use concrete type names if available, otherwise use type param names
-			typeArgs[i] = name
-		}
+		copy(typeArgs, paramNames)
 		help += strings.Join(typeArgs, ", ")
 		help += "]"
 		if !isFunction {
@@ -1022,7 +1019,7 @@ func (c *Checker) reportTypeInferenceFailure(typeName string, err error, span le
 			help += fmt.Sprintf("  let x: %s[int, string] = ...;\n", typeName)
 		}
 	}
-	
+
 	c.reportErrorWithLabeledSpans(
 		msg,
 		diag.CodeTypeInvalidGenericArgs,
@@ -1065,10 +1062,10 @@ func (c *Checker) generateBinaryOpTypeMismatchHelp(op lexer.TokenType, left, rig
 	leftStr := left.String()
 	rightStr := right.String()
 	opStr := string(op)
-	
+
 	var help strings.Builder
 	help.WriteString(fmt.Sprintf("binary operator `%s` cannot be applied to types `%s` and `%s`\n\n", opStr, leftStr, rightStr))
-	
+
 	// Provide specific suggestions based on the operator
 	switch op {
 	case lexer.PLUS, lexer.MINUS, lexer.ASTERISK, lexer.SLASH:
@@ -1097,8 +1094,8 @@ func (c *Checker) generateBinaryOpTypeMismatchHelp(op lexer.TokenType, left, rig
 	default:
 		opStr := string(op)
 		help.WriteString(fmt.Sprintf("  Ensure both operands are compatible with operator `%s`\n", opStr))
-		help.WriteString(fmt.Sprintf("    Consider explicit type conversion or using compatible types\n"))
+		help.WriteString("    Consider explicit type conversion or using compatible types\n")
 	}
-	
+
 	return help.String()
 }

@@ -11,7 +11,6 @@ func (p *Parser) parsePattern() ast.Pattern {
 
 	// Wildcard pattern
 	if p.curTok.Type == lexer.IDENT && p.curTok.Literal == "_" {
-		p.nextToken()
 		return ast.NewWildcardPattern(start)
 	}
 
@@ -37,11 +36,14 @@ func (p *Parser) parsePattern() ast.Pattern {
 			}
 			elements = append(elements, elem)
 
-			if p.curTok.Type == lexer.COMMA {
-				p.nextToken()
-			} else if p.curTok.Type != lexer.RPAREN {
-				p.reportError("expected ',' or ')' in tuple pattern", p.curTok.Span)
+			if p.peekTok.Type == lexer.COMMA {
+				p.nextToken() // consume pattern
+				p.nextToken() // consume comma
+			} else if p.peekTok.Type != lexer.RPAREN {
+				p.reportError("expected ',' or ')' in tuple pattern", p.peekTok.Span)
 				return nil
+			} else {
+				p.nextToken() // consume pattern to position curTok at RPAREN
 			}
 		}
 		end := p.curTok.Span
@@ -100,11 +102,14 @@ func (p *Parser) parsePattern() ast.Pattern {
 						return nil
 					}
 					args = append(args, arg)
-					if p.curTok.Type == lexer.COMMA {
-						p.nextToken()
-					} else if p.curTok.Type != lexer.RPAREN {
-						p.reportError("expected ',' or ')'", p.curTok.Span)
+					if p.peekTok.Type == lexer.COMMA {
+						p.nextToken() // consume pattern
+						p.nextToken() // consume comma
+					} else if p.peekTok.Type != lexer.RPAREN {
+						p.reportError("expected ',' or ')'", p.peekTok.Span)
 						return nil
+					} else {
+						p.nextToken() // consume pattern to position curTok at RPAREN
 					}
 				}
 				if p.curTok.Type != lexer.RPAREN {
@@ -127,11 +132,14 @@ func (p *Parser) parsePattern() ast.Pattern {
 					}
 					args = append(args, fieldPattern)
 
-					if p.curTok.Type == lexer.COMMA {
-						p.nextToken()
-					} else if p.curTok.Type != lexer.RBRACE {
-						p.reportError("expected ',' or '}'", p.curTok.Span)
+					if p.peekTok.Type == lexer.COMMA {
+						p.nextToken() // consume pattern
+						p.nextToken() // consume comma
+					} else if p.peekTok.Type != lexer.RBRACE {
+						p.reportError("expected ',' or '}'", p.peekTok.Span)
 						return nil
+					} else {
+						p.nextToken() // consume pattern to position curTok at RBRACE
 					}
 				}
 
@@ -180,8 +188,9 @@ func (p *Parser) parseStructPatternWithType(typ ast.TypeExpr) ast.Pattern {
 		}
 		var pattern ast.Pattern
 
-		if p.curTok.Type == lexer.COLON {
-			p.nextToken()
+		if p.peekTok.Type == lexer.COLON {
+			p.nextToken() // consume identifier
+			p.nextToken() // consume ':'
 			pattern = p.parsePattern()
 		} else {
 			// Shorthand: field name is the pattern (VarPattern)
@@ -190,11 +199,14 @@ func (p *Parser) parseStructPatternWithType(typ ast.TypeExpr) ast.Pattern {
 
 		fields = append(fields, ast.NewPatternField(name, pattern, mergeSpan(name.Span(), pattern.Span())))
 
-		if p.curTok.Type == lexer.COMMA {
-			p.nextToken()
-		} else if p.curTok.Type != lexer.RBRACE {
-			p.reportError("expected ',' or '}'", p.curTok.Span)
+		if p.peekTok.Type == lexer.COMMA {
+			p.nextToken() // consume identifier or pattern
+			p.nextToken() // consume ','
+		} else if p.peekTok.Type != lexer.RBRACE {
+			p.reportError("expected ',' or '}'", p.peekTok.Span)
 			return nil
+		} else {
+			p.nextToken() // consume identifier or pattern to position curTok on RBRACE
 		}
 	}
 
@@ -212,7 +224,6 @@ func (p *Parser) parseIdent() *ast.Ident {
 		return nil
 	}
 	ident := ast.NewIdent(p.curTok.Literal, p.curTok.Span)
-	p.nextToken()
 	return ident
 }
 

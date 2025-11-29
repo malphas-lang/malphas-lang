@@ -103,6 +103,45 @@ func (g *LLVMGenerator) genCallExpr(expr *mast.CallExpr) (string, error) {
 			)
 			return "", fmt.Errorf("unsupported infix operator in function call: %s", callee.Op)
 		}
+	case *mast.IndexExpr:
+		// Handle generic function call: func[T](args)
+		if ident, ok := callee.Target.(*mast.Ident); ok {
+			funcName = ident.Name
+
+			// Mangle name with type arguments
+			for _, index := range callee.Indices {
+				var typeArg types.Type
+				if t, ok := g.typeInfo[index]; ok {
+					typeArg = t
+				} else {
+					// Fallback for primitive types if type info is missing
+					if typeIdent, ok := index.(*mast.Ident); ok {
+						switch typeIdent.Name {
+						case "int":
+							typeArg = types.TypeInt
+						case "bool":
+							typeArg = types.TypeBool
+						case "string":
+							typeArg = types.TypeString
+						case "float":
+							typeArg = types.TypeFloat
+						}
+					}
+				}
+
+				if typeArg != nil {
+					funcName = funcName + "_" + g.mangleTypeNameForMethod(typeArg)
+				}
+			}
+		} else {
+			g.reportErrorAtNode(
+				"unsupported index expression in function call",
+				callee,
+				diag.CodeGenUnsupportedExpr,
+				"only identifier indexing (generic instantiation) is supported",
+			)
+			return "", fmt.Errorf("unsupported index expression in function call")
+		}
 	case *mast.FieldExpr:
 		// Handle method calls: object.method
 		// Get the target type first to determine if we need auto-borrow

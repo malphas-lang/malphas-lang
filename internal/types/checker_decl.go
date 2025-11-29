@@ -198,7 +198,7 @@ func (c *Checker) collectDecls(file *ast.File) {
 				}
 				variants = append(variants, Variant{
 					Name:       v.Name.Name,
-					Params:    payload,
+					Params:     payload,
 					ReturnType: returnType,
 				})
 			}
@@ -453,7 +453,14 @@ func (c *Checker) checkBodies(file *ast.File) {
 					DefNode: param,
 				})
 			}
+			// Set current return type and function name
+			oldReturn := c.CurrentReturn
+			oldFnName := c.CurrentFnName
+			c.CurrentReturn = c.GlobalScope.Lookup(d.Name.Name).Type.(*Function).Return
+			c.CurrentFnName = d.Name.Name
 			c.checkBlock(d.Body, fnScope, d.Unsafe)
+			c.CurrentReturn = oldReturn
+			c.CurrentFnName = oldFnName
 		case *ast.ImplDecl:
 			// Resolve target type
 			targetType := c.resolveType(d.Target)
@@ -532,7 +539,22 @@ func (c *Checker) checkBodies(file *ast.File) {
 						DefNode: param,
 					})
 				}
+				// Set current return type and function name
+				oldReturn := c.CurrentReturn
+				oldFnName := c.CurrentFnName
+
+				// Look up method in MethodTable to get the resolved return type
+				targetName := c.getTypeName(targetType)
+				if methods, ok := c.MethodTable[targetName]; ok {
+					if fn, ok := methods[method.Name.Name]; ok {
+						c.CurrentReturn = fn.Return
+					}
+				}
+
+				c.CurrentFnName = method.Name.Name
 				c.checkBlock(method.Body, fnScope, method.Unsafe)
+				c.CurrentReturn = oldReturn
+				c.CurrentFnName = oldFnName
 			}
 		}
 	}

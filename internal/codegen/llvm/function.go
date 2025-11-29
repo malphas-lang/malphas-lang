@@ -82,6 +82,10 @@ func (g *LLVMGenerator) genFunction(decl *mast.FnDecl) error {
 
 	// Map return type
 	retLLVM := g.mapReturnType(fnType)
+	// Special case for main: always return i32 (exit code)
+	if funcName == "main" {
+		retLLVM = "i32"
+	}
 	if retLLVM == "" {
 		// Return type mapping failed - report error
 		help := "The return type could not be mapped to LLVM types.\n\n"
@@ -909,7 +913,12 @@ func (g *LLVMGenerator) emitFieldStore(targetReg, structName string, fieldIndex 
 func (g *LLVMGenerator) genReturnStmt(stmt *mast.ReturnStmt) error {
 	if stmt.Value == nil {
 		// Return void
-		g.emit("  ret void")
+		// Check if we're in main and need to return 0
+		if g.currentFunc != nil && g.currentFunc.name == "main" {
+			g.emit("  ret i32 0")
+		} else {
+			g.emit("  ret void")
+		}
 		return nil
 	}
 

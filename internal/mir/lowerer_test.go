@@ -47,7 +47,7 @@ func lowerFunction(t *testing.T, src string) *Function {
 		t.Fatal("no function found in source")
 	}
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)
@@ -372,7 +372,7 @@ fn test() -> int {
 		t.Fatal("test function not found")
 	}
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)
@@ -499,7 +499,7 @@ fn test(p: Point) -> int {
 		t.Fatal("test function not found")
 	}
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)
@@ -596,7 +596,7 @@ fn bar() -> int {
 
 	file, checker := parseAndTypeCheck(t, src)
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	module, err := lowerer.LowerModule(file)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)
@@ -643,7 +643,7 @@ fn test() -> int {
 		t.Fatal("test function not found")
 	}
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)

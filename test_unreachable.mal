@@ -1,0 +1,23 @@
+fn main() {
+    return;
+    let x = 1; // ERROR: unreachable statement
+}
+
+fn unreachable_after_panic() {
+    panic("stop");
+    let y = 2; // ERROR: unreachable statement
+}
+
+fn unreachable_after_break() {
+    for i in [1, 2, 3] {
+        break;
+        let z = 3; // ERROR: unreachable statement
+    }
+}
+
+fn unreachable_after_continue() {
+    for i in [1, 2, 3] {
+        continue;
+        let w = 4; // ERROR: unreachable statement
+    }
+}

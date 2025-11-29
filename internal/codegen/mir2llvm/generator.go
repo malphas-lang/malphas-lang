@@ -39,19 +39,23 @@ type Generator struct {
 
 	// Error collection
 	Errors []diag.Diagnostic
+
+	// String constants (content -> global name)
+	stringConstants map[string]string
 }
 
 // NewGenerator creates a new MIR-to-LLVM generator
 func NewGenerator() *Generator {
 	return &Generator{
-		localRegs:    make(map[int]string),
-		blockLabels:  make(map[string]string),
-		regCounter:   0,
-		structTypes:  make(map[string]bool),
-		structFields: make(map[string]map[string]int),
-		enumTypes:    make(map[string]bool),
-		modules:      make(map[string]interface{}),
-		Errors:       make([]diag.Diagnostic, 0),
+		localRegs:       make(map[int]string),
+		blockLabels:     make(map[string]string),
+		regCounter:      0,
+		structTypes:     make(map[string]bool),
+		structFields:    make(map[string]map[string]int),
+		enumTypes:       make(map[string]bool),
+		modules:         make(map[string]interface{}),
+		Errors:          make([]diag.Diagnostic, 0),
+		stringConstants: make(map[string]string),
 	}
 }
 
@@ -63,6 +67,7 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 	g.blockLabels = make(map[string]string)
 	g.regCounter = 0
 	g.Errors = make([]diag.Diagnostic, 0)
+	g.stringConstants = make(map[string]string)
 
 	// Emit module header
 	g.emitModuleHeader()
@@ -76,6 +81,12 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 	// Emit GC initialization
 	g.emitGCInitialization()
 
+	// Emit struct definitions
+	g.emitStructDefinitions(module)
+
+	// Emit enum definitions
+	g.emitEnumDefinitions(module)
+
 	// Generate functions
 	for _, fn := range module.Functions {
 		// Skip generic functions - only generate specialized (monomorphized) versions
@@ -86,6 +97,9 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 			return "", fmt.Errorf("error generating function %s: %w", fn.Name, err)
 		}
 	}
+
+	// Emit string constants
+	g.emitStringConstants()
 
 	return g.builder.String(), nil
 }
@@ -220,3 +234,130 @@ func (g *Generator) nextReg() string {
 	return reg
 }
 
+// emitStringConstants emits the global string constants
+func (g *Generator) emitStringConstants() {
+	if len(g.stringConstants) == 0 {
+		return
+	}
+
+	g.emit("")
+	g.emit("; String constants")
+	for content, name := range g.stringConstants {
+		// Calculate length including null terminator?
+		// Malphas strings might not be null-terminated internally, but let's follow C style for now
+		// or just raw bytes. runtime_string_new takes length.
+		// Let's emit as [N x i8]
+
+		// Escape string content for LLVM
+		escaped := escapeStringForLLVM(content)
+		length := len(content)
+
+		g.emit(fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\", align 1", name, length, escaped))
+	}
+	g.emit("")
+}
+
+func escapeStringForLLVM(s string) string {
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b >= 32 && b < 127 && b != '"' && b != '\\' {
+			sb.WriteByte(b)
+		} else {
+			sb.WriteString(fmt.Sprintf("\\%02X", b))
+		}
+	}
+	return sb.String()
+}
+
+// emitStructDefinitions emits LLVM type definitions for structs
+func (g *Generator) emitStructDefinitions(module *mir.Module) {
+	if len(module.Structs) == 0 {
+		return
+	}
+
+	g.emit("; Struct definitions")
+	for _, s := range module.Structs {
+		name := sanitizeName(s.Name)
+		if g.structTypes[name] {
+			continue
+		}
+		g.structTypes[name] = true
+
+		// Generate field types
+		var fieldTypes []string
+		for _, field := range s.Fields {
+			ft, err := g.mapType(field.Type)
+			if err != nil {
+				// If mapping fails (e.g. recursive type not yet defined), use opaque pointer or i8*
+				// But for struct fields, we need size.
+				// If it's a pointer to the struct itself, mapType handles it (%struct.Name*).
+				// So it should be fine.
+				g.Errors = append(g.Errors, diag.Diagnostic{
+					Message:  fmt.Sprintf("failed to map field type for %s.%s: %v", s.Name, field.Name, err),
+					Severity: diag.SeverityWarning,
+				})
+				fieldTypes = append(fieldTypes, "i8*") // Fallback
+			} else {
+				fieldTypes = append(fieldTypes, ft)
+			}
+		}
+
+		// Emit struct definition
+		// %struct.Name = type { ... }
+		g.emit(fmt.Sprintf("%%struct.%s = type { %s }", name, strings.Join(fieldTypes, ", ")))
+	}
+	g.emit("")
+}
+
+// emitEnumDefinitions emits LLVM type definitions for enums
+func (g *Generator) emitEnumDefinitions(module *mir.Module) {
+	if len(module.Enums) == 0 {
+		return
+	}
+
+	g.emit("; Enum definitions")
+	for _, e := range module.Enums {
+		name := sanitizeName(e.Name)
+		if g.enumTypes[name] {
+			continue
+		}
+		g.enumTypes[name] = true
+
+		// Enums are represented as { tag, payload }
+		// Tag is i64 (or smaller if possible, but let's stick to i64 for alignment)
+		// Payload is a byte array large enough to hold the largest variant
+		// For now, we use a fixed size payload or calculate max size.
+		// Calculating max size requires mapping all variant payload types.
+
+		maxSize := int64(0)
+		for _, v := range e.Variants {
+			// Calculate size of this variant's payload
+			currentSize := int64(0)
+			for _, _ = range v.Params {
+				// We need size in bytes.
+				// g.calculateElementSize returns string (might be register).
+				// But here we need constant size for type definition.
+				// We can estimate or use a safe upper bound (e.g. 256 bytes).
+				// Or use a pointer to payload if it's large?
+				// Malphas enums are value types, so payload is inline.
+
+				// For now, let's assume max payload size is 64 bytes (8 pointers).
+				// TODO: Calculate actual max size
+				currentSize += 8 // Assume 8 bytes per field
+			}
+			if currentSize > maxSize {
+				maxSize = currentSize
+			}
+		}
+
+		// Ensure at least 1 byte if max size is 0 (though [0 x i8] is valid)
+		// But if we want to support unit variants only, [0 x i8] is fine.
+
+		// Emit enum definition
+		// %enum.Name = type { i32, [N x i8] }
+		// We use i32 for tag.
+		g.emit(fmt.Sprintf("%%enum.%s = type { i32, [%d x i8] }", name, maxSize))
+	}
+	g.emit("")
+}

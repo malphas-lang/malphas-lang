@@ -12,6 +12,9 @@ type Lowerer struct {
 	// Type information from checker
 	TypeInfo map[ast.Node]types.Type
 
+	// Global scope containing type definitions
+	GlobalScope *types.Scope
+
 	// Current function being lowered
 	currentFunc *Function
 
@@ -35,10 +38,11 @@ type Lowerer struct {
 }
 
 // NewLowerer creates a new MIR lowerer
-func NewLowerer(typeInfo map[ast.Node]types.Type, callTypeArgs map[*ast.CallExpr][]types.Type) *Lowerer {
+func NewLowerer(typeInfo map[ast.Node]types.Type, callTypeArgs map[*ast.CallExpr][]types.Type, globalScope *types.Scope) *Lowerer {
 	return &Lowerer{
 		TypeInfo:     typeInfo,
 		CallTypeArgs: callTypeArgs,
+		GlobalScope:  globalScope,
 		localCounter: 0,
 		blockCounter: 0,
 		locals:       make(map[string]Local),
@@ -59,6 +63,17 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 				return nil, fmt.Errorf("failed to lower function %s: %w", fnDecl.Name.Name, err)
 			}
 			module.Functions = append(module.Functions, fn)
+		}
+	}
+
+	// Collect struct and enum definitions from global scope
+	if l.GlobalScope != nil {
+		for _, sym := range l.GlobalScope.Symbols {
+			if t, ok := sym.Type.(*types.Struct); ok {
+				module.Structs = append(module.Structs, t)
+			} else if t, ok := sym.Type.(*types.Enum); ok {
+				module.Enums = append(module.Enums, t)
+			}
 		}
 	}
 
@@ -232,6 +247,8 @@ func (l *Lowerer) lowerExpr(expr ast.Expr) (Operand, error) {
 		return l.lowerRecordLiteral(e)
 	case *ast.MapLiteral:
 		return l.lowerMapLiteral(e)
+	case *ast.AssignExpr:
+		return l.lowerAssignExpr(e)
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}

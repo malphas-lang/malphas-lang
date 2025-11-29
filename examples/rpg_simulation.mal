@@ -1,0 +1,166 @@
+
+struct Character {
+    name: string,
+    hp: int,
+    max_hp: int,
+    attack: int,
+    defense: int
+}
+
+enum Action {
+    Attack,
+    Heal,
+    Defend
+}
+
+enum BattleResult {
+    Victory(int), // Rounds taken
+    Defeat
+}
+
+fn modulo(a: int, b: int) -> int {
+    return a - (b * (a / b));
+}
+
+fn rand(seed: int) -> int {
+    let mut new_seed = (seed * 1103515245 + 12345);
+    new_seed = modulo(new_seed, 2147483647); // Use 2^31 - 1 to be safe
+    if new_seed < 0 {
+        new_seed = -new_seed;
+    }
+    return new_seed;
+}
+
+fn rand_range(seed: int, min: int, max: int) -> int {
+    let r = rand(seed);
+    return min + modulo(r, (max - min + 1));
+}
+
+fn battle(hero: Character, monster: Character, seed: int) -> BattleResult {
+    let mut round = 0;
+    let mut current_seed = seed;
+    
+    println("Battle Start!");
+    println(hero.name);
+    println("vs");
+    println(monster.name);
+    
+    while hero.hp > 0 {
+        if monster.hp <= 0 {
+            return BattleResult::Victory(round);
+        }
+        
+        round = round + 1;
+        println("Round:");
+        println(round);
+        
+        // Hero's turn
+        // Simple AI: Heal if low HP, otherwise Attack
+        let mut action = Action::Attack;
+        if hero.hp < (hero.max_hp / 3) {
+            action = Action::Heal;
+        }
+        
+        match action {
+            Action::Attack => {
+                let damage = hero.attack - (monster.defense / 2);
+                if damage < 1 { damage = 1; }
+                monster.hp = monster.hp - damage;
+                println(hero.name);
+                println("attacks for damage:");
+                println(damage);
+            },
+            Action::Heal => {
+                let heal = hero.max_hp / 4;
+                hero.hp = hero.hp + heal;
+                if hero.hp > hero.max_hp { hero.hp = hero.max_hp; }
+                println(hero.name);
+                println("heals HP:");
+                println(heal);
+            },
+            Action::Defend => {
+                println(hero.name);
+                println("defends!");
+            }
+        };
+        
+        if monster.hp <= 0 {
+            continue; // Check condition at start of loop
+        }
+        
+        // Monster's turn
+        // Random action
+        // Update seed for next random number
+        current_seed = rand(current_seed);
+        let roll = rand_range(current_seed, 0, 2);
+        
+        let mut monster_action = Action::Attack;
+        if roll == 1 {
+            monster_action = Action::Defend;
+        } else if roll == 2 {
+            // Small chance to heal
+             monster_action = Action::Heal;
+        }
+        
+        match monster_action {
+            Action::Attack => {
+                let damage = monster.attack - (hero.defense / 2);
+                if damage < 1 { damage = 1; }
+                hero.hp = hero.hp - damage;
+                println(monster.name);
+                println("attacks for damage:");
+                println(damage);
+            },
+            Action::Heal => {
+                let heal = monster.max_hp / 5;
+                monster.hp = monster.hp + heal;
+                if monster.hp > monster.max_hp { monster.hp = monster.max_hp; }
+                println(monster.name);
+                println("heals HP:");
+                println(heal);
+            },
+            Action::Defend => {
+                println(monster.name);
+                println("defends!");
+            }
+        };
+        
+        println("Hero HP:");
+        println(hero.hp);
+        println("Monster HP:");
+        println(monster.hp);
+    }
+    
+    return BattleResult::Defeat;
+}
+
+fn main() {
+    let hero = Character {
+        name: "Hero",
+        hp: 100,
+        max_hp: 100,
+        attack: 20,
+        defense: 10
+    };
+    
+    let monster = Character {
+        name: "Dragon",
+        hp: 150,
+        max_hp: 150,
+        attack: 25,
+        defense: 5
+    };
+    
+    let seed = 12345;
+    let result = battle(hero, monster, seed);
+    
+    match result {
+        BattleResult::Victory(rounds) => {
+            println("Victory in rounds:");
+            println(rounds);
+        },
+        BattleResult::Defeat => {
+            println("Defeat...");
+        }
+    };
+}

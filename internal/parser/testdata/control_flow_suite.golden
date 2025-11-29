@@ -18,7 +18,9 @@
           "Name": {
             "Name": "T"
           },
-          "Bounds": null
+          "Bounds": null,
+          "IsTypeConstructor": false,
+          "Arity": 0
         }
       ],
       "Params": [
@@ -206,7 +208,9 @@
                 "Arms": [
                   {
                     "Pattern": {
-                      "Text": "0"
+                      "Value": {
+                        "Text": "0"
+                      }
                     },
                     "Body": {
                       "Stmts": [
@@ -221,7 +225,10 @@
                   },
                   {
                     "Pattern": {
-                      "Name": "other"
+                      "Name": {
+                        "Name": "other"
+                      },
+                      "Mutable": false
                     },
                     "Body": {
                       "Stmts": [

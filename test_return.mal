@@ -1,0 +1,33 @@
+// Valid cases
+fn valid_void() {
+    return;
+}
+
+fn valid_int() -> int {
+    return 10;
+}
+
+fn main() {
+    return;
+}
+
+// Invalid cases
+fn invalid_void_return_val() {
+    return 1; // ERROR: expected (), found int
+}
+
+fn invalid_int_return_void() -> int {
+    return; // ERROR: expected int, found ()
+}
+
+fn invalid_return_type_mismatch() -> int {
+    return true; // ERROR: expected int, found bool
+}
+
+fn invalid_main_return_val() {
+    // This is technically covered by invalid_void_return_val since main returns (),
+    // but spec mentions specific error for main.
+    // However, since main is implicitly -> (), returning a value is a type mismatch.
+    // The spec wants a specific error "cannot return a value from main".
+    return 1; // ERROR: cannot return a value from main
+}

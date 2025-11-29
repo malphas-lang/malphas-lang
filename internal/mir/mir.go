@@ -16,6 +16,8 @@ func (*Phi) stmtNode() {}
 // Module represents a MIR module (collection of functions)
 type Module struct {
 	Functions []*Function
+	Structs   []*types.Struct
+	Enums     []*types.Enum
 }
 
 // Function represents a MIR function with a control-flow graph
@@ -160,6 +162,17 @@ type ConstructTuple struct {
 
 func (*ConstructTuple) stmtNode() {}
 
+// ConstructEnum constructs an enum value
+type ConstructEnum struct {
+	Result       Local
+	Type         string    // Enum type name
+	Variant      string    // Variant name
+	VariantIndex int       // Variant index (tag)
+	Values       []Operand // Payload values
+}
+
+func (*ConstructEnum) stmtNode() {}
+
 // Discriminant reads the discriminant (tag) of an enum value
 type Discriminant struct {
 	Result Local
@@ -167,6 +180,16 @@ type Discriminant struct {
 }
 
 func (*Discriminant) stmtNode() {}
+
+// AccessVariantPayload accesses a field within an enum variant's payload
+type AccessVariantPayload struct {
+	Result       Local
+	Target       Operand
+	VariantIndex int // The index of the variant we assume is active
+	MemberIndex  int // The index of the member within the payload (0 for single value)
+}
+
+func (*AccessVariantPayload) stmtNode() {}
 
 // Return terminator
 type Return struct {

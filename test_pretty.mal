@@ -1,0 +1,18 @@
+fn main() {
+    let a = 10;
+    let b = 20;
+    let c = 5;
+
+    if a < b {
+        let d = (a + b) * c;
+        if d > 100 {
+            let e = d - 100;
+        } else {
+            let e = 0;
+        }
+    }
+
+    if a > b {
+        let impossible = 999;
+    }
+}

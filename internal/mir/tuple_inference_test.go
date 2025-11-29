@@ -38,7 +38,7 @@ func lowerFunctionForTest(t *testing.T, src string) *Function {
 		t.Fatal("no function found in source")
 	}
 
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
 	fn, err := lowerer.LowerFunction(fnDecl)
 	if err != nil {
 		t.Fatalf("lowering error: %v", err)

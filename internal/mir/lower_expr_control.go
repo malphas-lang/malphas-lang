@@ -630,12 +630,12 @@ func (l *Lowerer) lowerEnumPattern(
 		argLocal := l.newLocal(fmt.Sprintf("arg_%d", i), argType)
 		l.currentFunc.Locals = append(l.currentFunc.Locals, argLocal)
 
-		// Use LoadField with index as name for tuple variants
-		fieldName := fmt.Sprintf("%d", i)
-		block.Statements = append(block.Statements, &LoadField{
-			Result: argLocal,
-			Target: subject,
-			Field:  fieldName,
+		// Use AccessVariantPayload to extract payload field
+		block.Statements = append(block.Statements, &AccessVariantPayload{
+			Result:       argLocal,
+			Target:       subject,
+			VariantIndex: variantIdx,
+			MemberIndex:  i,
 		})
 
 		// Check argument pattern

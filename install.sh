@@ -206,13 +206,66 @@ main() {
             success "Malphas is in your PATH"
         else
             warning "Malphas is not in your PATH"
-            echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile:"
-            echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+            
+            # Detect shell config file
+            SHELL_CONFIG=""
+            if [ -n "$ZSH_VERSION" ] || [[ "$SHELL" == */zsh ]]; then
+                SHELL_CONFIG="$HOME/.zshrc"
+            elif [ -n "$BASH_VERSION" ] || [[ "$SHELL" == */bash ]]; then
+                if [ -f "$HOME/.bashrc" ]; then
+                    SHELL_CONFIG="$HOME/.bashrc"
+                else
+                    SHELL_CONFIG="$HOME/.bash_profile"
+                fi
+            else
+                SHELL_CONFIG="$HOME/.profile"
+            fi
+
+            # Ask user if they want to add it automatically
+            ADD_TO_PATH=false
+            if [ -t 0 ]; then
+                read -p "Do you want to automatically add $INSTALL_DIR to your PATH in $SHELL_CONFIG? (y/N): " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    ADD_TO_PATH=true
+                fi
+            fi
+
+            if [ "$ADD_TO_PATH" = true ]; then
+                # Check if already in config file to avoid duplicates
+                if grep -Fq "export PATH=\"\$PATH:$INSTALL_DIR\"" "$SHELL_CONFIG"; then
+                     info "Path export already exists in $SHELL_CONFIG"
+                else
+                    echo "" >> "$SHELL_CONFIG"
+                    echo "# Malphas Language" >> "$SHELL_CONFIG"
+                    echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_CONFIG"
+                    success "Added $INSTALL_DIR to PATH in $SHELL_CONFIG"
+                    info "Run 'source $SHELL_CONFIG' or restart your terminal to use malphas"
+                fi
+            else
+                echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile:"
+                echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+            fi
         fi
     else
         warning "Installation complete, but 'malphas' command not found in PATH"
+        
+        # Detect shell config file
+        SHELL_CONFIG=""
+        if [ -n "$ZSH_VERSION" ] || [[ "$SHELL" == */zsh ]]; then
+            SHELL_CONFIG="$HOME/.zshrc"
+        elif [ -n "$BASH_VERSION" ] || [[ "$SHELL" == */bash ]]; then
+             if [ -f "$HOME/.bashrc" ]; then
+                SHELL_CONFIG="$HOME/.bashrc"
+            else
+                SHELL_CONFIG="$HOME/.bash_profile"
+            fi
+        else
+            SHELL_CONFIG="$HOME/.profile"
+        fi
+
         info "You may need to add $INSTALL_DIR to your PATH"
-        echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile:"
+        echo "Add this to your $SHELL_CONFIG:"
         echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
     fi
     

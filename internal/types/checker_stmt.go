@@ -12,13 +12,76 @@ func (c *Checker) checkBlock(block *ast.BlockExpr, parent *Scope, inUnsafe bool)
 	scope := NewScope(parent)
 	defer scope.Close() // Clean up borrows when scope ends
 
-	for _, stmt := range block.Stmts {
+	var unreachableSpan lexer.Span
+	hasUnreachable := false
+
+	for i, stmt := range block.Stmts {
+		if hasUnreachable {
+			if unreachableSpan == (lexer.Span{}) {
+				unreachableSpan = stmt.Span()
+			} else {
+				// Extend span
+				endSpan := stmt.Span()
+				unreachableSpan.End = endSpan.End
+			}
+			continue
+		}
+
 		c.checkStmt(stmt, scope, inUnsafe)
+
+		// Check if statement terminates control flow
+		if c.isTerminating(stmt) {
+			hasUnreachable = true
+			// If there are more statements, report unreachable code on the next one
+			if i+1 < len(block.Stmts) {
+				unreachableSpan = block.Stmts[i+1].Span()
+			}
+		}
 	}
+
+	if hasUnreachable && unreachableSpan != (lexer.Span{}) {
+		c.reportErrorWithCode(
+			"unreachable statement",
+			unreachableSpan,
+			diag.CodeUnreachableCode,
+			"this code can never be executed",
+			nil,
+		)
+	}
+
 	if block.Tail != nil {
+		if hasUnreachable {
+			c.reportErrorWithCode(
+				"unreachable expression",
+				block.Tail.Span(),
+				diag.CodeUnreachableCode,
+				"this expression can never be executed",
+				nil,
+			)
+			return TypeVoid
+		}
 		return c.checkExpr(block.Tail, scope, inUnsafe)
 	}
 	return TypeVoid
+}
+
+func (c *Checker) isTerminating(stmt ast.Stmt) bool {
+	switch s := stmt.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BreakStmt:
+		return true
+	case *ast.ContinueStmt:
+		return true
+	case *ast.ExprStmt:
+		// Check for panic() call
+		if call, ok := s.Expr.(*ast.CallExpr); ok {
+			if ident, ok := call.Callee.(*ast.Ident); ok && ident.Name == "panic" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
@@ -68,8 +131,58 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 	case *ast.ExprStmt:
 		c.checkExpr(s.Expr, scope, inUnsafe)
 	case *ast.ReturnStmt:
+		// Check return value against expected return type
+		expected := c.CurrentReturn
+		if expected == nil {
+			expected = TypeVoid
+		}
+
+		// Special check for main
+		if c.CurrentFnName == "main" {
+			if s.Value != nil {
+				valType := c.checkExpr(s.Value, scope, inUnsafe)
+				c.reportErrorWithCode(
+					"cannot return a value from `main`",
+					s.Value.Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("expected `()`, found `%s`", valType),
+					nil,
+				)
+			}
+			return
+		}
+
 		if s.Value != nil {
-			c.checkExpr(s.Value, scope, inUnsafe)
+			valType := c.checkExpr(s.Value, scope, inUnsafe)
+			if !c.assignableTo(valType, expected) {
+				if expected == TypeVoid {
+					c.reportErrorWithCode(
+						fmt.Sprintf("expected `()`, found `%s`", valType),
+						s.Value.Span(),
+						diag.CodeTypeMismatch,
+						"function is expected to return `()` (unit), but returned a value",
+						nil,
+					)
+				} else {
+					c.reportErrorWithCode(
+						fmt.Sprintf("expected `%s`, found `%s`", expected, valType),
+						s.Value.Span(),
+						diag.CodeTypeMismatch,
+						fmt.Sprintf("function expects return type `%s`", expected),
+						nil,
+					)
+				}
+			}
+		} else {
+			if expected != TypeVoid {
+				c.reportErrorWithCode(
+					fmt.Sprintf("expected `%s`, found `()`", expected),
+					s.Span(),
+					diag.CodeTypeMismatch,
+					fmt.Sprintf("return statement must return a value of type `%s`", expected),
+					nil,
+				)
+			}
 		}
 	case *ast.SpawnStmt:
 		if s.Call != nil {
@@ -81,7 +194,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 			// Type check function literal: spawn |params| { ... }(args)
 			// First, create a scope for the function literal parameters
 			fnScope := NewScope(scope)
-			
+
 			// Check parameters
 			for _, param := range s.FunctionLiteral.Params {
 				if param.Type != nil {
@@ -96,15 +209,15 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					}
 				}
 			}
-			
+
 			// Check function body
 			c.checkBlock(s.FunctionLiteral.Body, fnScope, inUnsafe)
-			
+
 			// Check arguments if provided
 			for _, arg := range s.Args {
 				c.checkExpr(arg, scope, inUnsafe)
 			}
-			
+
 			fnScope.Close()
 		}
 	case *ast.SelectStmt:
@@ -112,7 +225,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 			// Create a new scope for this case to hold bound variables
 			caseScope := NewScope(scope)
 			var boundVarType Type
-			
+
 			// Validate that the communication statement is a channel operation
 			switch comm := case_.Comm.(type) {
 			case *ast.LetStmt:
@@ -186,8 +299,8 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					boundVarType = TypeVoid
 				}
 				caseScope.Insert(comm.Name.Name, &Symbol{
-					Name: comm.Name.Name,
-					Type: boundVarType,
+					Name:    comm.Name.Name,
+					Type:    boundVarType,
 					DefNode: comm,
 				})
 			case *ast.ExprStmt:
@@ -196,7 +309,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					// Send operation: ch <- val
 					leftType := c.checkExpr(infix.Left, scope, inUnsafe)
 					rightType := c.checkExpr(infix.Right, scope, inUnsafe)
-					
+
 					if ch, ok := leftType.(*Channel); ok {
 						// Check direction
 						if ch.Dir == RecvOnly {
@@ -234,26 +347,26 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					// Receive operation without binding: <-ch
 					chType := c.checkExpr(prefix.Expr, scope, inUnsafe)
 					if ch, ok := chType.(*Channel); ok {
-					if ch.Dir == SendOnly {
-						help := c.generateChannelErrorHelp("cannot receive from send-only channel", ch, true, false)
+						if ch.Dir == SendOnly {
+							help := c.generateChannelErrorHelp("cannot receive from send-only channel", ch, true, false)
+							c.reportErrorWithCode(
+								fmt.Sprintf("cannot receive from send-only channel `%s`", ch),
+								prefix.Expr.Span(),
+								diag.CodeTypeMismatch,
+								help,
+								nil,
+							)
+						}
+					} else {
+						help := c.generateChannelErrorHelp(fmt.Sprintf("cannot receive from non-channel type `%s`", chType), chType, false, false)
 						c.reportErrorWithCode(
-							fmt.Sprintf("cannot receive from send-only channel `%s`", ch),
+							fmt.Sprintf("cannot receive from non-channel type `%s`", chType),
 							prefix.Expr.Span(),
 							diag.CodeTypeMismatch,
 							help,
 							nil,
 						)
 					}
-				} else {
-					help := c.generateChannelErrorHelp(fmt.Sprintf("cannot receive from non-channel type `%s`", chType), chType, false, false)
-					c.reportErrorWithCode(
-						fmt.Sprintf("cannot receive from non-channel type `%s`", chType),
-						prefix.Expr.Span(),
-						diag.CodeTypeMismatch,
-						help,
-						nil,
-					)
-				}
 				} else {
 					c.reportErrorWithCode(
 						fmt.Sprintf("select case %d must be a channel operation (send or receive)", i+1),
@@ -272,7 +385,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					nil,
 				)
 			}
-			
+
 			// Check the case body with the case scope (which includes bound variables)
 			c.checkBlock(case_.Body, caseScope, inUnsafe)
 			caseScope.Close()
@@ -311,11 +424,11 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 	case *ast.ForStmt:
 		// For now, we support range-based for loops: for item in iterable { }
 		iterableType := c.checkExpr(s.Iterable, scope, inUnsafe)
-		
+
 		// Validate iterable type and infer element type
 		var elementType Type = TypeInt // Default fallback
 		var isValidIterable bool
-		
+
 		switch t := iterableType.(type) {
 		case *Array:
 			elementType = t.Elem
@@ -343,7 +456,7 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 				isValidIterable = true
 			}
 		}
-		
+
 		if !isValidIterable {
 			c.reportErrorWithCode(
 				fmt.Sprintf("for loop iterable must be an array or slice, got `%s`", iterableType),
@@ -368,4 +481,3 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 		// Continue is valid (no type checking needed)
 	}
 }
-

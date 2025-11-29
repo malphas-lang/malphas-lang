@@ -301,7 +301,7 @@ func (c *Checker) resolveTypeInternal(typ ast.TypeExpr) Type {
 		if t.Return != nil {
 			ret = c.resolveType(t.Return)
 		}
-		return &Function{Params: params, Return: ret}
+		return &Function{TypeParams: typeParams, Params: params, Return: ret}
 	// case *ast.EffectRowType:
 	// 	// Resolve effect row { E1, E2 | Tail }
 	// 	var effects []Type

@@ -1,0 +1,3 @@
+fn main() {
+    return 1; // ERROR: cannot return a value from main
+}

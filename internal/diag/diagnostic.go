@@ -60,6 +60,7 @@ const (
 	CodeTypeUnsafeRequired         Code = "TYPE_UNSAFE_REQUIRED"
 	CodeTypeInvalidPattern         Code = "TYPE_INVALID_PATTERN"
 	CodeTypeNonExhaustiveMatch     Code = "TYPE_NON_EXHAUSTIVE_MATCH"
+	CodeUnreachableCode            Code = "UNREACHABLE_CODE"
 
 	// Codegen errors
 	CodeGenUnsupportedExpr      Code = "CODEGEN_UNSUPPORTED_EXPR"

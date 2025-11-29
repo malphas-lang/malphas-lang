@@ -24,7 +24,12 @@ func (g *Generator) generateTerminator(term mir.Terminator, fn *mir.Function, re
 func (g *Generator) generateReturn(ret *mir.Return, retLLVM string) error {
 	if ret.Value == nil {
 		// Void return
-		g.emit("  ret void")
+		if retLLVM == "i32" {
+			// Special case for main: return 0
+			g.emit("  ret i32 0")
+		} else {
+			g.emit("  ret void")
+		}
 		return nil
 	}
 
@@ -89,4 +94,3 @@ func (g *Generator) generateBranch(branch *mir.Branch) error {
 	g.emit(fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", condReg, trueLabel, falseLabel))
 	return nil
 }
-
