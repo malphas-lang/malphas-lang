@@ -7,16 +7,22 @@ function activate(context) {
     // Always show that we're activating
     vscode.window.showInformationMessage('Malphas extension is activating...', 'OK');
     console.log('[Malphas] Extension activate() called');
-    
+
+    // Get the configured executable path
+    const config = vscode.workspace.getConfiguration('malphas');
+    const executablePath = config.get('executablePath') || 'malphas';
+
+    console.log(`[Malphas] Using executable: ${executablePath}`);
+
     // Configuration for the language server
     const serverOptions = {
         run: {
-            command: 'malphas',
+            command: executablePath,
             args: ['lsp'],
             transport: TransportKind.stdio
         },
         debug: {
-            command: 'malphas',
+            command: executablePath,
             args: ['lsp'],
             transport: TransportKind.stdio
         }

@@ -1,0 +1,9 @@
+mod inline {
+    pub fn hello() {
+        println("Hello from inline module!");
+    }
+}
+
+fn main() {
+    inline::hello();
+}

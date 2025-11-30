@@ -26,16 +26,62 @@ func (p *Parser) parseModDecl() *ast.ModDecl {
 
 	p.nextToken()
 
-	// Now curTok should be on SEMICOLON
+	// Check for inline module (block)
+	if p.curTok.Type == lexer.LBRACE {
+		p.nextToken() // consume '{'
+
+		// Parse module body - similar to ParseFile but inside braces
+		// We can reuse the logic by creating a "File" node for the body
+		// but we need to stop at '}'
+
+		body := ast.NewFile(p.curTok.Span)
+
+		// Parse items until '}'
+		for p.curTok.Type != lexer.RBRACE && p.curTok.Type != lexer.EOF {
+			switch p.curTok.Type {
+			case lexer.USE:
+				useDecl := p.parseUseDecl()
+				if useDecl != nil {
+					body.Uses = append(body.Uses, useDecl)
+				}
+			case lexer.MOD:
+				modDecl := p.parseModDecl()
+				if modDecl != nil {
+					body.Mods = append(body.Mods, modDecl)
+				}
+			default:
+				decl := p.parseDecl()
+				if decl != nil {
+					body.Decls = append(body.Decls, decl)
+				} else {
+					// If we can't parse a declaration, skip token to avoid infinite loop
+					p.nextToken()
+				}
+			}
+		}
+
+		if p.curTok.Type != lexer.RBRACE {
+			p.reportError("expected '}' after module body", p.curTok.Span)
+			return nil
+		}
+
+		endSpan := p.curTok.Span
+		body.SetSpan(mergeSpan(body.Span(), endSpan))
+		p.nextToken() // consume '}'
+
+		return ast.NewModDecl(name, body, mergeSpan(start, endSpan))
+	}
+
+	// External module: mod name;
 	if p.curTok.Type != lexer.SEMICOLON {
-		p.reportError("expected ';' after module name", p.curTok.Span)
-		return ast.NewModDecl(name, mergeSpan(start, nameTok.Span))
+		p.reportError("expected ';' or '{' after module name", p.curTok.Span)
+		return ast.NewModDecl(name, nil, mergeSpan(start, nameTok.Span))
 	}
 
 	// Advance past the semicolon
 	p.nextToken()
 
-	decl := ast.NewModDecl(name, mergeSpan(start, nameTok.Span))
+	decl := ast.NewModDecl(name, nil, mergeSpan(start, nameTok.Span))
 	return decl
 }
 

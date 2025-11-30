@@ -40,11 +40,17 @@ type Generator struct {
 	// Modules for cross-module references (needed for type info)
 	modules map[string]interface{} // We'll need AST files, but use interface{} for now
 
+	// Current module being generated (for struct lookup)
+	currentModule *mir.Module
+
 	// Error collection
 	Errors []diag.Diagnostic
 
 	// String constants (content -> global name)
 	stringConstants map[string]string
+
+	// Spawn wrapper functions (collected during generation)
+	spawnWrappers []string
 }
 
 // NewGenerator creates a new MIR-to-LLVM generator
@@ -73,6 +79,8 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 	g.regCounter = 0
 	g.Errors = make([]diag.Diagnostic, 0)
 	g.stringConstants = make(map[string]string)
+	g.spawnWrappers = make([]string, 0)
+	g.currentModule = module // Store current module for struct lookups
 
 	// Emit module header
 	g.emitModuleHeader()
@@ -101,6 +109,11 @@ func (g *Generator) Generate(module *mir.Module) (string, error) {
 		if err := g.generateFunction(fn); err != nil {
 			return "", fmt.Errorf("error generating function %s: %w", fn.Name, err)
 		}
+	}
+
+	// Emit spawn wrapper functions
+	for _, wrapper := range g.spawnWrappers {
+		g.builder.WriteString(wrapper)
 	}
 
 	// Emit string constants
@@ -157,20 +170,20 @@ func (g *Generator) emitRuntimeDeclarations() {
 	g.emit("")
 
 	// Slice/Vec operations
-	g.emit("declare %Slice* @runtime_slice_new(i64, i64, i64)")
-	g.emit("declare i8* @runtime_slice_get(%Slice*, i64)")
-	g.emit("declare void @runtime_slice_set(%Slice*, i64, i8*)")
-	g.emit("declare void @runtime_slice_push(%Slice*, i8*)")
-	g.emit("declare i64 @runtime_slice_len(%Slice*)")
-	g.emit("declare i8 @runtime_slice_is_empty(%Slice*)")
-	g.emit("declare i64 @runtime_slice_cap(%Slice*)")
-	g.emit("declare void @runtime_slice_reserve(%Slice*, i64)")
-	g.emit("declare void @runtime_slice_clear(%Slice*)")
-	g.emit("declare i8* @runtime_slice_pop(%Slice*)")
-	g.emit("declare void @runtime_slice_remove(%Slice*, i64)")
-	g.emit("declare void @runtime_slice_insert(%Slice*, i64, i8*)")
-	g.emit("declare %Slice* @runtime_slice_copy(%Slice*)")
-	g.emit("declare %Slice* @runtime_slice_subslice(%Slice*, i64, i64)")
+	g.emit("declare %struct.Slice* @runtime_slice_new(i64, i64, i64)")
+	g.emit("declare i8* @runtime_slice_get(%struct.Slice*, i64)")
+	g.emit("declare void @runtime_slice_set(%struct.Slice*, i64, i8*)")
+	g.emit("declare void @runtime_slice_push(%struct.Slice*, i8*)")
+	g.emit("declare i64 @runtime_slice_len(%struct.Slice*)")
+	g.emit("declare i8 @runtime_slice_is_empty(%struct.Slice*)")
+	g.emit("declare i64 @runtime_slice_cap(%struct.Slice*)")
+	g.emit("declare void @runtime_slice_reserve(%struct.Slice*, i64)")
+	g.emit("declare void @runtime_slice_clear(%struct.Slice*)")
+	g.emit("declare i8* @runtime_slice_pop(%struct.Slice*)")
+	g.emit("declare void @runtime_slice_remove(%struct.Slice*, i64)")
+	g.emit("declare void @runtime_slice_insert(%struct.Slice*, i64, i8*)")
+	g.emit("declare %struct.Slice* @runtime_slice_copy(%struct.Slice*)")
+	g.emit("declare %struct.Slice* @runtime_slice_subslice(%struct.Slice*, i64, i64)")
 	g.emit("")
 
 	// HashMap operations
@@ -203,6 +216,15 @@ func (g *Generator) emitRuntimeDeclarations() {
 	g.emit("%pthread_attr_t = type opaque")
 	g.emit("%pthread_t = type i64")
 	g.emit("")
+
+	// Legion (goroutine/green thread) operations
+	g.emit("; Legion (user-level thread) operations")
+	g.emit("%Legion = type opaque")
+	g.emit("declare %Legion* @runtime_legion_spawn(void (i8*)*, i8*, i64)")
+	g.emit("declare void @runtime_legion_start(%Legion*)")
+	g.emit("declare void @runtime_legion_yield()")
+	g.emit("declare void @runtime_scheduler_shutdown()")
+	g.emit("")
 }
 
 // emitCommonTypeDeclarations emits type declarations for common stdlib types
@@ -210,7 +232,9 @@ func (g *Generator) emitCommonTypeDeclarations() {
 	g.emit("; Common type declarations (runtime types)")
 	g.emit("%String = type opaque")
 	g.emit("%HashMap = type opaque")
-	g.emit("%Slice = type opaque")
+	// Define Slice struct: { data, len, cap, elem_size }
+	g.emit("%struct.Slice = type { i8*, i64, i64, i64 }")
+	g.structTypes["Slice"] = true
 	g.emit("%Channel = type opaque")
 	g.emit("")
 	g.emit("; Closure type for closures/lambda expressions")
@@ -312,7 +336,7 @@ func (g *Generator) emitStructDefinitions(module *mir.Module) {
 		}
 
 		// Store field map for later use
-		g.structFields[s.Name] = fieldMap
+		g.structFields[name] = fieldMap
 
 		// Emit struct definition
 		// %struct.Name = type { ... }

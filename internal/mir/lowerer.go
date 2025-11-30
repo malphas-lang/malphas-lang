@@ -15,6 +15,12 @@ type Lowerer struct {
 	// Global scope containing type definitions
 	GlobalScope *types.Scope
 
+	// Method table from checker (for accessing methods from imported modules)
+	MethodTable map[string]map[string]*types.Function
+
+	// Loaded modules from checker (for accessing impl blocks from stdlib)
+	Modules map[string]*types.ModuleInfo
+
 	// Current function being lowered
 	currentFunc *Function
 
@@ -38,14 +44,19 @@ type Lowerer struct {
 
 	// Parameter type overrides (for impl methods)
 	ParamOverrides map[string]types.Type
+
+	// Module being constructed (for adding spawn block/literal functions)
+	Module *Module
 }
 
 // NewLowerer creates a new MIR lowerer
-func NewLowerer(typeInfo map[ast.Node]types.Type, callTypeArgs map[*ast.CallExpr][]types.Type, globalScope *types.Scope) *Lowerer {
+func NewLowerer(typeInfo map[ast.Node]types.Type, callTypeArgs map[*ast.CallExpr][]types.Type, globalScope *types.Scope, methodTable map[string]map[string]*types.Function, modules map[string]*types.ModuleInfo) *Lowerer {
 	return &Lowerer{
 		TypeInfo:     typeInfo,
 		CallTypeArgs: callTypeArgs,
 		GlobalScope:  globalScope,
+		MethodTable:  methodTable,
+		Modules:      modules,
 		localCounter: 0,
 		blockCounter: 0,
 		locals:       make(map[string]Local),
@@ -58,6 +69,7 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 	module := &Module{
 		Functions: make([]*Function, 0),
 	}
+	l.Module = module // Set module so spawn blocks/literals can add functions
 
 	for _, decl := range file.Decls {
 		if fnDecl, ok := decl.(*ast.FnDecl); ok {
@@ -75,6 +87,17 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 		}
 	}
 
+	// Lower inline modules
+	for _, modDecl := range file.Mods {
+		if modDecl.Body != nil {
+			fns, err := l.lowerInlineModule(modDecl, "")
+			if err != nil {
+				return nil, fmt.Errorf("failed to lower inline module %s: %w", modDecl.Name.Name, err)
+			}
+			module.Functions = append(module.Functions, fns...)
+		}
+	}
+
 	// Collect struct and enum definitions from global scope
 	if l.GlobalScope != nil {
 		for _, sym := range l.GlobalScope.Symbols {
@@ -82,6 +105,48 @@ func (l *Lowerer) LowerModule(file *ast.File) (*Module, error) {
 				module.Structs = append(module.Structs, t)
 			} else if t, ok := sym.Type.(*types.Enum); ok {
 				module.Enums = append(module.Enums, t)
+			}
+		}
+	}
+
+	// IMPORTANT: Lower impl blocks from imported modules (e.g., stdlib)
+	// This makes stdlib methods available for monomorphization
+	// Also collect structs and enums from these modules for codegen
+	if l.Modules != nil {
+		for _, modInfo := range l.Modules {
+			if modInfo.File != nil {
+				// Collect struct and enum declarations from this module
+				for _, decl := range modInfo.File.Decls {
+					if structDecl, ok := decl.(*ast.StructDecl); ok {
+						// Look up the struct type in the module's scope
+						if sym := modInfo.Scope.Lookup(structDecl.Name.Name); sym != nil {
+							if st, ok := sym.Type.(*types.Struct); ok {
+								module.Structs = append(module.Structs, st)
+							}
+						}
+					} else if enumDecl, ok := decl.(*ast.EnumDecl); ok {
+						// Look up the enum type in the module's scope
+						if sym := modInfo.Scope.Lookup(enumDecl.Name.Name); sym != nil {
+							if en, ok := sym.Type.(*types.Enum); ok {
+								module.Enums = append(module.Enums, en)
+							}
+						}
+					}
+				}
+
+				// Process impl declarations from this module
+				for _, decl := range modInfo.File.Decls {
+					if implDecl, ok := decl.(*ast.ImplDecl); ok {
+						fns, err := l.LowerImplDecl(implDecl)
+						if err != nil {
+							// Log error but continue - don't fail the entire build
+							// because of one stdlib impl block
+							fmt.Printf("warning: failed to lower impl from module %s: %v\n", modInfo.Name, err)
+							continue
+						}
+						module.Functions = append(module.Functions, fns...)
+					}
+				}
 			}
 		}
 	}
@@ -224,6 +289,50 @@ func (l *Lowerer) LowerFunction(decl *ast.FnDecl) (*Function, error) {
 	return fn, nil
 }
 
+// lowerInlineModule recursively lowers functions from an inline module
+func (l *Lowerer) lowerInlineModule(modDecl *ast.ModDecl, parentPath string) ([]*Function, error) {
+	var functions []*Function
+	currentPath := modDecl.Name.Name
+	if parentPath != "" {
+		currentPath = parentPath + "__" + currentPath
+	}
+
+	if modDecl.Body != nil {
+		for _, decl := range modDecl.Body.Decls {
+			if fnDecl, ok := decl.(*ast.FnDecl); ok {
+				fn, err := l.LowerFunction(fnDecl)
+				if err != nil {
+					return nil, err
+				}
+				// Mangle function name with module path
+				fn.Name = currentPath + "__" + fn.Name
+				functions = append(functions, fn)
+			} else if implDecl, ok := decl.(*ast.ImplDecl); ok {
+				fns, err := l.LowerImplDecl(implDecl)
+				if err != nil {
+					return nil, err
+				}
+				// Impl methods are already mangled as Type::Method
+				// We might need to prepend module path if Type is local to module?
+				// For now, assume Type names are unique or already fully qualified in MIR
+				functions = append(functions, fns...)
+			}
+		}
+
+		// Recurse for sub-modules
+		for _, subMod := range modDecl.Body.Mods {
+			if subMod.Body != nil {
+				fns, err := l.lowerInlineModule(subMod, currentPath)
+				if err != nil {
+					return nil, err
+				}
+				functions = append(functions, fns...)
+			}
+		}
+	}
+	return functions, nil
+}
+
 // LowerImplDecl lowers an implementation declaration to MIR functions
 func (l *Lowerer) LowerImplDecl(decl *ast.ImplDecl) ([]*Function, error) {
 	var functions []*Function
@@ -334,6 +443,10 @@ func (l *Lowerer) lowerExpr(expr ast.Expr) (Operand, error) {
 		return l.lowerMapLiteral(e)
 	case *ast.AssignExpr:
 		return l.lowerAssignExpr(e)
+	case *ast.CastExpr:
+		return l.lowerCastExpr(e)
+	case *ast.FunctionLiteral:
+		return l.lowerFunctionLiteral(e)
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}

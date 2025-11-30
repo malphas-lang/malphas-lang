@@ -149,7 +149,7 @@ func TestMapType_Slice(t *testing.T) {
 		t.Fatalf("mapType() error = %v", err)
 	}
 
-	expected := "%Slice*"
+	expected := "%struct.Slice*"
 	if result != expected {
 		t.Errorf("mapType() = %v, want %v", result, expected)
 	}
@@ -376,7 +376,7 @@ func TestGenerate_RuntimeDeclarations(t *testing.T) {
 		"declare i8* @runtime_alloc(i64)",
 		"declare %String* @runtime_string_new(i8*, i64)",
 		"declare void @runtime_println_i64(i64)",
-		"declare %Slice* @runtime_slice_new(i64, i64, i64)",
+		"declare %struct.Slice* @runtime_slice_new(i64, i64, i64)",
 		"declare %HashMap* @runtime_hashmap_new()",
 		"declare %Channel* @runtime_channel_new(i64, i64)",
 	}
@@ -956,7 +956,7 @@ func TestGenerateStatement_ConstructStruct(t *testing.T) {
 
 	construct := &mir.ConstructStruct{
 		Result: resultLocal,
-		Type:   "Point",
+		Type:   &types.Struct{Name: "Point"},
 		Fields: map[string]mir.Operand{
 			"x": field1,
 			"y": field2,

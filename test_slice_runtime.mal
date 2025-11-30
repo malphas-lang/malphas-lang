@@ -1,0 +1,119 @@
+package main;
+
+// Mock Slice definition for testing
+pub struct Slice[T]{
+    data: *T,
+    len: usize,
+    cap: usize,
+    elem_size: usize,
+}
+
+impl[T] Slice[T]{
+    pub fn new() -> Slice[T] {
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+
+    pub fn len(&self) -> usize {
+        return self.len;
+    }
+
+    pub fn cap(&self) -> usize {
+        return self.cap;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        return self.len == 0 as usize;
+    }
+
+    pub fn get(&self, index: usize) -> void {
+        // Placeholder
+    }
+
+    pub fn set(&mut self, index: usize, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_set
+    }
+
+    pub fn push(&mut self, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_push
+    }
+
+    pub fn pop(&mut self) -> T? {
+        // Compiler intrinsic: maps to runtime_slice_pop
+        return nil;
+    }
+
+    pub fn insert(&mut self, index: usize, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_insert
+    }
+
+    pub fn remove(&mut self, index: usize) -> void {
+        // Compiler intrinsic: maps to runtime_slice_remove
+    }
+
+    pub fn clear(&mut self) -> void {
+        // Compiler intrinsic: maps to runtime_slice_clear
+    }
+
+    pub fn reserve(&mut self, additional: usize) -> void {
+        // Compiler intrinsic: maps to runtime_slice_reserve
+    }
+
+    pub fn copy(&self) -> Slice[T] {
+        // Compiler intrinsic: maps to runtime_slice_copy
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+
+    pub fn subslice(&self, start: usize, end: usize) -> Slice[T] {
+        // Compiler intrinsic: maps to runtime_slice_subslice
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+}
+
+fn main() {
+    let mut s = Slice[int]::new();
+    s.push(10);
+    s.push(20);
+    s.push(30);
+    
+    let x = s.pop();
+    // x should be 30
+    
+    s.insert(0 as usize, 5);
+    // s is now [5, 10, 20]
+    
+    s.set(1 as usize, 15);
+    // s is now [5, 15, 20]
+    
+    s.get(1 as usize);
+    // y should be 15
+    
+    s.remove(0 as usize);
+    // s is now [15, 20]
+    
+    let len = s.len();
+    // len should be 2
+    
+    let cap = s.cap();
+    
+    s.reserve(10 as usize);
+    
+    let s2 = s.copy();
+    
+    s.clear();
+    // s is empty
+}

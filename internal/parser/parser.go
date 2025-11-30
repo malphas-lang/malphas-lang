@@ -34,6 +34,7 @@ const (
 	precedenceComparison
 	precedenceSum
 	precedenceProduct
+	precedenceCast // as
 	precedencePrefix
 	precedencePostfix // . ( ) [ ]
 	precedencePath    // ::
@@ -55,6 +56,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.MINUS:        precedenceSum,
 	lexer.ASTERISK:     precedenceProduct,
 	lexer.SLASH:        precedenceProduct,
+	lexer.AS:           precedenceCast,
 	lexer.DOUBLE_COLON: precedencePath,
 	lexer.LPAREN:       precedencePostfix,
 	lexer.LBRACKET:     precedencePostfix,
@@ -183,6 +185,7 @@ func (p *Parser) registerParsers() {
 	p.registerInfix(lexer.DOT_DOT, p.parseRangeInfix)
 	p.registerInfix(lexer.DOUBLE_COLON, p.parseInfixExpr) // ::
 	p.registerInfix(lexer.LARROW, p.parseInfixExpr)       // send ch <- val
+	p.registerInfix(lexer.AS, p.parseCastExpr)            // cast expr as Type
 }
 
 // Errors returns all recoverable parse errors that were encountered.

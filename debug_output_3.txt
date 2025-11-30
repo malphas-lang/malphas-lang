@@ -1,0 +1,145 @@
+Building examples/repro_slice_enum.mal...
+DEBUG: Enums in module:
+[DEBUG] Compiling LLVM IR to object file: /var/folders/l_/x1701flx191d9l4_gm3pw0jc0000gn/T/malphas_973080678.ll -> /var/folders/l_/x1701flx191d9l4_gm3pw0jc0000gn/T/malphas_973080678.ll.o
+LLVM compilation failed: exit status 1
+  llc path: /opt/homebrew/opt/llvm/bin/llc
+
+llc error output:
+/opt/homebrew/opt/llvm/bin/llc: error: /opt/homebrew/opt/llvm/bin/llc: /var/folders/l_/x1701flx191d9l4_gm3pw0jc0000gn/T/malphas_973080678.ll:106:47: error: base element of getelementptr must be sized
+  %reg8 = getelementptr inbounds %enum.Slice, %enum.Slice* %reg7, i32 0, i32 0
+                                              ^
+
+
+Generated LLVM IR (for debugging):
+; ModuleID = 'malphas'
+source_filename = "malphas"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+; Runtime function declarations
+declare void @runtime_gc_init()
+declare i8* @runtime_alloc(i64)
+
+declare %String* @runtime_string_new(i8*, i64)
+declare void @runtime_string_free(%String*)
+declare i32 @runtime_string_equal(%String*, %String*)
+declare %String* @runtime_string_concat(%String*, %String*)
+declare %String* @runtime_string_from_i64(i64)
+declare %String* @runtime_string_from_double(double)
+declare %String* @runtime_string_from_bool(i1)
+declare %String* @runtime_string_format(%String*, %String*, %String*, %String*, %String*)
+
+declare void @runtime_println_i64(i64)
+declare void @runtime_println_i32(i32)
+declare void @runtime_println_i8(i8)
+declare void @runtime_println_double(double)
+declare void @runtime_println_bool(i1)
+declare void @runtime_println_string(%String*)
+
+declare %struct.Slice* @runtime_slice_new(i64, i64, i64)
+declare i8* @runtime_slice_get(%struct.Slice*, i64)
+declare void @runtime_slice_set(%struct.Slice*, i64, i8*)
+declare void @runtime_slice_push(%struct.Slice*, i8*)
+declare i64 @runtime_slice_len(%struct.Slice*)
+declare i8 @runtime_slice_is_empty(%struct.Slice*)
+declare i64 @runtime_slice_cap(%struct.Slice*)
+declare void @runtime_slice_reserve(%struct.Slice*, i64)
+declare void @runtime_slice_clear(%struct.Slice*)
+declare i8* @runtime_slice_pop(%struct.Slice*)
+declare void @runtime_slice_remove(%struct.Slice*, i64)
+declare void @runtime_slice_insert(%struct.Slice*, i64, i8*)
+declare %struct.Slice* @runtime_slice_copy(%struct.Slice*)
+declare %struct.Slice* @runtime_slice_subslice(%struct.Slice*, i64, i64)
+
+declare %HashMap* @runtime_hashmap_new()
+declare void @runtime_hashmap_put(%HashMap*, %String*, i8*)
+declare i8* @runtime_hashmap_get(%HashMap*, %String*)
+declare i8 @runtime_hashmap_contains_key(%HashMap*, %String*)
+declare i64 @runtime_hashmap_len(%HashMap*)
+declare i8 @runtime_hashmap_is_empty(%HashMap*)
+declare void @runtime_hashmap_free(%HashMap*)
+
+declare %Channel* @runtime_channel_new(i64, i64)
+declare void @runtime_channel_send(%Channel*, i8*)
+declare i8* @runtime_channel_recv(%Channel*)
+declare void @runtime_channel_close(%Channel*)
+declare i8 @runtime_channel_is_closed(%Channel*)
+declare i8 @runtime_channel_try_send(%Channel*, i8*)
+declare i8 @runtime_channel_try_recv(%Channel*, i8**)
+declare void @runtime_channel_wait_for_send(%Channel*)
+declare void @runtime_channel_wait_for_recv(%Channel*)
+declare void @runtime_nanosleep(i64)
+
+declare i32 @pthread_create(i64*, %pthread_attr_t*, i8* (i8*)*, i8*)
+declare i32 @pthread_join(i64, i8**)
+declare i32 @pthread_detach(i64)
+%pthread_attr_t = type opaque
+%pthread_t = type i64
+
+; Legion (user-level thread) operations
+%Legion = type opaque
+declare %Legion* @runtime_legion_spawn(void (i8*)*, i8*, i64)
+declare void @runtime_legion_start(%Legion*)
+declare void @runtime_legion_yield()
+declare void @runtime_scheduler_shutdown()
+
+; Common type declarations (runtime types)
+%String = type opaque
+%HashMap = type opaque
+%struct.Slice = type { i8*, i64, i64, i64 }
+%Channel = type opaque
+
+; Closure type for closures/lambda expressions
+%Closure = type { i8* (i8*)*, i8* }
+
+; GC initialization function
+define internal void @malphas_gc_init() {
+entry:
+  call void @runtime_gc_init()
+  ret void
+}
+
+; Global constructor to initialize GC at program startup
+@llvm.global_ctors = appending global [1 x { i32, void ()*, i8* }] [{ i32, void ()*, i8* } { i32 65535, void ()* @malphas_gc_init, i8* null }]
+
+; Struct definitions
+%struct.MyItem = type { i64 }
+%struct.Slice_MyItem = type { %struct.MyItem**, i64, i64, i64 }
+
+define i32 @main() {
+entry:
+  %reg0 = alloca %struct.Slice*
+  %reg1 = alloca %struct.Slice*
+  %reg2 = alloca i64
+  %reg3 = alloca i64
+  %reg4 = getelementptr inbounds %struct.Slice, %struct.Slice* null, i32 1
+  %reg5 = ptrtoint %struct.Slice* %reg4 to i64
+  %reg6 = call i8* @runtime_alloc(i64 %reg5)
+  %reg7 = bitcast i8* %reg6 to %enum.Slice*
+  %reg8 = getelementptr inbounds %enum.Slice, %enum.Slice* %reg7, i32 0, i32 0
+  store i32 0, i32* %reg8
+  store %struct.Slice* %reg7, %struct.Slice** %reg1
+  %reg9 = load %struct.Slice*, %struct.Slice** %reg1
+  %reg10 = call i64 @Slice__len_MyItem(%struct.Slice* %reg9)
+  store i64 %reg10, i64* %reg2
+  %reg11 = load i64, i64* %reg2
+  store i64 %reg11, i64* %reg3
+  %reg12 = load i64, i64* %reg3
+  call void @runtime_println_i64(i64 %reg12)
+  ret i32 0
+}
+
+define i64 @Slice__len_MyItem(%struct.Slice_MyItem* %self) {
+entry:
+  %reg0 = alloca %struct.Slice_MyItem*
+  store %struct.Slice_MyItem* %self, %struct.Slice_MyItem** %reg0
+  %reg1 = alloca i64
+  %reg2 = load %struct.Slice_MyItem*, %struct.Slice_MyItem** %reg0
+  %reg4 = getelementptr inbounds %struct.Slice_MyItem, %struct.Slice_MyItem* %reg2, i32 0, i32 1
+  %reg5 = bitcast %struct.Slice_MyItem* %reg4 to i64*
+  %reg3 = load i64, i64* %reg5
+  ret i64 %reg3
+}
+
+
+exit status 1

@@ -251,7 +251,16 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 	indices := []ast.Expr{}
 
 	if p.curTok.Type != lexer.RBRACKET {
-		index := p.parseExpr()
+		var index ast.Expr
+		if p.curTok.Type == lexer.CHAN {
+			typ := p.parseType()
+			if typ != nil {
+				index = ast.NewTypeWrapperExpr(typ, typ.Span())
+			}
+		} else {
+			index = p.parseExpr()
+		}
+
 		if index == nil {
 			return nil
 		}
@@ -261,7 +270,15 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 			p.nextToken() // move to comma
 			p.nextToken() // move to next index start
 
-			index = p.parseExpr()
+			if p.curTok.Type == lexer.CHAN {
+				typ := p.parseType()
+				if typ != nil {
+					index = ast.NewTypeWrapperExpr(typ, typ.Span())
+				}
+			} else {
+				index = p.parseExpr()
+			}
+
 			if index == nil {
 				return nil
 			}
@@ -302,3 +319,19 @@ func (p *Parser) parseIndexExpr(target ast.Expr) ast.Expr {
 	return idxExpr
 }
 
+// parseCastExpr parses a cast expression: expr as Type
+func (p *Parser) parseCastExpr(left ast.Expr) ast.Expr {
+	asTok := p.curTok
+	p.nextToken() // consume 'as'
+
+	// Parse type
+	typ := p.parseType()
+	if typ == nil {
+		return nil
+	}
+
+	span := mergeSpan(left.Span(), asTok.Span)
+	span = mergeSpan(span, typ.Span())
+
+	return ast.NewCastExpr(left, typ, span)
+}

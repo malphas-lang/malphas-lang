@@ -144,6 +144,7 @@ var keywords = map[string]TokenType{
 	"true":     TRUE,
 	"false":    FALSE,
 	"null":     NIL,
+	"nil":      NIL,
 	"spawn":    SPAWN,
 	"chan":     CHAN,
 	"select":   SELECT,

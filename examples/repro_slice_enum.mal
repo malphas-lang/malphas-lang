@@ -1,0 +1,12 @@
+mod core;
+use core::Slice;
+
+// enum MyEnum { A, B }
+
+struct MyItem { x: int }
+
+fn main() {
+    let s = Slice[MyItem]::new();
+    let x = s.len();
+    println(x);
+}

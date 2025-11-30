@@ -40,7 +40,7 @@ func (l *Lowerer) lowerStructLiteral(expr *ast.StructLiteral) (Operand, error) {
 	// Add construct struct statement
 	l.currentBlock.Statements = append(l.currentBlock.Statements, &ConstructStruct{
 		Result: resultLocal,
-		Type:   structName,
+		Type:   resultType,
 		Fields: fields,
 	})
 
@@ -240,10 +240,10 @@ func (l *Lowerer) lowerRecordLiteral(expr *ast.RecordLiteral) (Operand, error) {
 	l.currentFunc.Locals = append(l.currentFunc.Locals, resultLocal)
 
 	// Treat record literal similar to struct literal
-	// Use empty type name to indicate anonymous struct/record
+	// Use resultType which should be the inferred anonymous struct type
 	l.currentBlock.Statements = append(l.currentBlock.Statements, &ConstructStruct{
 		Result: resultLocal,
-		Type:   "", // Empty indicates anonymous struct/record
+		Type:   resultType,
 		Fields: fields,
 	})
 

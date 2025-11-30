@@ -1,0 +1,8 @@
+// Test spawn lowering
+fn worker() {
+    println(42);
+}
+
+fn main() {
+    spawn worker();
+}

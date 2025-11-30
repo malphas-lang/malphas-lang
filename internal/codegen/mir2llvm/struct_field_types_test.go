@@ -35,7 +35,7 @@ func TestStructFieldTypes_MixedTypes(t *testing.T) {
 
 	cons := &mir.ConstructStruct{
 		Result: result,
-		Type:   "Point",
+		Type:   pointStruct,
 		Fields: map[string]mir.Operand{
 			"x":      xVal,
 			"y":      yVal,
@@ -158,7 +158,7 @@ func TestStructFieldTypes_StringField(t *testing.T) {
 
 	cons := &mir.ConstructStruct{
 		Result: result,
-		Type:   "Person",
+		Type:   personStruct,
 		Fields: map[string]mir.Operand{
 			"name": nameVal,
 			"age":  ageVal,

@@ -254,6 +254,21 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 						return method
 					}
 				}
+			} else if named, ok := leftType.(*Named); ok {
+				// Handle module access: module::symbol
+				// Check if the named type corresponds to a loaded module
+				if moduleInfo, ok := c.Modules[named.Name]; ok {
+					if rightIdent, ok := e.Right.(*ast.Ident); ok {
+						sym := moduleInfo.Scope.Lookup(rightIdent.Name)
+						if sym != nil {
+							// If it's a function, we might need to check visibility
+							// But for now, just return the type
+							return sym.Type
+						}
+						c.reportError(fmt.Sprintf("symbol '%s' not found in module '%s'", rightIdent.Name, named.Name), e.Right.Span())
+						return TypeVoid
+					}
+				}
 			}
 
 			c.reportErrorWithCode(
@@ -344,6 +359,8 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 		default:
 			return left // Simplified (assumes result type same as operand type for arithmetic)
 		}
+	case *ast.CastExpr:
+		return c.checkCastExpr(e, scope, inUnsafe)
 	case *ast.PrefixExpr:
 		if e.Op == lexer.LARROW {
 			// Receive operation: <-ch
@@ -687,6 +704,20 @@ func (c *Checker) checkExprInternal(expr ast.Expr, scope *Scope, inUnsafe bool) 
 						typeArgs = append(typeArgs, typeArg)
 					}
 					c.CallTypeArgs[e] = typeArgs
+				}
+			}
+		}
+
+		// Check if this is a static method call on a generic instance: Type[T]::Method(...)
+		if infixExpr, ok := e.Callee.(*ast.InfixExpr); ok && infixExpr.Op == lexer.DOUBLE_COLON {
+			// Check if the left side is a generic instance
+			// We need to look up the type of the left side
+			// Note: checkExpr(e.Callee) has already been called, so ExprTypes should be populated
+			if leftType, ok := c.ExprTypes[infixExpr.Left]; ok {
+				if genInst, ok := leftType.(*GenericInstance); ok {
+					// This was a static method call on a generic instance
+					// The type arguments are in genInst.Args
+					c.CallTypeArgs[e] = genInst.Args
 				}
 			}
 		}
@@ -2642,12 +2673,6 @@ func (c *Checker) isMutable(expr ast.Expr, scope *Scope) bool {
 		// We need type info here, which is hard without re-checking.
 		// But we can check the expression structure?
 		// No, we need the type of the operand.
-		// This helper might need to return (bool, error) or use cached types if we had them.
-		// For now, let's assume *ptr is always mutable if it's a valid dereference of a pointer?
-		// No, *(&T) is immutable. *(&mut T) is mutable.
-		// We need to check the type of e.Expr.
-		// Since we don't have the type map here, we might need to re-resolve or pass it.
-		// Re-checking e.Expr is expensive but safe for now.
 		typ := c.checkExpr(e.Expr, scope, true) // unsafe true to avoid errors during check
 		if _, ok := typ.(*Pointer); ok {
 			return true // Raw pointers are mutable
@@ -2657,6 +2682,60 @@ func (c *Checker) isMutable(expr ast.Expr, scope *Scope) bool {
 		}
 		return false
 	}
+	return false
+}
+
+func (c *Checker) isValidCast(src, dst Type) bool {
+	isPrimitive := func(t Type) bool {
+		_, ok := t.(*Primitive)
+		return ok
+	}
+	isPointer := func(t Type) bool {
+		switch p := t.(type) {
+		case *Pointer, *Reference, *Optional, *Slice, *Map, *Channel, *Function:
+			return true
+		case *Primitive:
+			if p.Kind == String {
+				return true
+			}
+		}
+		return false
+	}
+	isInt := func(t Type) bool {
+		if p, ok := t.(*Primitive); ok {
+			switch p.Kind {
+			case Int, Int8, Int32, Int64, U8, U16, U32, U64, U128, Usize:
+				return true
+			}
+		}
+		return false
+	}
+
+	// Allow primitive casts
+	if isPrimitive(src) && isPrimitive(dst) {
+		return true
+	}
+	// Allow pointer casts
+	if isPointer(src) && isPointer(dst) {
+		return true
+	}
+	// Allow int <-> pointer casts
+	if isPointer(src) && isInt(dst) {
+		return true
+	}
+	if isInt(src) && isPointer(dst) {
+		return true
+	}
+	// Allow enum <-> int casts
+	if _, ok := src.(*Enum); ok && isInt(dst) {
+		return true
+	}
+	if isInt(src) {
+		if _, ok := dst.(*Enum); ok {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -2695,6 +2774,8 @@ func (c *Checker) getTypeName(typ Type) string {
 		return t.Name
 	case *GenericInstance:
 		return c.getTypeName(t.Base)
+	case *Slice:
+		return "Slice"
 	default:
 		return ""
 	}
@@ -3158,4 +3239,26 @@ func (c *Checker) checkPattern(pattern ast.Pattern, expectedType Type, scope *Sc
 			nil,
 		)
 	}
+}
+
+func (c *Checker) checkCastExpr(expr *ast.CastExpr, scope *Scope, inUnsafe bool) Type {
+	// Check operand
+	srcType := c.checkExpr(expr.Expr, scope, inUnsafe)
+
+	// Resolve target type
+	dstType := c.resolveType(expr.Type)
+	c.ExprTypes[expr.Type] = dstType // Record type for MIR
+
+	// Validate cast
+	if !c.isValidCast(srcType, dstType) {
+		c.reportErrorWithCode(
+			fmt.Sprintf("cannot cast type %s to %s", srcType, dstType),
+			expr.Span(),
+			diag.CodeTypeInvalidOperation,
+			"invalid cast",
+			nil,
+		)
+	}
+
+	return dstType
 }

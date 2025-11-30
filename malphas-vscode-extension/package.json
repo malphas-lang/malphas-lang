@@ -72,6 +72,17 @@
           }
         ]
       }
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Malphas",
+      "properties": {
+        "malphas.executablePath": {
+          "type": "string",
+          "default": "malphas",
+          "description": "Path to the Malphas executable"
+        }
+      }
     }
   }
 }

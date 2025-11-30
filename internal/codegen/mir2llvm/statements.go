@@ -15,6 +15,12 @@ func (g *Generator) generateStatement(stmt mir.Statement) error {
 		return g.generateAssign(s)
 	case *mir.Call:
 		return g.generateCall(s)
+	case *mir.Spawn:
+		return g.generateSpawn(s)
+	case *mir.Yield:
+		return g.generateYield(s)
+	case *mir.Load:
+		return g.generateLoad(s)
 	case *mir.LoadField:
 		return g.generateLoadField(s)
 	case *mir.StoreField:
@@ -35,9 +41,324 @@ func (g *Generator) generateStatement(stmt mir.Statement) error {
 		return g.generateDiscriminant(s)
 	case *mir.AccessVariantPayload:
 		return g.generateAccessVariantPayload(s)
+	case *mir.MakeChannel:
+		return g.generateMakeChannel(s)
+	case *mir.Send:
+		return g.generateSend(s)
+	case *mir.Receive:
+		return g.generateReceive(s)
+	case *mir.SizeOf:
+		return g.generateSizeOf(s)
+	case *mir.AlignOf:
+		return g.generateAlignOf(s)
+	case *mir.Cast:
+		return g.generateCast(s)
+	case *mir.MakeClosure:
+		return g.generateMakeClosure(s)
+	case *mir.AddressOf:
+		return g.generateAddressOf(s)
 	default:
 		return fmt.Errorf("unsupported statement type: %T", stmt)
 	}
+}
+
+// generateMakeChannel generates LLVM IR for creating a channel
+func (g *Generator) generateMakeChannel(stmt *mir.MakeChannel) error {
+	// Get channel element type
+	var elemType types.Type
+	if chType, ok := stmt.Type.(*types.Channel); ok {
+		elemType = chType.Elem
+	} else {
+		return fmt.Errorf("make_channel expects channel type, got %T", stmt.Type)
+	}
+
+	// Calculate element size
+	elemSize, err := g.calculateElementSize(elemType)
+	if err != nil {
+		return err
+	}
+
+	// Get capacity
+	capReg, err := g.generateOperand(stmt.Capacity)
+	if err != nil {
+		return err
+	}
+
+	// Call runtime
+	resultReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call %%Channel* @runtime_channel_new(i64 %s, i64 %s)", resultReg, elemSize, capReg))
+
+	// Store result
+	localType, err := g.mapType(stmt.Type)
+	if err != nil {
+		return err
+	}
+
+	localReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = alloca %s", localReg, localType))
+	g.emit(fmt.Sprintf("  store %s %s, %s* %s", localType, resultReg, localType, localReg))
+	g.localRegs[stmt.Result.ID] = localReg
+	g.localIsValue[stmt.Result.ID] = false
+
+	return nil
+}
+
+// generateSend generates LLVM IR for sending to a channel
+func (g *Generator) generateSend(stmt *mir.Send) error {
+	// Get channel
+	chReg, err := g.generateOperand(stmt.Channel)
+	if err != nil {
+		return err
+	}
+
+	// Get value
+	valReg, err := g.generateOperand(stmt.Value)
+	if err != nil {
+		return err
+	}
+
+	// We need to pass value as i8*.
+	valType := stmt.Value.OperandType()
+	valLLVMType, err := g.mapType(valType)
+	if err != nil {
+		return err
+	}
+
+	var valPtr string
+
+	if isPrimitive(valType) {
+		// Store in temp alloca
+		tempAlloca := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = alloca %s", tempAlloca, valLLVMType))
+		g.emit(fmt.Sprintf("  store %s %s, %s* %s", valLLVMType, valReg, valLLVMType, tempAlloca))
+
+		// Cast to i8*
+		valPtr = g.nextReg()
+		g.emit(fmt.Sprintf("  %s = bitcast %s* %s to i8*", valPtr, valLLVMType, tempAlloca))
+	} else {
+		// It's already a pointer (struct*, string*, etc.)
+		// bitcast valReg to i8*
+		valPtr = g.nextReg()
+		g.emit(fmt.Sprintf("  %s = bitcast %s %s to i8*", valPtr, valLLVMType, valReg))
+	}
+
+	g.emit(fmt.Sprintf("  call void @runtime_channel_send(%%Channel* %s, i8* %s)", chReg, valPtr))
+	return nil
+}
+
+// generateReceive generates LLVM IR for receiving from a channel
+func (g *Generator) generateReceive(recv *mir.Receive) error {
+	// Get channel pointer
+	chanReg, err := g.generateOperand(recv.Channel)
+	if err != nil {
+		return err
+	}
+
+	// Call runtime_channel_recv
+	// fn runtime_channel_recv(ch: *Channel) -> i64
+	// Note: currently returns i64 (value or pointer), need to cast to result type
+	callReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call i64 @malphas_channel_recv(%%Channel* %s)", callReg, chanReg))
+
+	// Cast result to expected type
+	// If result type is primitive (fits in i64), we might need to cast or truncate
+	// If result type is pointer, inttoptr
+	resultType, err := g.mapType(recv.Result.Type)
+	if err != nil {
+		return err
+	}
+
+	finalReg := g.nextReg()
+	if isPrimitive(recv.Result.Type) {
+		// For primitives, we assume they are packed into i64
+		// But for now, let's assume simple cast
+		if resultType == "i64" {
+			finalReg = callReg
+		} else {
+			g.emit(fmt.Sprintf("  %s = trunc i64 %s to %s", finalReg, callReg, resultType))
+		}
+	} else {
+		// Pointer type
+		g.emit(fmt.Sprintf("  %s = inttoptr i64 %s to %s", finalReg, callReg, resultType))
+	}
+
+	g.localRegs[recv.Result.ID] = finalReg
+	g.localIsValue[recv.Result.ID] = true
+
+	return nil
+}
+
+// generateSizeOf generates LLVM IR for SizeOf
+func (g *Generator) generateSizeOf(s *mir.SizeOf) error {
+	sizeReg, err := g.calculateElementSize(s.Type)
+	if err != nil {
+		return err
+	}
+	g.localRegs[s.Result.ID] = sizeReg
+	g.localIsValue[s.Result.ID] = true
+	return nil
+}
+
+// generateAlignOf generates LLVM IR for AlignOf
+func (g *Generator) generateAlignOf(a *mir.AlignOf) error {
+	alignReg, err := g.calculateAlignment(a.Type)
+	if err != nil {
+		return err
+	}
+	g.localRegs[a.Result.ID] = alignReg
+	g.localIsValue[a.Result.ID] = true
+	return nil
+}
+
+// generateAddressOf generates LLVM IR for AddressOf
+func (g *Generator) generateAddressOf(stmt *mir.AddressOf) error {
+	// Get the alloca register for the target local
+	targetReg, ok := g.localRegs[stmt.Target.ID]
+	if !ok {
+		return fmt.Errorf("cannot take address of local %s: no alloca found", stmt.Target.Name)
+	}
+
+	// If the target is currently treated as a value (in a register), we need to store it back to memory first?
+	// Actually, localRegs stores the alloca pointer for variables that have one.
+	// If localIsValue is true, localRegs might store the value itself?
+	// Let's check how localRegs is used.
+	// In generateAssign:
+	//   localReg = g.nextReg()
+	//   g.emit(fmt.Sprintf("  %s = alloca %s", localReg, localType))
+	//   g.localRegs[assign.Local.ID] = localReg
+	//   g.localIsValue[assign.Local.ID] = false
+	// So if localIsValue is false, localRegs[id] is the pointer (alloca).
+
+	// If localIsValue is true (e.g. from SSA temp or calculation result), it might not have an alloca.
+	// But AddressOf should only be used on variables that have an address.
+	// In our case, we will ensure we assign to a local variable first, which creates an alloca if we use Assign.
+	// Wait, Assign creates alloca only if it doesn't exist.
+
+	// If localIsValue is true, it means the value is in a register. We need to spill it to memory to take its address.
+	if g.localIsValue[stmt.Target.ID] {
+		// Allocate memory
+		valType, err := g.mapType(stmt.Target.Type)
+		if err != nil {
+			return err
+		}
+		allocaReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = alloca %s", allocaReg, valType))
+
+		// Store the value
+		g.emit(fmt.Sprintf("  store %s %s, %s* %s", valType, targetReg, valType, allocaReg))
+
+		// Update target to point to alloca
+		g.localRegs[stmt.Target.ID] = allocaReg
+		g.localIsValue[stmt.Target.ID] = false
+		targetReg = allocaReg
+	}
+
+	// Now targetReg is the pointer to the value.
+	// We want to store this pointer in the Result local.
+	// Since Result is a pointer type (e.g. *int), its value IS the address.
+	// So we just treat targetReg as the VALUE of Result.
+
+	g.localRegs[stmt.Result.ID] = targetReg
+	g.localIsValue[stmt.Result.ID] = true
+
+	return nil
+}
+
+// generateCast generates LLVM IR for a type cast
+func (g *Generator) generateCast(cast *mir.Cast) error {
+	// Get operand value
+	opReg, err := g.generateOperand(cast.Operand)
+	if err != nil {
+		return err
+	}
+
+	// Get types
+	srcType := cast.Operand.OperandType()
+	dstType := cast.Type
+
+	srcLLVM, err := g.mapType(srcType)
+	if err != nil {
+		return err
+	}
+	dstLLVM, err := g.mapType(dstType)
+	if err != nil {
+		return err
+	}
+
+	// Determine cast instruction
+	var castOp string
+
+	// Primitive casts
+	if isPrimitive(srcType) && isPrimitive(dstType) {
+		// Int to Int
+		if isInt(srcType) && isInt(dstType) {
+			srcSize := getIntSize(srcType)
+			dstSize := getIntSize(dstType)
+			if srcSize < dstSize {
+				if isSigned(srcType) {
+					castOp = "sext"
+				} else {
+					castOp = "zext"
+				}
+			} else if srcSize > dstSize {
+				castOp = "trunc"
+			} else {
+				// Same size, bitcast or no-op
+				castOp = "bitcast"
+			}
+		} else if isFloat(srcType) && isFloat(dstType) {
+			// Float to Float
+			srcSize := getFloatSize(srcType)
+			dstSize := getFloatSize(dstType)
+			if srcSize < dstSize {
+				castOp = "fpext"
+			} else if srcSize > dstSize {
+				castOp = "fptrunc"
+			} else {
+				castOp = "bitcast"
+			}
+		} else if isInt(srcType) && isFloat(dstType) {
+			// Int to Float
+			if isSigned(srcType) {
+				castOp = "sitofp"
+			} else {
+				castOp = "uitofp"
+			}
+		} else if isFloat(srcType) && isInt(dstType) {
+			// Float to Int
+			if isSigned(dstType) {
+				castOp = "fptosi"
+			} else {
+				castOp = "fptoui"
+			}
+		}
+	} else if isPointer(srcType) && isPointer(dstType) {
+		// Pointer to Pointer
+		castOp = "bitcast"
+	} else if isPointer(srcType) && isInt(dstType) {
+		// Pointer to Int
+		castOp = "ptrtoint"
+	} else if isInt(srcType) && isPointer(dstType) {
+		// Int to Pointer
+		castOp = "inttoptr"
+	} else {
+		// Fallback: bitcast
+		castOp = "bitcast"
+	}
+
+	// Emit instruction
+	resReg := g.nextReg()
+	if castOp == "bitcast" && srcLLVM == dstLLVM {
+		// No-op
+		resReg = opReg
+	} else {
+		g.emit(fmt.Sprintf("  %s = %s %s %s to %s", resReg, castOp, srcLLVM, opReg, dstLLVM))
+	}
+
+	g.localRegs[cast.Result.ID] = resReg
+	g.localIsValue[cast.Result.ID] = true
+
+	return nil
 }
 
 // generateAssign generates LLVM IR for an assignment
@@ -159,10 +480,47 @@ func (g *Generator) generateCall(call *mir.Call) error {
 	}
 
 	// Emit call
-	funcName := sanitizeName(call.Func)
+	var funcName string
+	var funcPtrReg string
+
+	if call.Func != "" {
+		funcName = sanitizeName(call.Func)
+	} else if call.FuncOperand != nil {
+		// Indirect call or closure call
+		opReg, err := g.generateOperand(call.FuncOperand)
+		if err != nil {
+			return err
+		}
+
+		// opReg is %Closure*
+		// %Closure = type { i8* (i8*)*, i8* }
+
+		funcPtrPtrReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = getelementptr inbounds %%Closure, %%Closure* %s, i32 0, i32 0", funcPtrPtrReg, opReg))
+
+		rawFuncPtrReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = load i8* (i8*)*, i8* (i8*)** %s", rawFuncPtrReg, funcPtrPtrReg))
+
+		// Get function signature
+		fnType, ok := call.FuncOperand.OperandType().(*types.Function)
+		if !ok {
+			return fmt.Errorf("call operand must be a function type, got %T", call.FuncOperand.OperandType())
+		}
+
+		fnSig, err := g.getFunctionSignature(fnType)
+		if err != nil {
+			return err
+		}
+
+		funcPtrReg = g.nextReg()
+		g.emit(fmt.Sprintf("  %s = bitcast i8* (i8*)* %s to %s*", funcPtrReg, rawFuncPtrReg, fnSig))
+	} else {
+		return fmt.Errorf("call instruction missing function name or operand")
+	}
 
 	// Map builtin functions to runtime functions
 	if funcName == "println" {
+		// ... (existing println logic) ...
 		if len(argTypes) == 0 {
 			// println with no arguments - just print newline (use i64 version with dummy value)
 			funcName = "runtime_println_i64"
@@ -235,10 +593,18 @@ func (g *Generator) generateCall(call *mir.Call) error {
 	}
 
 	if retType == "void" {
-		g.emit(fmt.Sprintf("  call void @%s(%s)", funcName, callArgsStr))
+		if funcName != "" {
+			g.emit(fmt.Sprintf("  call void @%s(%s)", funcName, callArgsStr))
+		} else {
+			g.emit(fmt.Sprintf("  call void %s(%s)", funcPtrReg, callArgsStr))
+		}
 	} else {
 		// Call stores result in resultReg
-		g.emit(fmt.Sprintf("  %s = call %s @%s(%s)", resultReg, retType, funcName, callArgsStr))
+		if funcName != "" {
+			g.emit(fmt.Sprintf("  %s = call %s @%s(%s)", resultReg, retType, funcName, callArgsStr))
+		} else {
+			g.emit(fmt.Sprintf("  %s = call %s %s(%s)", resultReg, retType, funcPtrReg, callArgsStr))
+		}
 		// Store result in allocated memory
 		g.emit(fmt.Sprintf("  store %s %s, %s* %s", retType, resultReg, retType, allocaReg))
 		// Mark result as stored in alloca (not a direct value)
@@ -544,7 +910,13 @@ func (g *Generator) generateLoadField(load *mir.LoadField) error {
 
 		// Look up field index from structFields map
 		if structName != "" {
-			if fieldMap, ok := g.structFields[structName]; ok {
+			sanitizedName := sanitizeName(structName)
+			if fieldMap, ok := g.structFields[sanitizedName]; ok {
+				if idx, ok := fieldMap[load.Field]; ok {
+					fieldIndex = idx
+				}
+			} else if fieldMap, ok := g.structFields[structName]; ok {
+				// Fallback to unsanitized name (just in case)
 				if idx, ok := fieldMap[load.Field]; ok {
 					fieldIndex = idx
 				}
@@ -567,6 +939,33 @@ func (g *Generator) generateLoadField(load *mir.LoadField) error {
 
 	// Load field value
 	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, castReg))
+
+	return nil
+}
+
+// generateLoad generates LLVM IR for loading a value from an address
+func (g *Generator) generateLoad(load *mir.Load) error {
+	// Get address register
+	addrReg, err := g.generateOperand(load.Address)
+	if err != nil {
+		return err
+	}
+
+	// Get result type
+	resultType, err := g.mapType(load.Result.Type)
+	if err != nil {
+		return err
+	}
+
+	// Generate new register for result
+	resultReg := g.nextReg()
+
+	// Load value
+	g.emit(fmt.Sprintf("  %s = load %s, %s* %s", resultReg, resultType, resultType, addrReg))
+
+	// Store mapping
+	g.localRegs[load.Result.ID] = resultReg
+	g.localIsValue[load.Result.ID] = true
 
 	return nil
 }
@@ -632,7 +1031,13 @@ func (g *Generator) generateStoreField(store *mir.StoreField) error {
 
 		// Look up field index from structFields map
 		if structName != "" {
-			if fieldMap, ok := g.structFields[structName]; ok {
+			sanitizedName := sanitizeName(structName)
+			if fieldMap, ok := g.structFields[sanitizedName]; ok {
+				if idx, ok := fieldMap[store.Field]; ok {
+					fieldIndex = idx
+				}
+			} else if fieldMap, ok := g.structFields[structName]; ok {
+				// Fallback to unsanitized name (just in case)
 				if idx, ok := fieldMap[store.Field]; ok {
 					fieldIndex = idx
 				}
@@ -851,7 +1256,20 @@ func (g *Generator) generateStoreIndex(store *mir.StoreIndex) error {
 // generateConstructStruct generates LLVM IR for struct construction
 func (g *Generator) generateConstructStruct(cons *mir.ConstructStruct) error {
 	// Get struct type
-	structType := "%struct." + sanitizeName(cons.Type)
+	var structType string
+	if cons.Type == nil {
+		// Anonymous struct / record
+		// For now, we don't support records in LLVM backend properly without type info
+		// But maybe we can infer?
+		return fmt.Errorf("anonymous struct construction not supported in LLVM backend yet")
+	} else {
+		llvmType, err := g.mapType(cons.Type)
+		if err != nil {
+			return err
+		}
+		// mapType returns pointer type (%struct.Name*), we need the struct type (%struct.Name)
+		structType = strings.TrimSuffix(llvmType, "*")
+	}
 	structPtrType := structType + "*"
 
 	// Calculate struct size
@@ -874,16 +1292,28 @@ func (g *Generator) generateConstructStruct(cons *mir.ConstructStruct) error {
 	// Store field values (simplified - assume fields are in order)
 	// TODO: Look up field indices from structFields map
 	// Look up field indices from structFields map
-	structName := sanitizeName(cons.Type)
+	structName := strings.TrimPrefix(structType, "%struct.")
 	fieldMap, ok := g.structFields[structName]
 	if !ok {
-		return fmt.Errorf("struct definition not found for %s", cons.Type)
+		// For generic structs, we might be looking for "Slice" but structFields has "Slice$Item"
+		// Try prefix matching: if any key starts with structName followed by $, use that
+		for key, fm := range g.structFields {
+			if strings.HasPrefix(key, structName+"$") || key == structName {
+				fieldMap = fm
+				ok = true
+				break
+			}
+		}
+
+		if !ok {
+			return fmt.Errorf("struct definition not found for %s", structName)
+		}
 	}
 
 	for fieldName, fieldValue := range cons.Fields {
 		fieldIndex, ok := fieldMap[fieldName]
 		if !ok {
-			return fmt.Errorf("field %s not found in struct %s", fieldName, cons.Type)
+			return fmt.Errorf("field %s not found in struct %s", fieldName, structName)
 		}
 
 		fieldReg, err := g.generateOperand(fieldValue)
@@ -1413,4 +1843,258 @@ func (g *Generator) generateAccessVariantPayload(access *mir.AccessVariantPayloa
 	}
 
 	return nil
+}
+
+// generateSpawn generates LLVM IR for spawning a legion
+func (g *Generator) generateSpawn(spawn *mir.Spawn) error {
+	funcName := sanitizeName(spawn.Func)
+
+	// Generate wrapper function that conforms to legion signature: void (*fn)(void*)
+	wrapperName := fmt.Sprintf("spawn_wrapper_%s_%d", funcName, g.regCounter)
+	g.regCounter++
+
+	// Generate argument registers and types
+	var argRegs []string
+	var argTypes []string
+
+	for _, arg := range spawn.Args {
+		argReg, err := g.generateOperand(arg)
+		if err != nil {
+			return err
+		}
+		argRegs = append(argRegs, argReg)
+
+		// Infer argument type
+		var argType string
+		switch op := arg.(type) {
+		case *mir.Literal:
+			argType, _ = g.mapType(op.Type)
+		case *mir.LocalRef:
+			argType, _ = g.mapType(op.Local.Type)
+		}
+		if argType == "" {
+			argType = "i64" // fallback
+		}
+		argTypes = append(argTypes, argType)
+	}
+
+	// Build wrapper function
+	wrapper := strings.Builder{}
+
+	var argStructPtr string
+	if len(spawn.Args) == 0 {
+		// No arguments - just call the function
+	} else {
+		// Has arguments - unpack from struct and call function
+		var unpackedArgs []string
+		offset := 0
+
+		for i, argType := range argTypes {
+			// Calculate aligned offset
+			alignment := 8 // Assume 8-byte alignment for simplicity
+			if argType == "i32" || argType == "float" {
+				alignment = 4
+			} else if argType == "i8" || argType == "i1" {
+				alignment = 1
+			}
+			offset = (offset + alignment - 1) & ^(alignment - 1)
+
+			// Get pointer to this argument in the struct
+			_ = fmt.Sprintf("%%offset%d", i) // offsetReg unused in incomplete code
+
+			// Cast to argument type pointer
+			_ = fmt.Sprintf("%%cast%d", i) // castReg unused in incomplete code
+
+			// Load the argument value
+			loadReg := fmt.Sprintf("%%arg%d", i)
+
+			unpackedArgs = append(unpackedArgs, fmt.Sprintf("%s %s", argType, loadReg))
+
+			// Update offset
+			size := 8 // Default size
+			if argType == "i32" || argType == "float" {
+				size = 4
+			} else if argType == "i8" || argType == "i1" {
+				size = 1
+			}
+			offset += size
+		}
+
+		// Call the function with unpacked arguments
+		_ = strings.Join(unpackedArgs, ", ") // argsStr unused in incomplete code
+	}
+
+	// Add wrapper to collection
+	g.spawnWrappers = append(g.spawnWrappers, wrapper.String())
+
+	// Now pack arguments into a struct if needed
+	if len(spawn.Args) > 0 {
+		// Calculate struct size
+		structSize := 0
+		for _, argType := range argTypes {
+			alignment := 8
+			if argType == "i32" || argType == "float" {
+				alignment = 4
+			} else if argType == "i8" || argType == "i1" {
+				alignment = 1
+			}
+			structSize = (structSize + alignment - 1) & ^(alignment - 1)
+
+			size := 8
+			if argType == "i32" || argType == "float" {
+				size = 4
+			} else if argType == "i8" || argType == "i1" {
+				size = 1
+			}
+			structSize += size
+		}
+
+		// Allocate struct
+		argStructReg := g.nextReg()
+		g.emit(fmt.Sprintf("  %s = call i8* @runtime_alloc(i64 %d)", argStructReg, structSize))
+		argStructPtr = argStructReg
+
+		// Pack arguments into struct
+		offset := 0
+		for i, argReg := range argRegs {
+			argType := argTypes[i]
+
+			// Calculate aligned offset
+			alignment := 8
+			if argType == "i32" || argType == "float" {
+				alignment = 4
+			} else if argType == "i8" || argType == "i1" {
+				alignment = 1
+			}
+			offset = (offset + alignment - 1) & ^(alignment - 1)
+
+			// Get pointer to this position in struct
+			offsetReg := g.nextReg()
+			g.emit(fmt.Sprintf("  %s = getelementptr i8, i8* %s, i64 %d", offsetReg, argStructPtr, offset))
+
+			// Cast to argument type pointer
+			castReg := g.nextReg()
+			g.emit(fmt.Sprintf("  %s = bitcast i8* %s to %s*", castReg, offsetReg, argType))
+
+			// Store the argument
+			g.emit(fmt.Sprintf("  store %s %s, %s* %s", argType, argReg, argType, castReg))
+
+			// Update offset
+			size := 8
+			if argType == "i32" || argType == "float" {
+				size = 4
+			} else if argType == "i8" || argType == "i1" {
+				size = 1
+			}
+			offset += size
+		}
+	} else {
+		argStructPtr = "null"
+	}
+
+	// Call runtime_legion_spawn with the wrapper
+	legionPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call %%Legion* @runtime_legion_spawn(void (i8*)* @%s, i8* %s, i64 8192)",
+		legionPtrReg, wrapperName, argStructPtr))
+
+	// Call runtime_legion_start to begin execution
+	g.emit(fmt.Sprintf("  call void @runtime_legion_start(%%Legion* %s)", legionPtrReg))
+
+	return nil
+}
+
+// generateYield generates LLVM IR for yielding to the legion scheduler
+func (g *Generator) generateYield(yield *mir.Yield) error {
+	// Call runtime_legion_yield()
+	g.emit("  call void @runtime_legion_yield()")
+	return nil
+}
+
+// generateMakeClosure generates LLVM IR for creating a closure
+func (g *Generator) generateMakeClosure(mc *mir.MakeClosure) error {
+	// 1. Allocate %Closure struct
+	// %Closure = type { i8* (i8*)*, i8* }
+	closureType := "%Closure"
+	closurePtrType := "%Closure*"
+
+	closureReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = call i8* @runtime_alloc(i64 16)", closureReg)) // 2 pointers = 16 bytes
+
+	closurePtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast i8* %s to %s", closurePtrReg, closureReg, closurePtrType))
+
+	// 2. Store function pointer
+	funcPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 0", funcPtrReg, closureType, closurePtrType, closurePtrReg))
+
+	// Get function signature
+	fnType, ok := mc.Result.Type.(*types.Function)
+	if !ok {
+		return fmt.Errorf("MakeClosure result must be a function type, got %T", mc.Result.Type)
+	}
+	fnSig, err := g.getFunctionSignature(fnType)
+	if err != nil {
+		return err
+	}
+
+	// Bitcast function to generic signature i8* (i8*)*
+	funcName := sanitizeName(mc.Func)
+	genericFuncType := "i8* (i8*)*"
+	castedFuncReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = bitcast %s* @%s to %s", castedFuncReg, fnSig, funcName, genericFuncType))
+
+	g.emit(fmt.Sprintf("  store %s %s, %s* %s", genericFuncType, castedFuncReg, genericFuncType, funcPtrReg))
+
+	// 3. Store environment pointer
+	envReg, err := g.generateOperand(mc.Env)
+	if err != nil {
+		return err
+	}
+
+	envPtrReg := g.nextReg()
+	g.emit(fmt.Sprintf("  %s = getelementptr inbounds %s, %s %s, i32 0, i32 1", envPtrReg, closureType, closurePtrType, closurePtrReg))
+
+	// Cast env to i8*
+	envType := mc.Env.OperandType()
+	envLLVMType, err := g.mapType(envType)
+	if err != nil {
+		return err
+	}
+
+	var envI8Ptr string
+	if envLLVMType == "i8*" {
+		envI8Ptr = envReg
+	} else {
+		envI8Ptr = g.nextReg()
+		g.emit(fmt.Sprintf("  %s = bitcast %s %s to i8*", envI8Ptr, envLLVMType, envReg))
+	}
+
+	g.emit(fmt.Sprintf("  store i8* %s, i8** %s", envI8Ptr, envPtrReg))
+
+	// 4. Store result
+	g.localRegs[mc.Result.ID] = closurePtrReg
+	g.localIsValue[mc.Result.ID] = true
+
+	return nil
+}
+
+// getFunctionSignature returns the LLVM function signature string (e.g., "i64 (i64)")
+func (g *Generator) getFunctionSignature(fnType *types.Function) (string, error) {
+	// Map return type
+	retType, err := g.mapType(fnType.Return)
+	if err != nil {
+		return "", err
+	}
+
+	// Map param types
+	var paramTypes []string
+	for _, param := range fnType.Params {
+		pt, err := g.mapType(param)
+		if err != nil {
+			return "", err
+		}
+		paramTypes = append(paramTypes, pt)
+	}
+
+	return fmt.Sprintf("%s (%s)", retType, strings.Join(paramTypes, ", ")), nil
 }

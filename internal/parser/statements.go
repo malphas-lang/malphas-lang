@@ -343,7 +343,7 @@ func (p *Parser) parseSpawnStmt() ast.Stmt {
 		if block == nil {
 			return nil
 		}
-		
+
 		blockExpr, ok := block.(*ast.BlockExpr)
 		if !ok {
 			p.reportError("expected block expression", block.Span())
@@ -375,6 +375,10 @@ func (p *Parser) parseSpawnStmt() ast.Stmt {
 			return nil
 		}
 
+		// The function literal parser leaves curTok on the last token of the literal (e.g. '}' or last token of expr)
+		// We need to advance to the next token which should be '('
+		p.nextToken()
+
 		// After function literal, expect a call: (args)
 		if p.curTok.Type != lexer.LPAREN {
 			p.reportError("expected function call after function literal", p.curTok.Span)
@@ -384,7 +388,7 @@ func (p *Parser) parseSpawnStmt() ast.Stmt {
 		// Parse the call arguments
 		p.nextToken() // consume '('
 		args := make([]ast.Expr, 0)
-		
+
 		if p.curTok.Type != lexer.RPAREN {
 			for {
 				arg := p.parseExpr()
@@ -405,7 +409,8 @@ func (p *Parser) parseSpawnStmt() ast.Stmt {
 		if !p.expect(lexer.RPAREN) {
 			return nil
 		}
-		p.nextToken() // consume ')'
+		// p.expect consumes the token, so curTok is now ')'.
+		// peekTok is ';'. We don't want to consume ')' again.
 
 		if !p.expect(lexer.SEMICOLON) {
 			return nil
@@ -567,7 +572,7 @@ func (p *Parser) parseFunctionLiteralExpr() ast.Expr {
 		p.reportError("unexpected '||' operator", p.curTok.Span)
 		return nil
 	}
-	
+
 	lit := p.parseFunctionLiteral()
 	if lit == nil {
 		return nil
@@ -623,15 +628,15 @@ func (p *Parser) parseFunctionLiteral() *ast.FunctionLiteral {
 			params = append(params, param)
 		}
 
-	// Consume closing '|'
-	// After parseFunctionLiteralParam, curTok is on the last token of the parameter
-	// or the closing pipe itself if we just finished a parameter.
-	// Since parseFunctionLiteralParam consumes the parameter name/type, curTok should be on '|'.
-	if p.curTok.Type != lexer.PIPE {
-		p.reportError("expected '|' to close function literal parameters", p.curTok.Span)
-		return nil
-	}
-	p.nextToken() // consume closing '|'
+		// Consume closing '|'
+		// After parseFunctionLiteralParam, curTok is on the last token of the parameter
+		// or the closing pipe itself if we just finished a parameter.
+		// Since parseFunctionLiteralParam consumes the parameter name/type, curTok should be on '|'.
+		if p.curTok.Type != lexer.PIPE {
+			p.reportError("expected '|' to close function literal parameters", p.curTok.Span)
+			return nil
+		}
+		p.nextToken() // consume closing '|'
 	}
 
 	// Check if this is a single-expression lambda (|x| expr) or block lambda (|x| { ... })
@@ -657,7 +662,7 @@ func (p *Parser) parseFunctionLiteral() *ast.FunctionLiteral {
 			p.reportError("expected expression or block after function literal parameters", p.curTok.Span)
 			return nil
 		}
-		
+
 		// Ensure we have a prefix function for the current token
 		// This prevents parseExprPrecedence from failing and potentially triggering
 		// unexpected parsing paths
@@ -670,7 +675,7 @@ func (p *Parser) parseFunctionLiteral() *ast.FunctionLiteral {
 			p.reportError(fmt.Sprintf("unexpected token '%s' in function literal body, expected expression", tokenStr), p.curTok.Span)
 			return nil
 		}
-		
+
 		// Call the prefix function directly to parse the expression
 		// This avoids any potential issues with parseExpr() or parseExprPrecedence()
 		expr := prefixFn()
@@ -678,7 +683,7 @@ func (p *Parser) parseFunctionLiteral() *ast.FunctionLiteral {
 			p.reportError("expected expression or block after function literal parameters", p.curTok.Span)
 			return nil
 		}
-		
+
 		// Handle infix operators if present (e.g., |x| x + 1)
 		// We need to continue parsing until we hit a semicolon or other terminator
 		for p.peekTok.Type != lexer.SEMICOLON && p.peekTok.Type != lexer.EOF {
@@ -686,19 +691,19 @@ func (p *Parser) parseFunctionLiteral() *ast.FunctionLiteral {
 			if infix == nil {
 				break
 			}
-			
+
 			precedence := p.peekPrecedence()
 			if precedence <= precedenceLowest {
 				break
 			}
-			
+
 			p.nextToken()
 			expr = infix(expr)
 			if expr == nil {
 				return nil
 			}
 		}
-		
+
 		// Create a BlockExpr with the expression as the tail
 		body = ast.NewBlockExpr(nil, expr, mergeSpan(expr.Span(), expr.Span()))
 	}
@@ -726,7 +731,7 @@ func (p *Parser) parseFunctionLiteralParam() *ast.Param {
 	// Check if type annotation is present: |x: int|
 	if p.curTok.Type == lexer.COLON {
 		p.nextToken() // consume ':'
-		
+
 		if !isTypeStart(p.curTok.Type) {
 			p.reportError("expected type expression after ':' in parameter '"+nameTok.Literal+"'", p.curTok.Span)
 			return nil
@@ -755,4 +760,3 @@ func (p *Parser) parseFunctionLiteralParam() *ast.Param {
 	span := mergeSpan(start, nameTok.Span)
 	return ast.NewParam(name, nil, span)
 }
-

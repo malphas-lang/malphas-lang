@@ -304,8 +304,10 @@ func (c *Checker) checkStmt(stmt ast.Stmt, scope *Scope, inUnsafe bool) {
 					DefNode: comm,
 				})
 			case *ast.ExprStmt:
-				// Could be send: ch <- val or receive: <-ch
-				if infix, ok := comm.Expr.(*ast.InfixExpr); ok && infix.Op == lexer.LARROW {
+				// Check for "default" identifier
+				if ident, ok := comm.Expr.(*ast.Ident); ok && ident.Name == "default" {
+					// Valid default case
+				} else if infix, ok := comm.Expr.(*ast.InfixExpr); ok && infix.Op == lexer.LARROW {
 					// Send operation: ch <- val
 					leftType := c.checkExpr(infix.Left, scope, inUnsafe)
 					rightType := c.checkExpr(infix.Right, scope, inUnsafe)

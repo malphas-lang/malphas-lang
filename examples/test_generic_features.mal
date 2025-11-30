@@ -1,0 +1,32 @@
+struct Vec[T] {
+    data: *T,
+    len: int,
+    cap: int,
+}
+
+// Declare built-ins (hack for type checker)
+fn sizeof[T]() -> int { 0 }
+fn alignof[T]() -> int { 0 }
+
+fn main() {
+    // 1. Generic struct construction
+    let v = Vec[int] { data: nil, len: 0, cap: 10 };
+    
+    // Introspection
+    let size = sizeof[Vec[int]]();
+    let align = alignof[Vec[int]]();
+    println(size);
+    println(align);
+
+    // Explicit casts
+    let x: int = 10;
+    let y: float = x as float;
+    let z: int = y as int;
+    println(y);
+    println(z);
+
+    // Generic closures
+    let id = |x: int| { x };
+    let res = id(5);
+    println(res);
+}

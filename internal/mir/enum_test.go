@@ -37,7 +37,7 @@ fn main() {
 	}
 
 	// Lower to MIR
-	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil)
+	lowerer := NewLowerer(checker.ExprTypes, checker.CallTypeArgs, nil, nil, nil)
 	mod, err := lowerer.LowerModule(file)
 	if err != nil {
 		t.Fatalf("Lower error: %v", err)

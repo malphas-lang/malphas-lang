@@ -7,10 +7,11 @@ import (
 
 // ModuleInfo represents information about a loaded module.
 type ModuleInfo struct {
-	Name     string    // Module name (e.g., "utils")
-	File     *ast.File // Parsed AST of the module file
-	FilePath string    // Full path to the module file
-	Scope    *Scope    // Scope containing ONLY public symbols
+	Name          string    // Module name (e.g., "utils")
+	File          *ast.File // Parsed AST of the module file
+	FilePath      string    // Full path to the module file
+	Scope         *Scope    // Scope containing ONLY public symbols (for external access)
+	InternalScope *Scope    // Scope containing ALL symbols (for body checking)
 }
 
 // Checker performs semantic analysis on the AST.
@@ -108,6 +109,16 @@ func NewChecker() *Checker {
 		},
 	})
 
+	// make: fn[T](args...) -> T
+	c.GlobalScope.Insert("make", &Symbol{
+		Name: "make",
+		Type: &Function{
+			TypeParams: []TypeParam{{Name: "T"}},
+			Params:     []Type{&Named{Name: "any"}}, // Variadic args placeholder
+			Return:     &TypeParam{Name: "T"},
+		},
+	})
+
 	// delete: fn(map[K]V, K) -> void
 	c.GlobalScope.Insert("delete", &Symbol{
 		Name: "delete",
@@ -166,7 +177,14 @@ func (c *Checker) CheckWithFilename(file *ast.File, filename string) {
 		// Update CurrentFile for correct error reporting
 		oldFile := c.CurrentFile
 		c.CurrentFile = modInfo.FilePath
+
+		// Update GlobalScope to module scope
+		oldScope := c.GlobalScope
+		c.GlobalScope = modInfo.InternalScope
+
 		c.checkBodies(modInfo.File)
+
+		c.GlobalScope = oldScope
 		c.CurrentFile = oldFile
 	}
 }

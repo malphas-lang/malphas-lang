@@ -90,7 +90,23 @@ func (c *Call) PrettyPrint() string {
 	for i, arg := range c.Args {
 		args[i] = operandString(arg)
 	}
-	return fmt.Sprintf("%s = call %s(%s)", localString(c.Result), c.Func, strings.Join(args, ", "))
+	funcName := c.Func
+	if funcName == "" && c.FuncOperand != nil {
+		funcName = operandString(c.FuncOperand)
+	}
+	return fmt.Sprintf("%s = call %s(%s)", localString(c.Result), funcName, strings.Join(args, ", "))
+}
+
+func (s *Spawn) PrettyPrint() string {
+	args := make([]string, len(s.Args))
+	for i, arg := range s.Args {
+		args[i] = operandString(arg)
+	}
+	return fmt.Sprintf("spawn %s(%s)", s.Func, strings.Join(args, ", "))
+}
+
+func (y *Yield) PrettyPrint() string {
+	return "yield"
 }
 
 func (lf *LoadField) PrettyPrint() string {
@@ -119,10 +135,10 @@ func (si *StoreIndex) PrettyPrint() string {
 
 func (cs *ConstructStruct) PrettyPrint() string {
 	var b strings.Builder
-	if cs.Type == "" {
+	if cs.Type == nil {
 		b.WriteString(fmt.Sprintf("%s = construct_record {", localString(cs.Result)))
 	} else {
-		b.WriteString(fmt.Sprintf("%s = construct_struct %s {", localString(cs.Result), cs.Type))
+		b.WriteString(fmt.Sprintf("%s = construct_struct %s {", localString(cs.Result), cs.Type.String()))
 	}
 
 	fields := make([]string, 0, len(cs.Fields))
@@ -157,6 +173,10 @@ func prettyPrintStmt(stmt Statement) string {
 		return s.PrettyPrint()
 	case *Call:
 		return s.PrettyPrint()
+	case *Spawn:
+		return s.PrettyPrint()
+	case *Yield:
+		return s.PrettyPrint()
 	case *LoadField:
 		return s.PrettyPrint()
 	case *StoreField:
@@ -170,6 +190,20 @@ func prettyPrintStmt(stmt Statement) string {
 	case *ConstructArray:
 		return s.PrettyPrint()
 	case *ConstructTuple:
+		return s.PrettyPrint()
+	case *MakeChannel:
+		return s.PrettyPrint()
+	case *Send:
+		return s.PrettyPrint()
+	case *Receive:
+		return s.PrettyPrint()
+	case *SizeOf:
+		return s.PrettyPrint()
+	case *AlignOf:
+		return s.PrettyPrint()
+	case *Cast:
+		return s.PrettyPrint()
+	case *MakeClosure:
 		return s.PrettyPrint()
 	default:
 		return fmt.Sprintf("<?stmt:%T>", stmt)
@@ -185,9 +219,60 @@ func prettyPrintTerminator(term Terminator) string {
 		return t.PrettyPrint()
 	case *Branch:
 		return t.PrettyPrint()
+	case *Select:
+		return t.PrettyPrint()
 	default:
 		return fmt.Sprintf("<?terminator:%T>", term)
 	}
+}
+
+func (mc *MakeChannel) PrettyPrint() string {
+	return fmt.Sprintf("%s = make_channel(cap=%s)", localString(mc.Result), operandString(mc.Capacity))
+}
+
+func (s *Send) PrettyPrint() string {
+	return fmt.Sprintf("send %s <- %s", operandString(s.Channel), operandString(s.Value))
+}
+
+func (r *Receive) PrettyPrint() string {
+	return fmt.Sprintf("%s = recv %s", localString(r.Result), operandString(r.Channel))
+}
+
+func (s *SizeOf) PrettyPrint() string {
+	return fmt.Sprintf("%s = sizeof(%s)", localString(s.Result), typeString(s.Type))
+}
+
+func (a *AlignOf) PrettyPrint() string {
+	return fmt.Sprintf("%s = alignof(%s)", localString(a.Result), typeString(a.Type))
+}
+
+func (c *Cast) PrettyPrint() string {
+	return fmt.Sprintf("%s = cast %s to %s", localString(c.Result), operandString(c.Operand), typeString(c.Type))
+}
+
+func (mc *MakeClosure) PrettyPrint() string {
+	return fmt.Sprintf("%s = make_closure %s(env=%s)", localString(mc.Result), mc.Func, operandString(mc.Env))
+}
+
+func (s *Select) PrettyPrint() string {
+	var cases []string
+	for _, c := range s.Cases {
+		var caseStr string
+		switch c.Kind {
+		case "send":
+			caseStr = fmt.Sprintf("case %s <- %s => goto %s", operandString(c.Channel), operandString(c.Value), c.Target.Label)
+		case "recv":
+			if c.Result != nil {
+				caseStr = fmt.Sprintf("case %s = <-%s => goto %s", localString(*c.Result), operandString(c.Channel), c.Target.Label)
+			} else {
+				caseStr = fmt.Sprintf("case <-%s => goto %s", operandString(c.Channel), c.Target.Label)
+			}
+		case "default":
+			caseStr = fmt.Sprintf("default => goto %s", c.Target.Label)
+		}
+		cases = append(cases, caseStr)
+	}
+	return fmt.Sprintf("select {\n\t\t%s\n\t}", strings.Join(cases, "\n\t\t"))
 }
 
 // PrettyPrint implementations for terminators

@@ -95,13 +95,36 @@ func (*Assign) stmtNode() {}
 
 // Call statement: result = call func(args...)
 type Call struct {
-	Result   Local
-	Func     string
-	Args     []Operand
-	TypeArgs []types.Type
+	Result      Local
+	Func        string  // For direct calls
+	FuncOperand Operand // For indirect calls (closures, function pointers)
+	Args        []Operand
+	TypeArgs    []types.Type
 }
 
 func (*Call) stmtNode() {}
+
+// Spawn statement: spawn func(args...) - creates and starts a new legion
+type Spawn struct {
+	Func     string    // Function name or wrapper name
+	Args     []Operand // Arguments to pass to the legion
+	TypeArgs []types.Type
+}
+
+func (*Spawn) stmtNode() {}
+
+// Yield statement: yields control to the legion scheduler
+type Yield struct{}
+
+func (*Yield) stmtNode() {}
+
+// Load loads a value from an address (dereference)
+type Load struct {
+	Result  Local
+	Address Operand
+}
+
+func (*Load) stmtNode() {}
 
 // LoadField loads a field from a struct
 type LoadField struct {
@@ -142,7 +165,7 @@ func (*StoreIndex) stmtNode() {}
 // ConstructStruct constructs a struct value
 type ConstructStruct struct {
 	Result Local
-	Type   string             // Struct type name
+	Type   types.Type         // Struct type (can be *types.Struct or *types.GenericInstance)
 	Fields map[string]Operand // Field name -> value
 }
 
@@ -193,6 +216,99 @@ type AccessVariantPayload struct {
 }
 
 func (*AccessVariantPayload) stmtNode() {}
+
+// MakeChannel creates a new channel
+type MakeChannel struct {
+	Result   Local
+	Type     types.Type // Channel type (chan T)
+	Capacity Operand    // Channel capacity (0 for unbuffered)
+}
+
+func (*MakeChannel) stmtNode() {}
+
+// Send sends a value on a channel: ch <- val
+type Send struct {
+	Channel Operand
+	Value   Operand
+}
+
+func (*Send) stmtNode() {}
+
+// Receive receives a value from a channel: <-ch
+type Receive struct {
+	Result  Local
+	Channel Operand
+}
+
+func (*Receive) stmtNode() {}
+
+// SizeOf returns the size of a type in bytes
+type SizeOf struct {
+	Result Local
+	Type   types.Type
+}
+
+func (*SizeOf) stmtNode() {}
+
+// AlignOf returns the alignment of a type in bytes
+type AlignOf struct {
+	Result Local
+	Type   types.Type
+}
+
+func (*AlignOf) stmtNode() {}
+
+// AddressOf takes the address of a local variable: result = &target
+type AddressOf struct {
+	Result Local
+	Target Local
+}
+
+func (*AddressOf) stmtNode() {}
+
+// Cast represents a type cast operation
+type Cast struct {
+	Result  Local
+	Operand Operand
+	Type    types.Type
+}
+
+func (*Cast) stmtNode() {}
+
+// MakeClosure creates a closure object (function pointer + environment)
+type MakeClosure struct {
+	Result Local
+	Func   string  // Name of the function to call
+	Env    Operand // Environment struct pointer
+}
+
+func (*MakeClosure) stmtNode() {}
+
+// SelectCase represents a case in a select statement
+type SelectCase struct {
+	// Operation type: "send", "recv", "default"
+	Kind string
+
+	// For send/recv
+	Channel Operand
+
+	// For send
+	Value Operand
+
+	// For recv
+	Result *Local // Optional (if capturing result)
+
+	// Target block to jump to if this case is selected
+	Target *BasicBlock
+}
+
+// Select statement: select { case ... }
+// This is a terminator because it transfers control to one of the case blocks
+type Select struct {
+	Cases []SelectCase
+}
+
+func (*Select) terminatorNode() {}
 
 // Return terminator
 type Return struct {

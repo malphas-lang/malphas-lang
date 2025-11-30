@@ -632,6 +632,8 @@ func (c *Checker) resolveTypeFromExpr(expr ast.Expr) Type {
 		// Create GenericInstance and normalize it (like resolveType does)
 		genInst := &GenericInstance{Base: normalizedBase, Args: args}
 		return c.normalizeGenericInstanceBase(genInst)
+	case *ast.TypeWrapperExpr:
+		return c.resolveType(e.Type)
 	default:
 		c.reportErrorWithCode(
 			fmt.Sprintf("expected a type expression, but found %T", expr),

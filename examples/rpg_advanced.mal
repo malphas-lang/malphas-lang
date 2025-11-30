@@ -1,4 +1,6 @@
 // Advanced RPG Simulation using Generics and Methods
+mod core;
+use core::Slice;
 
 enum Option[T] {
     Some(T),
@@ -80,5 +82,33 @@ fn main() {
             println("Error:");
             println(e);
         }
+    };
+    
+    // Test Slice[T] methods
+    println("Testing Slice methods:");
+    
+    let mut items: Slice[Item] = Slice[Item]::new();
+    
+    // Test push
+    items.push(Item { name: "Sword", power: 50 });
+    items.push(Item { name: "Shield", power: 30 });
+    items.push(Item { name: "Potion", power: 20 });
+    
+    println("Inventory items:");
+    println(items.len());
+    
+    // Test is_empty
+    if !items.is_empty() {
+        println("Inventory is not empty");
     }
+    
+    // Test get
+    let first_item = items.get(0 as usize);
+    println("First item:");
+    println(first_item.name);
+    println(first_item.power);
+    
+    // Test capacity
+    println("Capacity:");
+    println(items.cap());
 }

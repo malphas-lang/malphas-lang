@@ -82,6 +82,30 @@ func (l *Lowerer) lowerInfixExpr(expr *ast.InfixExpr) (Operand, error) {
 		return &LocalRef{Local: resultLocal}, nil
 	}
 
+	// Check for channel send: ch <- val
+	if expr.Op == lexer.LARROW {
+		left, err := l.lowerExpr(expr.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := l.lowerExpr(expr.Right)
+		if err != nil {
+			return nil, err
+		}
+
+		l.currentBlock.Statements = append(l.currentBlock.Statements, &Send{
+			Channel: left,
+			Value:   right,
+		})
+
+		// Send statement evaluates to unit/void?
+		// In Go, it's a statement. In Malphas, it might be an expression.
+		// If it's an expression, what does it return?
+		// Let's assume it returns void/unit.
+
+		return nil, nil
+	}
+
 	// For now, treat as a function call
 	// TODO: optimize common operations like +, -, *, /, etc.
 	left, err := l.lowerExpr(expr.Left)
@@ -115,6 +139,87 @@ func (l *Lowerer) lowerInfixExpr(expr *ast.InfixExpr) (Operand, error) {
 
 // lowerPrefixExpr lowers a prefix expression
 func (l *Lowerer) lowerPrefixExpr(expr *ast.PrefixExpr) (Operand, error) {
+	// Check for channel receive: <-ch
+	if expr.Op == lexer.LARROW {
+		operand, err := l.lowerExpr(expr.Expr)
+		if err != nil {
+			return nil, err
+		}
+
+		retType := l.getType(expr, l.TypeInfo)
+		if retType == nil {
+			// Fallback if type info missing
+			retType = &types.Primitive{Kind: types.Int}
+		}
+
+		resultLocal := l.newLocal("", retType)
+		l.currentFunc.Locals = append(l.currentFunc.Locals, resultLocal)
+
+		l.currentBlock.Statements = append(l.currentBlock.Statements, &Receive{
+			Result:  resultLocal,
+			Channel: operand,
+		})
+
+		return &LocalRef{Local: resultLocal}, nil
+	}
+
+	// Handle dereference: *ptr
+	if expr.Op == lexer.ASTERISK {
+		operand, err := l.lowerExpr(expr.Expr)
+		if err != nil {
+			return nil, err
+		}
+
+		retType := l.getType(expr, l.TypeInfo)
+		if retType == nil {
+			// Fallback: try to infer from operand type
+			if ptr, ok := operand.OperandType().(*types.Pointer); ok {
+				retType = ptr.Elem
+			} else {
+				return nil, fmt.Errorf("cannot dereference non-pointer type")
+			}
+		}
+
+		resultLocal := l.newLocal("", retType)
+		l.currentFunc.Locals = append(l.currentFunc.Locals, resultLocal)
+
+		l.currentBlock.Statements = append(l.currentBlock.Statements, &Load{
+			Result:  resultLocal,
+			Address: operand,
+		})
+
+		return &LocalRef{Local: resultLocal}, nil
+	}
+
+	// Handle address-of: &val
+	if expr.Op == lexer.AMPERSAND {
+		// We need to lower the expression, but we expect it to be an l-value (LocalRef)
+		operand, err := l.lowerExpr(expr.Expr)
+		if err != nil {
+			return nil, err
+		}
+
+		localRef, ok := operand.(*LocalRef)
+		if !ok {
+			return nil, fmt.Errorf("cannot take address of non-lvalue")
+		}
+
+		retType := l.getType(expr, l.TypeInfo)
+		if retType == nil {
+			retType = &types.Pointer{Elem: localRef.Local.Type}
+		}
+
+		resultLocal := l.newLocal("", retType)
+		l.currentFunc.Locals = append(l.currentFunc.Locals, resultLocal)
+
+		l.currentBlock.Statements = append(l.currentBlock.Statements, &AddressOf{
+			Result: resultLocal,
+			Target: localRef.Local,
+		})
+
+		return &LocalRef{Local: resultLocal}, nil
+	}
+
 	// Similar to infix, treat as function call
 	operand, err := l.lowerExpr(expr.Expr)
 	if err != nil {
@@ -134,6 +239,34 @@ func (l *Lowerer) lowerPrefixExpr(expr *ast.PrefixExpr) (Operand, error) {
 		Result: resultLocal,
 		Func:   opName,
 		Args:   []Operand{operand},
+	})
+
+	return &LocalRef{Local: resultLocal}, nil
+}
+
+// lowerCastExpr lowers a cast expression
+func (l *Lowerer) lowerCastExpr(expr *ast.CastExpr) (Operand, error) {
+	// Lower operand
+	op, err := l.lowerExpr(expr.Expr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve target type
+	targetType := l.getType(expr.Type, l.TypeInfo)
+	if targetType == nil {
+		return nil, fmt.Errorf("unknown type in cast")
+	}
+
+	// Create result local
+	resultLocal := l.newLocal("", targetType)
+	l.currentFunc.Locals = append(l.currentFunc.Locals, resultLocal)
+
+	// Emit Cast instruction
+	l.currentBlock.Statements = append(l.currentBlock.Statements, &Cast{
+		Result:  resultLocal,
+		Operand: op,
+		Type:    targetType,
 	})
 
 	return &LocalRef{Local: resultLocal}, nil

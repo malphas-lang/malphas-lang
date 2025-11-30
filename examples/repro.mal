@@ -1,0 +1,6 @@
+mod core;
+use core::Slice;
+
+fn main() {
+    let s = Slice[int]::new();
+}

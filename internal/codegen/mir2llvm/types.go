@@ -31,7 +31,7 @@ func (g *Generator) mapType(typ types.Type) (string, error) {
 		return fmt.Sprintf("[%d x %s]", t.Len, elemType), nil
 
 	case *types.Slice:
-		return "%Slice*", nil
+		return "%struct.Slice*", nil
 
 	case *types.Map:
 		return "%HashMap*", nil
@@ -352,4 +352,111 @@ func (g *Generator) calculateElementSize(elemType types.Type) (string, error) {
 	default:
 		return "8", nil // default to pointer size
 	}
+}
+
+// calculateAlignment calculates the alignment in bytes of a type
+// Returns the alignment as a string (either a constant like "8" or a register name)
+func (g *Generator) calculateAlignment(typ types.Type) (string, error) {
+	llvmType, err := g.mapType(typ)
+	if err != nil {
+		return "", fmt.Errorf("failed to map type for alignment: %w", err)
+	}
+
+	// Remove * suffix if present for the base type
+	baseType := strings.TrimSuffix(llvmType, "*")
+
+	// Use the getelementptr trick: offsetof(struct { i8, T }, 1)
+	// This works because the compiler adds padding after i8 to align T
+	pairType := fmt.Sprintf("{ i8, %s }", baseType)
+
+	gepReg := g.nextReg()
+	// We use null pointer of pairType
+	g.emit(fmt.Sprintf("  %s = getelementptr %s, %s* null, i32 0, i32 1", gepReg, pairType, pairType))
+
+	alignReg := g.nextReg()
+	// Cast the pointer to int to get the offset
+	// Note: gepReg is a pointer to the second element, so it's type is baseType*
+	g.emit(fmt.Sprintf("  %s = ptrtoint %s* %s to i64", alignReg, baseType, gepReg))
+
+	return alignReg, nil
+}
+
+// isPrimitive checks if a type is a primitive
+func isPrimitive(t types.Type) bool {
+	_, ok := t.(*types.Primitive)
+	return ok
+}
+
+// isInt checks if a type is an integer
+func isInt(t types.Type) bool {
+	if p, ok := t.(*types.Primitive); ok {
+		switch p.Kind {
+		case types.Int, types.Int8, types.Int32, types.Int64,
+			types.U8, types.U16, types.U32, types.U64, types.U128, types.Usize:
+			return true
+		}
+	}
+	return false
+}
+
+// isFloat checks if a type is a float
+func isFloat(t types.Type) bool {
+	if p, ok := t.(*types.Primitive); ok {
+		return p.Kind == types.Float
+	}
+	return false
+}
+
+// isSigned checks if an integer type is signed
+func isSigned(t types.Type) bool {
+	if p, ok := t.(*types.Primitive); ok {
+		switch p.Kind {
+		case types.Int, types.Int8, types.Int32, types.Int64:
+			return true
+		}
+	}
+	return false
+}
+
+// getIntSize returns the size of an integer type in bits
+func getIntSize(t types.Type) int {
+	if p, ok := t.(*types.Primitive); ok {
+		switch p.Kind {
+		case types.Int8, types.U8:
+			return 8
+		case types.U16:
+			return 16
+		case types.Int32, types.U32:
+			return 32
+		case types.Int64, types.U64, types.Int, types.Usize:
+			return 64
+		case types.U128:
+			return 128
+		case types.Bool:
+			return 1
+		}
+	}
+	return 64 // Default
+}
+
+// getFloatSize returns the size of a float type in bits
+func getFloatSize(t types.Type) int {
+	if p, ok := t.(*types.Primitive); ok {
+		if p.Kind == types.Float {
+			return 64 // double
+		}
+	}
+	return 64
+}
+
+// isPointer checks if a type is a pointer type
+func isPointer(t types.Type) bool {
+	switch p := t.(type) {
+	case *types.Pointer, *types.Reference, *types.Optional, *types.Struct, *types.Enum, *types.Map, *types.Channel, *types.Function, *types.Slice:
+		return true
+	case *types.Primitive:
+		// String is primitive but handled as pointer
+		return p.Kind == types.String
+	}
+	return false
 }

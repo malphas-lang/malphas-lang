@@ -1,0 +1,108 @@
+// Core stdlib - fundamental types and utilities
+
+// Core Slice[T] type - maps to built-in []T
+// This provides methods for the built-in slice type
+pub struct Slice[T]{
+    data: *T,
+    len: usize,
+    cap: usize,
+    elem_size: usize,
+}
+
+impl[T] Slice[T]{
+
+    pub fn new() -> Slice[T]{
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+
+    pub fn with_capacity(capacity: usize) -> Slice[T]{
+        return Slice[T]{
+            data: nil, // Runtime will allocate
+            len: 0 as usize,
+            cap: capacity,
+            elem_size: 0 as usize, // Runtime will set
+        };
+    }
+
+    pub fn with_len(len: usize) -> Slice[T]{
+        return Slice[T]{
+            data: nil, // Runtime will allocate
+            len: len,
+            cap: len,
+            elem_size: 0 as usize // Runtime will set
+        };
+    }
+
+    pub fn is_empty(&self) -> bool {
+        return self.len == (0 as usize);
+    }
+
+    pub fn len(&self) -> usize {
+        return self.len;
+    }
+
+    pub fn cap(&self) -> usize {
+        return self.cap;
+    }
+
+    pub unsafe fn get(&self, index: usize) -> T {
+        // Dereference the pointer at the given index
+        // Runtime will ensure bounds checking and proper access
+        // This is marked unsafe because it directly accesses memory
+        return *self.data;
+    }
+
+    pub fn set(&mut self, index: usize, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_set
+    }
+
+    pub fn push(&mut self, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_push
+    }
+
+    pub fn pop(&mut self) -> T? {
+        // Compiler intrinsic: maps to runtime_slice_pop
+        return nil;
+    }
+
+    pub fn insert(&mut self, index: usize, value: T) -> void {
+        // Compiler intrinsic: maps to runtime_slice_insert
+    }
+
+    pub fn remove(&mut self, index: usize) -> void {
+        // Compiler intrinsic: maps to runtime_slice_remove
+    }
+
+    pub fn clear(&mut self) -> void {
+        // Compiler intrinsic: maps to runtime_slice_clear
+    }
+
+    pub fn reserve(&mut self, additional: usize) -> void {
+        // Compiler intrinsic: maps to runtime_slice_reserve
+    }
+
+    pub fn copy(&self) -> Slice[T] {
+        // Compiler intrinsic: maps to runtime_slice_copy
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+
+    pub fn subslice(&self, start: usize, end: usize) -> Slice[T] {
+        // Compiler intrinsic: maps to runtime_slice_subslice
+        return Slice[T]{
+            data: nil,
+            len: 0 as usize,
+            cap: 0 as usize,
+            elem_size: 0 as usize
+        };
+    }
+}

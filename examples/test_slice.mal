@@ -1,0 +1,27 @@
+// Test Slice[T] implementation
+mod core;
+use core::Slice;
+
+struct Item {
+    name: string,
+    power: int
+}
+
+fn main() {
+    println("Testing Slice methods:");
+    
+    let mut items = Slice[Item] {
+        data: nil,
+        len: 0 as usize,
+        cap: 0 as usize,
+        elem_size: 0 as usize
+    };
+    
+    println("Created empty slice");
+    println("Is empty:");
+    println(items.is_empty());
+    println("Length:");
+    println(items.len());
+    println("Capacity:");
+    println(items.cap());
+}

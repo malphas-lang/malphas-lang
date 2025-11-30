@@ -1,0 +1,8 @@
+// Test spawn with arguments
+fn worker(x: int) {
+    println(x);
+}
+
+fn main() {
+    spawn worker(42);
+}

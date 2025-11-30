@@ -78,6 +78,7 @@ func (d *PackageDecl) SetSpan(span lexer.Span) {
 // ModDecl represents a module declaration.
 type ModDecl struct {
 	Name *Ident
+	Body *File // nil for external modules (mod name;), non-nil for inline modules (mod name { ... })
 	span lexer.Span
 }
 
@@ -90,9 +91,10 @@ func (d *ModDecl) SetSpan(span lexer.Span) {
 }
 
 // NewModDecl constructs a module declaration node.
-func NewModDecl(name *Ident, span lexer.Span) *ModDecl {
+func NewModDecl(name *Ident, body *File, span lexer.Span) *ModDecl {
 	return &ModDecl{
 		Name: name,
+		Body: body,
 		span: span,
 	}
 }
@@ -1307,6 +1309,25 @@ func (e *AssignExpr) SetSpan(span lexer.Span) {
 // exprNode marks AssignExpr as an expression.
 func (*AssignExpr) exprNode() {}
 
+// CastExpr represents a type cast expression (expr as Type).
+type CastExpr struct {
+	Expr Expr
+	Type TypeExpr
+	span lexer.Span
+}
+
+func (e *CastExpr) Span() lexer.Span        { return e.span }
+func (e *CastExpr) SetSpan(span lexer.Span) { e.span = span }
+func (*CastExpr) exprNode()                 {}
+
+func NewCastExpr(expr Expr, typ TypeExpr, span lexer.Span) *CastExpr {
+	return &CastExpr{
+		Expr: expr,
+		Type: typ,
+		span: span,
+	}
+}
+
 // CallExpr represents a function call.
 type CallExpr struct {
 	Callee Expr
@@ -1689,4 +1710,18 @@ func NewRecordLiteral(fields []*StructLiteralField, span lexer.Span) *RecordLite
 		Fields: fields,
 		span:   span,
 	}
+}
+
+// TypeWrapperExpr wraps a TypeExpr to be used as an Expr.
+// This is used for generic arguments in expressions (e.g. make[chan int]).
+type TypeWrapperExpr struct {
+	Type TypeExpr
+	span lexer.Span
+}
+
+func (e *TypeWrapperExpr) Span() lexer.Span { return e.span }
+func (e *TypeWrapperExpr) exprNode()        {}
+
+func NewTypeWrapperExpr(typ TypeExpr, span lexer.Span) *TypeWrapperExpr {
+	return &TypeWrapperExpr{Type: typ, span: span}
 }

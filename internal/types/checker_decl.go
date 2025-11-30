@@ -10,7 +10,8 @@ import (
 func (c *Checker) collectDecls(file *ast.File) {
 	// First, process all mod declarations (modules must be loaded before use)
 	for _, modDecl := range file.Mods {
-		c.processModDecl(modDecl, file)
+		// Top-level module, no parent
+		c.processModDecl(modDecl, file, "")
 	}
 
 	// Then, process all use declarations (imports)

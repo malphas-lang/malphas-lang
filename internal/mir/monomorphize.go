@@ -14,14 +14,17 @@ type Monomorphizer struct {
 	specializedFuncs map[string]*Function
 	// Map of (generic function name + type args) to specialized function name
 	instantiations map[string]string
+	// Map of specialized struct names to their definition
+	specializedStructs map[string]*types.Struct
 }
 
 // NewMonomorphizer creates a new Monomorphizer
 func NewMonomorphizer(module *Module) *Monomorphizer {
 	return &Monomorphizer{
-		module:           module,
-		specializedFuncs: make(map[string]*Function),
-		instantiations:   make(map[string]string),
+		module:             module,
+		specializedFuncs:   make(map[string]*Function),
+		instantiations:     make(map[string]string),
+		specializedStructs: make(map[string]*types.Struct),
 	}
 }
 
@@ -271,13 +274,30 @@ func (m *Monomorphizer) substituteType(t types.Type, subst map[string]types.Type
 				changed = true
 			}
 		}
+		var result *types.GenericInstance
 		if changed {
-			return &types.GenericInstance{
+			result = &types.GenericInstance{
 				Base: newBase,
 				Args: newArgs,
 			}
+		} else {
+			result = t
 		}
-		return t
+
+		// Register struct specialization if needed
+		m.registerStructSpecialization(result)
+
+		// If it's a struct instantiation, return a Named type referring to the specialized struct
+		// This ensures that the backend sees the specialized name (e.g. Vec$int) instead of generic Vec
+		if baseStruct, ok := result.Base.(*types.Struct); ok {
+			specName := m.mangleName(baseStruct.Name, result.Args)
+			return &types.Named{
+				Name: specName,
+				Ref:  m.specializedStructs[specName],
+			}
+		}
+
+		return result
 	default:
 		return t
 	}
@@ -365,7 +385,7 @@ func (m *Monomorphizer) substituteStmt(stmt Statement, subst map[string]types.Ty
 		}
 		return &ConstructStruct{
 			Result: m.substituteLocal(s.Result, subst),
-			Type:   s.Type, // Type is a string name, no substitution needed
+			Type:   m.substituteType(s.Type, subst),
 			Fields: newFields,
 		}
 	case *ConstructArray:
@@ -435,5 +455,49 @@ func (m *Monomorphizer) substituteLocal(l Local, subst map[string]types.Type) Lo
 		ID:   l.ID,
 		Name: l.Name,
 		Type: m.substituteType(l.Type, subst),
+	}
+}
+
+// registerStructSpecialization creates a specialized struct definition if needed
+func (m *Monomorphizer) registerStructSpecialization(inst *types.GenericInstance) {
+	// Get base struct
+	baseStruct, ok := inst.Base.(*types.Struct)
+	if !ok {
+		return // Not a struct (could be enum, etc - handle later)
+	}
+
+	// Mangle name
+	specName := m.mangleName(baseStruct.Name, inst.Args)
+
+	// Check if already specialized
+	if _, exists := m.specializedStructs[specName]; exists {
+		return
+	}
+
+	// Create substitution map
+	subst := make(map[string]types.Type)
+	for i, param := range baseStruct.TypeParams {
+		if i < len(inst.Args) {
+			subst[param.Name] = inst.Args[i]
+		}
+	}
+
+	// Create specialized struct
+	specStruct := &types.Struct{
+		Name:       specName,
+		TypeParams: nil, // Specialized struct is not generic
+		Fields:     make([]types.Field, len(baseStruct.Fields)),
+	}
+
+	// Register early to handle recursive types
+	m.specializedStructs[specName] = specStruct
+	m.module.Structs = append(m.module.Structs, specStruct)
+
+	// Substitute fields
+	for i, field := range baseStruct.Fields {
+		specStruct.Fields[i] = types.Field{
+			Name: field.Name,
+			Type: m.substituteType(field.Type, subst),
+		}
 	}
 }

@@ -12,11 +12,14 @@ import (
 	"github.com/malphas-lang/malphas-lang/internal/parser"
 )
 
-
-
 // processModDecl processes a module declaration and loads the module file.
-func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
+// parentModule is the name of the parent module (empty string for top-level modules).
+func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File, parentModule string) {
 	moduleName := modDecl.Name.Name
+	// If there's a parent module, prepend it to create the full module path
+	if parentModule != "" {
+		moduleName = parentModule + "/" + moduleName
+	}
 
 	// Check for circular dependencies
 	if c.LoadingModules[moduleName] {
@@ -25,11 +28,11 @@ func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
 		for mod := range c.LoadingModules {
 			chain = append(chain, mod)
 		}
-		
+
 		msg := fmt.Sprintf("circular module dependency detected involving `%s`", moduleName)
 		help := fmt.Sprintf("the module `%s` (directly or indirectly) depends on itself\n"+
 			"break the cycle by restructuring your modules", moduleName)
-		
+
 		c.reportModuleError(msg, diag.CodeTypeInvalidOperation, modDecl.Span(), help, lexer.Span{})
 		return
 	}
@@ -43,27 +46,37 @@ func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
 	c.LoadingModules[moduleName] = true
 	defer delete(c.LoadingModules, moduleName)
 
-	// Resolve module file path
-	modulePath, err := c.resolveModuleFilePath(moduleName)
-	if err != nil {
-		msg := fmt.Sprintf("cannot find module file for `%s`", moduleName)
-		help := fmt.Sprintf("the module `%s` was declared but the file could not be found\n"+
-			"ensure a file named `%s.mal` exists in the same directory or the expected location\n"+
-			"error details: %v", moduleName, moduleName, err)
-		
-		c.reportModuleError(msg, diag.CodeTypeInvalidOperation, modDecl.Span(), help, lexer.Span{})
-		return
-	}
+	var moduleFile *ast.File
+	var modulePath string
 
-	// Read and parse the module file
-	moduleFile, err := c.loadModuleFile(modulePath, moduleName)
-	if err != nil {
-		msg := fmt.Sprintf("failed to load module `%s`", moduleName)
-		help := fmt.Sprintf("the module file was found but could not be loaded or parsed\n"+
-			"check for syntax errors in `%s`\nerror details: %v", modulePath, err)
-		
-		c.reportModuleError(msg, diag.CodeTypeInvalidOperation, modDecl.Span(), help, lexer.Span{})
-		return
+	// Check if it's an inline module
+	if modDecl.Body != nil {
+		moduleFile = modDecl.Body
+		modulePath = c.CurrentFile // Inline modules share the same file path
+	} else {
+		// Resolve module file path
+		var err error
+		modulePath, err = c.resolveModuleFilePath(moduleName)
+		if err != nil {
+			msg := fmt.Sprintf("cannot find module file for `%s`", moduleName)
+			help := fmt.Sprintf("the module `%s` was declared but the file could not be found\n"+
+				"ensure a file named `%s.mal` exists in the same directory or the expected location\n"+
+				"error details: %v", moduleName, moduleName, err)
+
+			c.reportModuleError(msg, diag.CodeTypeInvalidOperation, modDecl.Span(), help, lexer.Span{})
+			return
+		}
+
+		// Read and parse the module file
+		moduleFile, err = c.loadModuleFile(modulePath, moduleName)
+		if err != nil {
+			msg := fmt.Sprintf("failed to load module `%s`", moduleName)
+			help := fmt.Sprintf("the module file was found but could not be loaded or parsed\n"+
+				"check for syntax errors in `%s`\nerror details: %v", modulePath, err)
+
+			c.reportModuleError(msg, diag.CodeTypeInvalidOperation, modDecl.Span(), help, lexer.Span{})
+			return
+		}
 	}
 
 	// Create module info
@@ -87,9 +100,13 @@ func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
 	moduleScope := NewScope(c.GlobalScope)
 	c.GlobalScope = moduleScope
 
+	// Store the internal scope in ModuleInfo
+	moduleInfo.InternalScope = moduleScope
+
 	// Process mod declarations in the module file (recursive)
 	for _, subModDecl := range moduleFile.Mods {
-		c.processModDecl(subModDecl, moduleFile)
+		// Pass the current module name as the parent for submodules
+		c.processModDecl(subModDecl, moduleFile, moduleName)
 	}
 
 	// Process use declarations in the module file
@@ -240,7 +257,7 @@ func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
 					payload = append(payload, c.resolveType(p))
 				}
 				variants = append(variants, Variant{
-					Name:    v.Name.Name,
+					Name:   v.Name.Name,
 					Params: payload,
 				})
 			}
@@ -403,7 +420,8 @@ func (c *Checker) processModDecl(modDecl *ast.ModDecl, currentFile *ast.File) {
 }
 
 // resolveModuleFilePath resolves a module name to a file path.
-// It looks for moduleName.mal or moduleName/mod.mal relative to the current file.
+// It looks for moduleName.mal or moduleName/mod.mal relative to the current file,
+// and also searches in the stdlib directory.
 func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
 	var baseDir string
 	if c.CurrentFile != "" {
@@ -417,19 +435,104 @@ func (c *Checker) resolveModuleFilePath(moduleName string) (string, error) {
 		}
 	}
 
-	// Try moduleName.mal
+	// Try moduleName.mal relative to current file
 	moduleFile := filepath.Join(baseDir, moduleName+".mal")
 	if _, err := os.Stat(moduleFile); err == nil {
 		return moduleFile, nil
 	}
 
-	// Try moduleName/mod.mal
+	// Try moduleName/mod.mal relative to current file
 	moduleDirFile := filepath.Join(baseDir, moduleName, "mod.mal")
 	if _, err := os.Stat(moduleDirFile); err == nil {
 		return moduleDirFile, nil
 	}
 
+	// Try stdlib/moduleName.mal
+	stdlibPath, err := c.getStdlibDir()
+	if err == nil {
+		stdModuleFile := filepath.Join(stdlibPath, moduleName+".mal")
+		if _, err := os.Stat(stdModuleFile); err == nil {
+			return stdModuleFile, nil
+		}
+
+		// Try stdlib/moduleName/mod.mal
+		stdModuleDirFile := filepath.Join(stdlibPath, moduleName, "mod.mal")
+		if _, err := os.Stat(stdModuleDirFile); err == nil {
+			return stdModuleDirFile, nil
+		}
+	}
+
 	return "", fmt.Errorf("module file not found: tried %s and %s", moduleFile, moduleDirFile)
+}
+
+// getStdlibDir returns the path to the stdlib directory.
+func (c *Checker) getStdlibDir() (string, error) {
+	// 1. Check MALPHAS_STDLIB environment variable
+	if envPath := os.Getenv("MALPHAS_STDLIB"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath, nil
+		}
+	}
+
+	// 2. Look for stdlib relative to the executable
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		// Check adjacent stdlib directory
+		stdlibDir := filepath.Join(exeDir, "stdlib")
+		if _, err := os.Stat(stdlibDir); err == nil {
+			return stdlibDir, nil
+		}
+		// Check ../stdlib (common development layout)
+		stdlibDir = filepath.Join(exeDir, "..", "stdlib")
+		if _, err := os.Stat(stdlibDir); err == nil {
+			return stdlibDir, nil
+		}
+	}
+
+	// 3. Look for stdlib in CWD
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	stdlibDir := filepath.Join(cwd, "stdlib")
+
+	// Check if stdlib exists
+	if _, err := os.Stat(stdlibDir); err == nil {
+		return stdlibDir, nil
+	}
+
+	// Try finding it relative to the executable or source
+	// 4. ../stdlib (if in examples)
+	stdlibDir = filepath.Join(cwd, "..", "stdlib")
+	if _, err := os.Stat(stdlibDir); err == nil {
+		return stdlibDir, nil
+	}
+
+	// 5. ../../stdlib
+	stdlibDir = filepath.Join(cwd, "..", "..", "stdlib")
+	if _, err := os.Stat(stdlibDir); err == nil {
+		return stdlibDir, nil
+	}
+
+	// Try finding it relative to the current file being compiled
+	if c.CurrentFile != "" {
+		fileDir := filepath.Dir(c.CurrentFile)
+
+		// 6. ../stdlib (relative to file)
+		stdlibDir = filepath.Join(fileDir, "..", "stdlib")
+		if _, err := os.Stat(stdlibDir); err == nil {
+			return stdlibDir, nil
+		}
+
+		// 7. ../../stdlib (relative to file)
+		stdlibDir = filepath.Join(fileDir, "..", "..", "stdlib")
+		if _, err := os.Stat(stdlibDir); err == nil {
+			return stdlibDir, nil
+		}
+	}
+
+	return "", fmt.Errorf("stdlib directory not found (checked MALPHAS_STDLIB, executable relative, CWD relative)")
 }
 
 // loadModuleFile reads and parses a module file.
@@ -546,7 +649,7 @@ func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
 		help := fmt.Sprintf("the path `%s` does not exist in the standard library\n"+
 			"check the spelling and ensure the module exists\n"+
 			"common std paths: std::collections::HashMap, std::collections::Vec", pathStr)
-		
+
 		c.reportModuleError(msg, diag.CodeTypeInvalidOperation, span, help, lexer.Span{})
 		return nil
 	}
@@ -554,6 +657,15 @@ func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
 	// Handle user-defined modules
 	if moduleInfo, exists := c.Modules[path[0]]; exists {
 		return c.resolveUserModulePath(path[1:], moduleInfo, span)
+	}
+
+	// Fallback: Try to find the module in the standard library
+	// This allows using standard modules like `core` without explicit `mod core;`
+	if _, err := c.resolveStdFilePath(path[0]); err == nil {
+		c.ensureStdModuleLoaded(path[0], path[0])
+		if mod, ok := c.Modules[path[0]]; ok {
+			return c.resolveUserModulePath(path[1:], mod, span)
+		}
 	}
 
 	// Check if there are similar module names
@@ -564,7 +676,7 @@ func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
 			break
 		}
 	}
-	
+
 	msg := fmt.Sprintf("unknown module `%s`", path[0])
 	var help string
 	if similarMod != "" {
@@ -574,7 +686,7 @@ func (c *Checker) resolveModulePath(path []string, span lexer.Span) Type {
 		help = fmt.Sprintf("the module `%s` has not been declared\n"+
 			"declare it with `mod %s;` or check the spelling", path[0], path[0])
 	}
-	
+
 	c.reportModuleError(msg, diag.CodeTypeInvalidOperation, span, help, lexer.Span{})
 	return nil
 }
@@ -586,6 +698,19 @@ func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, s
 		return &Named{Name: moduleInfo.Name}
 	}
 
+	// Check if the first path component is a submodule
+	// For example, in core::slice::Slice, we need to check if "slice" is a submodule of "core"
+	if len(path) > 1 {
+		// Build the submodule name
+		submoduleName := moduleInfo.Name + "/" + path[0]
+
+		// Check if this submodule exists in c.Modules
+		if submoduleInfo, exists := c.Modules[submoduleName]; exists {
+			// Recursively resolve the rest of the path in the submodule
+			return c.resolveUserModulePath(path[1:], submoduleInfo, span)
+		}
+	}
+
 	// Look up the symbol in the module's scope (direct lookup, no parent search)
 	symbol, exists := moduleInfo.Scope.Symbols[path[0]]
 	if !exists || symbol == nil {
@@ -593,10 +718,11 @@ func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, s
 		return nil
 	}
 
-	// If there are more path components, it's not supported yet
-	// (e.g., utils::MyStruct::field - would need to resolve nested paths)
+	// If there are more path components after finding a symbol, it's invalid
+	// (e.g., trying to access MyStruct::field which should use . not ::)
 	if len(path) > 1 {
-		c.reportError(fmt.Sprintf("nested paths in user modules not yet supported: %v", path), span)
+		c.reportError(fmt.Sprintf("cannot resolve path beyond symbol '%s' in module '%s': remaining path %v",
+			path[0], moduleInfo.Name, path[1:]), span)
 		return nil
 	}
 
@@ -605,26 +731,9 @@ func (c *Checker) resolveUserModulePath(path []string, moduleInfo *ModuleInfo, s
 
 // resolveStdFilePath resolves a path within the standard library to a file path.
 func (c *Checker) resolveStdFilePath(relPath string) (string, error) {
-	// Look for stdlib in CWD
-	cwd, err := os.Getwd()
+	stdlibDir, err := c.getStdlibDir()
 	if err != nil {
 		return "", err
-	}
-	stdlibDir := filepath.Join(cwd, "stdlib")
-
-	// Check if stdlib exists
-	if _, err := os.Stat(stdlibDir); err != nil {
-		// Try finding it relative to the executable or source?
-		// For development, let's try a few common locations
-		// 1. ../stdlib (if in examples)
-		stdlibDir = filepath.Join(cwd, "..", "stdlib")
-		if _, err := os.Stat(stdlibDir); err != nil {
-			// 2. ../../stdlib
-			stdlibDir = filepath.Join(cwd, "..", "..", "stdlib")
-			if _, err := os.Stat(stdlibDir); err != nil {
-				return "", fmt.Errorf("stdlib directory not found")
-			}
-		}
 	}
 
 	// Look for module in stdlib
@@ -693,7 +802,8 @@ func (c *Checker) ensureStdModuleLoaded(fullModuleName string, relPath string) {
 
 	// Process mod declarations in the module file (recursive)
 	for _, subModDecl := range file.Mods {
-		c.processModDecl(subModDecl, file)
+		// Pass the current full module name as the parent for submodules
+		c.processModDecl(subModDecl, file, fullModuleName)
 	}
 
 	// Process use declarations in the module file
@@ -840,7 +950,7 @@ func (c *Checker) ensureStdModuleLoaded(fullModuleName string, relPath string) {
 					payload = append(payload, c.resolveType(p))
 				}
 				variants = append(variants, Variant{
-					Name:    v.Name.Name,
+					Name:   v.Name.Name,
 					Params: payload,
 				})
 			}

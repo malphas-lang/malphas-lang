@@ -1,0 +1,8 @@
+// Simple test without calling methods
+mod core;
+use core::Slice;
+
+fn main() {
+    println("Testing Slice import:");
+    println("Success - Slice type imported from core");
+}

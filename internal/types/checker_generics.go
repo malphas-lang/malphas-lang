@@ -379,6 +379,19 @@ func (c *Checker) assignableTo(src, dst Type) bool {
 		}
 	}
 
+	// Handle Slice to Slice[T] struct assignment
+	if dstGen, ok := dst.(*GenericInstance); ok {
+		normalized := c.normalizeGenericInstanceBase(dstGen)
+		if baseStruct, ok := normalized.Base.(*Struct); ok && baseStruct.Name == "Slice" {
+			if srcSlice, ok := src.(*Slice); ok {
+				// Check element type compatibility
+				if len(normalized.Args) == 1 {
+					return c.assignableTo(srcSlice.Elem, normalized.Args[0])
+				}
+			}
+		}
+	}
+
 	// Handle GenericInstance types
 	if srcGen, ok := src.(*GenericInstance); ok {
 		if dstGen, ok := dst.(*GenericInstance); ok {

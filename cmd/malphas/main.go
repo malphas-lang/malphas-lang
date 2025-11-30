@@ -308,9 +308,9 @@ func compileToTemp(filename string) (string, error) {
 // Uses MIR as an intermediate representation (AST -> MIR -> LLVM).
 func compileToLLVM(file *ast.File, checker *types.Checker) (string, error) {
 	debugLog("Using MIR-to-LLVM codegen\n")
-	
+
 	// Step 1: Lower AST to MIR
-	lowerer := mir.NewLowerer(checker.ExprTypes, checker.CallTypeArgs, checker.GlobalScope)
+	lowerer := mir.NewLowerer(checker.ExprTypes, checker.CallTypeArgs, checker.GlobalScope, checker.MethodTable, checker.Modules)
 	mirModule, err := lowerer.LowerModule(file)
 	if err != nil {
 		return "", fmt.Errorf("MIR lowering error: %v", err)

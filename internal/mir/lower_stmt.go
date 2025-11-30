@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/malphas-lang/malphas-lang/internal/ast"
+	"github.com/malphas-lang/malphas-lang/internal/lexer"
 	"github.com/malphas-lang/malphas-lang/internal/types"
 )
 
@@ -28,9 +29,191 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt) error {
 		return l.lowerBreakStmt(s)
 	case *ast.ContinueStmt:
 		return l.lowerContinueStmt(s)
+	case *ast.SpawnStmt:
+		return l.lowerSpawnStmt(s)
+	case *ast.SelectStmt:
+		return l.lowerSelectStmt(s)
 	default:
 		return fmt.Errorf("unsupported statement type: %T", stmt)
 	}
+}
+
+// lowerSelectStmt lowers a select statement
+func (l *Lowerer) lowerSelectStmt(stmt *ast.SelectStmt) error {
+	// Create merge block for after the select statement
+	mergeBlock := l.newBlock("select_merge")
+	l.currentFunc.Blocks = append(l.currentFunc.Blocks, mergeBlock)
+
+	var cases []SelectCase
+
+	for _, astCase := range stmt.Cases {
+		// Create block for this case's body
+		bodyBlock := l.newBlock("select_case")
+		l.currentFunc.Blocks = append(l.currentFunc.Blocks, bodyBlock)
+
+		// Analyze the communication statement
+		var mirCase SelectCase
+		mirCase.Target = bodyBlock
+
+		if astCase.Comm == nil {
+			// Default case
+			mirCase.Kind = "default"
+		} else {
+			// Send or Receive
+			switch comm := astCase.Comm.(type) {
+			case *ast.ExprStmt:
+				// Check for "default" identifier
+				if ident, ok := comm.Expr.(*ast.Ident); ok && ident.Name == "default" {
+					mirCase.Kind = "default"
+				} else if infix, ok := comm.Expr.(*ast.InfixExpr); ok && infix.Op == lexer.LARROW {
+					// Send: ch <- val
+					mirCase.Kind = "send"
+
+					// Lower channel and value expressions
+					// Note: we need to lower them in the current block (before the select)
+					// But we are in a loop iterating cases.
+					// This means expressions are evaluated in order of cases?
+					// Go spec says: "For all the cases in the statement, the channel operands of receive operations
+					// and the channel and right-hand-side expressions of send statements are evaluated exactly once,
+					// in source order, upon entering the "select" statement."
+
+					chOp, err := l.lowerExpr(infix.Left)
+					if err != nil {
+						return err
+					}
+					valOp, err := l.lowerExpr(infix.Right)
+					if err != nil {
+						return err
+					}
+
+					mirCase.Channel = chOp
+					mirCase.Value = valOp
+
+				} else if prefix, ok := comm.Expr.(*ast.PrefixExpr); ok && prefix.Op == lexer.LARROW {
+					// Recv: <-ch (result discarded)
+					mirCase.Kind = "recv"
+
+					chOp, err := l.lowerExpr(prefix.Expr)
+					if err != nil {
+						return err
+					}
+					mirCase.Channel = chOp
+					// No result variable
+				} else {
+					return fmt.Errorf("invalid select case communication")
+				}
+
+			case *ast.LetStmt:
+				// Recv with declaration: let x = <-ch
+				// Or short declaration: x := <-ch (which parses to LetStmt in Malphas?)
+				// Assuming LetStmt for now.
+
+				// Check if RHS is a receive expression
+				if prefix, ok := comm.Value.(*ast.PrefixExpr); ok && prefix.Op == lexer.LARROW {
+					mirCase.Kind = "recv"
+
+					chOp, err := l.lowerExpr(prefix.Expr)
+					if err != nil {
+						return err
+					}
+					mirCase.Channel = chOp
+
+					// Create local for result
+					// We need to define this local so it can be used in the body block
+					varType := l.getType(comm, l.TypeInfo)
+					if varType == nil {
+						varType = l.getType(comm.Value, l.TypeInfo)
+						if varType == nil {
+							varType = &types.Primitive{Kind: types.Int} // Fallback
+						}
+					}
+
+					local := l.newLocal(comm.Name.Name, varType)
+					l.currentFunc.Locals = append(l.currentFunc.Locals, local)
+
+					// Register local for body block
+					// But wait, we are modifying l.locals which is shared.
+					// We should probably save/restore locals or just add it.
+					// Since the scope of this variable is only the case body,
+					// and we are about to lower the body, we can add it to l.locals now,
+					// and then remove it? Or rely on unique names?
+					// l.locals maps name -> Local.
+					// We should save the old value if any.
+
+					// However, we are currently in the "header" block lowering expressions.
+					// The body lowering happens later.
+					// We need to pass this local to the body lowering.
+
+					mirCase.Result = &local
+				} else {
+					return fmt.Errorf("invalid select case: let must be receive")
+				}
+
+			default:
+				return fmt.Errorf("unsupported select case statement: %T", astCase.Comm)
+			}
+		}
+
+		cases = append(cases, mirCase)
+
+		// Now lower the body
+		// We need to switch context to bodyBlock
+		// But we also need to handle the variable binding for Recv cases.
+
+		// Save current block (which is the select header block)
+		headerBlock := l.currentBlock
+		l.currentBlock = bodyBlock
+
+		// If there is a result local, we need to make it available in the body.
+		// Since we already created the local, we just need to ensure l.locals has it.
+		// And we need to ensure it's removed after body.
+		var prevLocal Local
+		var hasPrev bool
+		var bindName string
+
+		if mirCase.Result != nil {
+			// Find the name from the AST
+			if letStmt, ok := astCase.Comm.(*ast.LetStmt); ok {
+				bindName = letStmt.Name.Name
+				if prev, ok := l.locals[bindName]; ok {
+					prevLocal = prev
+					hasPrev = true
+				}
+				l.locals[bindName] = *mirCase.Result
+			}
+		}
+
+		// Lower body
+		_, err := l.lowerBlock(astCase.Body)
+		if err != nil {
+			return err
+		}
+
+		// Restore locals
+		if bindName != "" {
+			if hasPrev {
+				l.locals[bindName] = prevLocal
+			} else {
+				delete(l.locals, bindName)
+			}
+		}
+
+		// Jump to merge block
+		if l.currentBlock.Terminator == nil {
+			l.currentBlock.Terminator = &Goto{Target: mergeBlock}
+		}
+
+		// Restore current block to header for next case analysis
+		l.currentBlock = headerBlock
+	}
+
+	// Terminate header block with Select
+	l.currentBlock.Terminator = &Select{Cases: cases}
+
+	// Continue from merge block
+	l.currentBlock = mergeBlock
+
+	return nil
 }
 
 // lowerLetStmt lowers a let statement
